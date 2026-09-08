@@ -1,0 +1,149 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "role-aware-dashboard-toolkit"
+version = "0.1.0"
+description = "Dashboard/admin-control library for governed operator controls, profile workflows, audit history, plugin surfaces, and explicit operational review"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Michael" },
+]
+keywords = ["dashboard", "admin-controls", "profiles", "audit", "plugins", "observability", "rbac", "streamlit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: User Interfaces",
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+workbench = ["streamlit>=1.30.0"]
+pandas = ["pandas>=2.0.0"]
+api = [
+    "fastapi>=0.110.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.29.0",
+]
+full = [
+    "streamlit>=1.30.0",
+    "pandas>=2.0.0",
+    "fastapi>=0.110.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.29.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "black>=24.0.0",
+    "ruff>=0.4.0",
+    "build>=1.2.0",
+    "twine>=5.1.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "httpx>=0.27.0",
+    "streamlit>=1.30.0",
+    "fastapi>=0.110.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.29.0",
+    "pandas>=2.0.0",
+]
+
+[project.entry-points."role_aware_dashboard_toolkit.panels"]
+
+[project.entry-points."role_aware_dashboard_toolkit.sidebar"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["role_aware_dashboard_toolkit"]
+exclude = [
+    "/role_aware_dashboard_toolkit/_archive_review",
+    "/role_aware_dashboard_toolkit/_archive_review/**",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q -p no:cacheprovider"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff.lint.per-file-ignores]
+"role_aware_dashboard_toolkit/__init__.py" = ["F401"]
+"role_aware_dashboard_toolkit/*.py" = ["B008", "PERF203", "PERF401", "PERF403", "SIM102"]
+"role_aware_dashboard_toolkit/**/*.py" = ["B008", "PERF203", "PERF401", "PERF403", "SIM102"]
+"tests/**/*.py" = ["RUF012", "SIM117"]
+"tools/**/*.py" = ["PERF401"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/role_aware_dashboard_toolkit",
+    "/examples/README.md",
+    "/examples/core_library.py",
+    "/examples/dashboard_admin_controls_app.py",
+    "/examples/plugin_template.py",
+    "/docs/README.md",
+    "/docs/api_security.md",
+    "/docs/assets/dashboard_admin_controls_app.png",
+    "/docs/caseboard.md",
+    "/docs/dashboard_tools.md",
+    "/docs/decision_model.md",
+    "/docs/distribution.md",
+    "/docs/governance.md",
+    "/docs/operator_memory.md",
+    "/docs/oss_boundary.md",
+    "/docs/plugins.md",
+    "/docs/protocol",
+    "/docs/public_api.md",
+    "/docs/quickstart.md",
+    "/docs/release_audit.md",
+    "/docs/release_checklist.md",
+    "/docs/release_runbook.md",
+    "/docs/release_strategy.md",
+    "/docs/replay.md",
+    "/docs/replay_contract.md",
+    "/docs/run_model.md",
+    "/docs/shared_store_patterns.md",
+    "/docs/team_ops.md",
+    "/docs/telemetry_contract.md",
+    "/docs/what_role_aware_dashboard_toolkit_is_and_is_not.md",
+    "/schemas/case.schema.json",
+    "/schemas/checkpoint.schema.json",
+    "/schemas/decision.schema.json",
+    "/schemas/governance.schema.json",
+    "/schemas/incident.schema.json",
+    "/schemas/incident_timeline.schema.json",
+    "/schemas/ledger.schema.json",
+    "/schemas/narrative_handoff.schema.json",
+    "/schemas/operator_note.schema.json",
+    "/schemas/packet.schema.json",
+    "/schemas/replay.schema.json",
+    "/schemas/run.schema.json",
+    "/tools/pre_release_check.py",
+    "/README.md",
+    "/SECURITY.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/ARCHITECTURE_SCOPE.md",
+    "/CHANGELOG.md",
+    "/.github/workflows/ci.yml",
+]
+exclude = [
+    "/role_aware_dashboard_toolkit/_archive_review",
+    "/role_aware_dashboard_toolkit/_archive_review/**",
+]
+
+[tool.role_aware_dashboard_toolkit.release]
+verified-distribution-name = "role-aware-dashboard-toolkit"
+# Observed PyPI HTTP 404; this is not a reservation or account-ownership proof.
+name-checked-at = "2026-09-08T07:56:14Z"
+name-check-url = "https://pypi.org/pypi/role-aware-dashboard-toolkit/json"
+name-check-http-status = 404

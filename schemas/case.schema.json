@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Role-Aware Dashboard Toolkit Case",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_id",
+    "created_at",
+    "updated_at",
+    "title",
+    "state",
+    "priority",
+    "history",
+    "linked_run_ids",
+    "linked_incident_ids",
+    "linked_narrative_ids"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "case_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "state": {"type": "string", "enum": ["open", "investigating", "monitoring", "mitigated", "closed"]},
+    "priority": {"type": "string", "enum": ["low", "normal", "high", "critical"]},
+    "actor": {"type": "string"},
+    "role": {"type": "string"},
+    "source": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "linked_run_ids": {"type": "array", "items": {"type": "string"}},
+    "linked_checkpoint_ids": {"type": "array", "items": {"type": "string"}},
+    "linked_decision_ids": {"type": "array", "items": {"type": "string"}},
+    "linked_incident_ids": {"type": "array", "items": {"type": "string"}},
+    "linked_narrative_ids": {"type": "array", "items": {"type": "string"}},
+    "linked_note_ids": {"type": "array", "items": {"type": "string"}},
+    "hypotheses": {"type": "array", "items": {"type": "string"}},
+    "findings": {"type": "array", "items": {"type": "string"}},
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ts", "event_type"],
+        "properties": {
+          "ts": {"type": "string"},
+          "event_type": {"type": "string"},
+          "detail": {"type": "string"},
+          "actor": {"type": "string"},
+          "role": {"type": "string"},
+          "source": {"type": "string"},
+          "refs": {"type": "object"},
+          "from_state": {"type": "string"},
+          "to_state": {"type": "string"}
+        }
+      }
+    }
+  }
+}

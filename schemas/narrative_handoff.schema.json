@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Role-Aware Dashboard Toolkit Narrative Handoff",
+  "type": "object",
+  "required": ["schema_version", "event_type", "narrative_id", "exported_at", "run_id", "headline", "narrative", "summary"],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "event_type": {"const": "narrative_handoff"},
+    "narrative_id": {"type": "string"},
+    "exported_at": {"type": "string"},
+    "run_id": {"type": "string"},
+    "headline": {"type": "string"},
+    "narrative": {"type": "string"},
+    "summary": {"type": "object"},
+    "highlights": {"type": "array", "items": {"type": "object"}}
+  }
+}

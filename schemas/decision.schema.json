@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Role-Aware Dashboard Toolkit Decision Case",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "decision_id",
+    "run_id",
+    "checkpoint_id",
+    "created_at",
+    "updated_at",
+    "state",
+    "approval_state",
+    "history",
+    "allowed_actions",
+    "blockers"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "decision_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "checkpoint_id": {"type": "string"},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "state": {"type": "string"},
+    "approval_state": {"type": "string"},
+    "latest_signoff_decision": {"type": "string"},
+    "latest_handoff_status": {"type": "string"},
+    "open_assignment_count": {"type": "integer"},
+    "comment_count": {"type": "integer"},
+    "signoff_count": {"type": "integer"},
+    "handoff_count": {"type": "integer"},
+    "blockers": {"type": "array"},
+    "allowed_actions": {"type": "array"},
+    "history": {"type": "array"},
+    "summary": {"type": "object"}
+  }
+}

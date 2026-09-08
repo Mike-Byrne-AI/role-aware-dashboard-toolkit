@@ -1,0 +1,12 @@
+{
+  "title": "Role-Aware Dashboard Toolkit Checkpoint",
+  "type": "object",
+  "required": ["schema_version", "checkpoint_id", "ts", "controls", "approval_state", "approval"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "checkpoint_id": {"type": "string"},
+    "controls": {"type": "object"},
+    "approval_state": {"type": "string"},
+    "approval": {"type": "object"}
+  }
+}

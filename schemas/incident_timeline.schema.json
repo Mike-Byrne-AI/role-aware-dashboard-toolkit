@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Role-Aware Dashboard Toolkit Incident Timeline",
+  "type": "object",
+  "required": ["schema_version", "event_type", "timeline_id", "run_id", "generated_at", "events", "summary"],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "event_type": {"const": "incident_timeline"},
+    "timeline_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "events": {"type": "array", "items": {"type": "object"}},
+    "summary": {"type": "object"}
+  }
+}

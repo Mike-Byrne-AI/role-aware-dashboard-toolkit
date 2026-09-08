@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Role-Aware Dashboard Toolkit Incident",
+  "type": "object",
+  "required": ["schema_version", "event_type", "incident_id", "ts", "run_id", "title", "severity", "status"],
+  "properties": {
+    "schema_version": {"type": "integer"},
+    "event_type": {"const": "incident"},
+    "incident_id": {"type": "string"},
+    "ts": {"type": "string"},
+    "run_id": {"type": "string"},
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "severity": {"type": "string"},
+    "status": {"type": "string"}
+  }
+}

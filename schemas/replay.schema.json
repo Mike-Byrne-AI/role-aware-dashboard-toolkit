@@ -1,0 +1,12 @@
+{
+  "title": "Role-Aware Dashboard Toolkit Replay Packet",
+  "type": "object",
+  "required": ["schema_version", "source_type", "source_id", "controls", "touched_keys"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "source_type": {"type": "string"},
+    "source_id": {"type": "string"},
+    "controls": {"type": "object"},
+    "touched_keys": {"type": "array"}
+  }
+}

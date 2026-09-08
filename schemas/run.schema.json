@@ -1,0 +1,13 @@
+{
+  "title": "Role-Aware Dashboard Toolkit Run",
+  "type": "object",
+  "required": ["schema_version", "run_id", "started_at", "status", "initial_controls", "latest_controls", "checkpoints"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "run_id": {"type": "string"},
+    "status": {"type": "string"},
+    "initial_controls": {"type": "object"},
+    "latest_controls": {"type": "object"},
+    "checkpoints": {"type": "array"}
+  }
+}

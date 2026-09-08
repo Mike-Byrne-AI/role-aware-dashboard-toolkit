@@ -1,0 +1,36 @@
+# Role-Aware Dashboard Toolkit release audit
+
+- Version: `0.1.0`
+- Distribution strategy: `single-package-optional-extras`
+- Artifacts: `api`, `core`, `full`, `pandas`, `workbench`
+- Public API families: `app-shell`, `controls-and-security`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`
+- Root exports: `58` / `60`
+- Stable root exports: `58`
+- Undocumented root exports: `0`
+
+## Artifact summary
+
+### Role-Aware Dashboard Toolkit API
+
+- Artifact id: `api`
+- Install target: `role-aware-dashboard-toolkit[api]`
+
+### Role-Aware Dashboard Toolkit core
+
+- Artifact id: `core`
+- Install target: `role-aware-dashboard-toolkit`
+
+### Role-Aware Dashboard Toolkit full
+
+- Artifact id: `full`
+- Install target: `role-aware-dashboard-toolkit[full]`
+
+### Role-Aware Dashboard Toolkit tabular views
+
+- Artifact id: `pandas`
+- Install target: `role-aware-dashboard-toolkit[pandas]`
+
+### Role-Aware Dashboard Toolkit Streamlit UI
+
+- Artifact id: `workbench`
+- Install target: `role-aware-dashboard-toolkit[workbench]`

@@ -1,0 +1,12 @@
+{
+  "title": "Role-Aware Dashboard Toolkit Ledger",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "run_id", "entries", "latest_controls"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "generated_at": {"type": "string"},
+    "run_id": {"type": "string"},
+    "entries": {"type": "array"},
+    "latest_controls": {"type": "object"}
+  }
+}
