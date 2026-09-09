@@ -1,10 +1,16 @@
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
+import tarfile
 import textwrap
+import warnings
+import zipfile
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +58,7 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "id-token: write" not in workflow
     assert "packages: write" not in workflow
 
-    assert "\n    if: ${{ false }}\n" in job
+    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}\n" in job
     assert "needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]" in job
     assert (
         "python tools/pre_release_check.py --json --require-clean "
@@ -60,8 +66,7 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     ) in job
     assert "Pre-OSS release state remains intentionally blocked only on these gates." in job
     assert (
-        'allowed_blocked = {"distribution_name_ownership", '
-        '"oss_public_coordinates", "security_intake_contact"}'
+        'allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}'
     ) in job
     assert "pre_release_check unexpected blocked checks" in job
     assert 'source_sha = os.environ.get("GITHUB_SHA", "").strip()' in job
@@ -84,7 +89,7 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "twine upload" not in job
 
     assert "name: Upload validated distribution artifacts" in packaging_job
-    assert "if: github.event_name == 'workflow_dispatch'" in packaging_job
+    assert "        if:" not in packaging_job
     assert "name: role_aware_dashboard_toolkit-validated-dist" in packaging_job
     assert "path: dist/*" in packaging_job
     upload_index = packaging_job.index("name: Upload validated distribution artifacts")
@@ -146,6 +151,9 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     env = {
         **fixture_env,
         "GITHUB_SHA": source_sha,
+        "GITHUB_REF": "refs/heads/candidate",
+        "GITHUB_RUN_ID": "123456",
+        "GITHUB_RUN_ATTEMPT": "2",
         "GITHUB_WORKSPACE": str(workspace),
         "PYTHONPATH": str(REPO_ROOT),
     }
@@ -160,6 +168,10 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     assert result.returncode == 0, result.stderr
     evidence = json.loads((tmp_path / "release_candidate_evidence.json").read_text(encoding="utf-8"))
     assert evidence["source_sha"] == source_sha
+    assert evidence["run_id"] == 123456
+    assert evidence["run_attempt"] == 2
+    assert evidence["head_branch"] == "candidate"
+    assert evidence["workflow_path"] == ".github/workflows/ci.yml"
     assert evidence["artifact_sha256"] == {
         name: hashlib.sha256(content).hexdigest() for name, content in artifacts.items()
     }
@@ -174,6 +186,27 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     )
     assert mismatch.returncode != 0
     assert "does not match checked-out commit" in mismatch.stderr
+
+    for overrides in [
+        {"GITHUB_REF": "refs/heads/main"},
+        {"GITHUB_RUN_ID": ""},
+        {"GITHUB_RUN_ID": "0"},
+        {"GITHUB_RUN_ATTEMPT": "invalid"},
+        {"GITHUB_RUN_ATTEMPT": "0"},
+    ]:
+        rejected = subprocess.run(
+            [sys.executable, "-c", script], cwd=tmp_path,
+            env={**env, **overrides}, capture_output=True, text=True, check=False,
+        )
+        assert rejected.returncode != 0, overrides
+
+    (dist / "unexpected.txt").write_text("not a distribution artifact", encoding="utf-8")
+    rejected = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert rejected.returncode != 0
+    assert "exactly two distribution artifacts" in rejected.stderr
 
 
 def test_packaging_hygiene_distinguishes_non_publish_dispatch(tmp_path):
@@ -208,6 +241,15 @@ def test_packaging_hygiene_distinguishes_non_publish_dispatch(tmp_path):
         )
         assert (result.returncode == 0) is should_pass, (event_name, ref, result.stderr)
 
+    report_path.write_text(json.dumps({"blocked": ["distribution_name_ownership"], "failures": []}), encoding="utf-8")
+    rejected = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path,
+        env={**base_env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/candidate"},
+        text=True, capture_output=True, check=False,
+    )
+    assert rejected.returncode != 0
+    assert "unexpected blocked checks" in rejected.stderr
+
 
 def test_release_docs_cover_non_publish_release_candidate_lane():
     checklist = _read("docs/release_checklist.md")
@@ -241,3 +283,59 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     gitignore = _read(".gitignore")
     assert "/pre_release_report.json" in gitignore
     assert "/release_candidate_evidence.json" in gitignore
+
+
+def _artifact_audit_script(workflow: str) -> str:
+    marker = "          python - <<'PY'\n"
+    job = _release_candidate_job(workflow).split("      - name: Artifact hygiene audit\n", 1)[1]
+    start = job.index(marker) + len(marker)
+    end = job.index("          PY", start)
+    script = textwrap.dedent(job[start:end])
+    assert textwrap.indent(script, "          ") in _packaging_release_job(workflow)
+    return script
+
+
+@pytest.mark.parametrize("kind,problem", [(None, None), ("wheel", "missing"), ("sdist", "missing"), ("wheel", "duplicate"), ("sdist", "duplicate"), ("wheel", "special"), ("sdist", "special")])
+def test_each_archive_audit_requires_complete_unique_regular_members(tmp_path, kind, problem):
+    from role_aware_dashboard_toolkit import release_audit
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    expected = {
+        "wheel": sorted(set(release_audit._PUBLIC_PACKAGE_MEMBERS) | {
+            release_audit._WHEEL_METADATA_ROOT + "/" + name for name in release_audit._WHEEL_METADATA_MEMBERS
+        }),
+        "sdist": sorted(release_audit._SDIST_ROOT + "/" + name for name in set(release_audit._PUBLIC_PACKAGE_MEMBERS) | set(release_audit._PUBLIC_SDIST_MEMBERS)),
+    }
+    for artifact_kind, members in expected.items():
+        names = list(members)
+        if artifact_kind == kind and problem == "missing":
+            names.pop()
+        if artifact_kind == kind and problem == "duplicate":
+            names.append(names[0])
+        if artifact_kind == "wheel":
+            with warnings.catch_warnings(), zipfile.ZipFile(dist / "fixture.whl", "w") as archive:
+                warnings.simplefilter("ignore", UserWarning)
+                for index, name in enumerate(names):
+                    info = zipfile.ZipInfo(name)
+                    info.external_attr = (0o120777 if kind == "wheel" and problem == "special" and index == 0 else 0o100644) << 16
+                    archive.writestr(info, b"fixture")
+        else:
+            with tarfile.open(dist / "fixture.tar.gz", "w:gz") as archive:
+                for index, name in enumerate(names):
+                    info = tarfile.TarInfo(name)
+                    if kind == "sdist" and problem == "special" and index == 0:
+                        info.type = tarfile.SYMTYPE
+                        info.linkname = "untrusted-target"
+                        archive.addfile(info)
+                    else:
+                        info.size = len(b"fixture")
+                        archive.addfile(info, io.BytesIO(b"fixture"))
+    result = subprocess.run(
+        [sys.executable, "-c", _artifact_audit_script(_read(".github/workflows/ci.yml"))],
+        cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        text=True, capture_output=True, check=False,
+    )
+    assert (result.returncode == 0) is (problem is None), result.stderr
+    if problem is not None:
+        assert ("missing" if problem == "missing" else problem) in result.stderr

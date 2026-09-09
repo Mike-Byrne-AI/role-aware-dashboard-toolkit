@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import ast
 import re
+import sys
+import textwrap
 from collections import Counter
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -116,10 +121,65 @@ def test_ci_smokes_each_supported_optional_extra_without_product_adapters():
         assert forbidden not in lowered
 
 
-def test_all_hosted_ci_jobs_remain_disabled_until_owner_authorization():
+def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    triggers = workflow.split("on:\n", 1)[1].split("permissions:\n", 1)[0]
+    assert re.findall(r"^  ([A-Za-z_]+):", triggers, flags=re.MULTILINE) == ["workflow_dispatch"]
     job_blocks = re.findall(r"^  ([A-Za-z0-9_-]+):\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", workflow.split("jobs:\n", 1)[1], flags=re.MULTILINE | re.DOTALL)
-    assert len(job_blocks) == 5
+    expected_timeouts = {"test": 15, "coverage-gate": 15, "packaging-release-smoke": 25, "release-candidate": 10, "windows-release-smoke": 20}
+    assert {name for name, _block in job_blocks} == set(expected_timeouts)
     for name, block in job_blocks:
         guards = re.findall(r"^    if:\s*(.+)$", block, flags=re.MULTILINE)
-        assert guards == ["${{ false }}"], name
+        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}"], name
+        assert re.findall(r"^    timeout-minutes: (\d+)$", block, flags=re.MULTILINE) == [str(expected_timeouts[name])]
+    assert "permissions:\n  contents: read\n" in workflow
+    assert len(re.findall(r"^\s*permissions:", workflow, flags=re.MULTILINE)) == 1
+    assert "concurrency:\n  group: xl422-candidate-validation\n  cancel-in-progress: false\n" in workflow
+    assert "continue-on-error" not in workflow
+    assert not re.search(r"^        if:", workflow, flags=re.MULTILINE)
+    assert workflow.count("          retention-days: 1\n") == ACTION_PINS["actions/upload-artifact"][2]
+    assert "twine upload" not in workflow
+
+
+def test_installed_smokes_keep_environments_outside_the_checkout():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    venv_targets = re.findall(r"python -m venv ([^\n]+)", workflow)
+    assert len(venv_targets) == 7
+    assert all(target.startswith('"$RUNNER_TEMP/') or target == "$venv" for target in venv_targets)
+    assert '$venv = Join-Path $env:RUNNER_TEMP ".wheel-smoke-win"' in workflow
+    assert workflow.count(" -I ") == 7
+    assert workflow.count("assert environment.is_relative_to(") == 7
+    assert workflow.count(".resolve().is_relative_to(environment)") == 7
+    assert "sys.path[:] =" not in workflow
+    assert "sys.path=[" not in workflow
+    assert '--no-build-isolation' not in workflow
+    assert '"$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip install --use-pep517 "$sdist"' in workflow
+
+
+@pytest.mark.parametrize("source_on_path,venv_inside_checkout", [(False, False), (True, False), (False, True)])
+def test_actual_smoke_import_guard_preserves_external_install_and_rejects_checkout(monkeypatch, tmp_path, source_on_path, venv_inside_checkout):
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("      - name: Wheel install smoke\n", 1)[1].split("      - name: Wheel optional-extra smokes", 1)[0]
+    body = re.search(r"-I - <<'PY'\n(.*?)^          PY$", job, flags=re.MULTILINE | re.DOTALL).group(1)
+    parsed = ast.parse(textwrap.dedent(body))
+    first_with = next(index for index, statement in enumerate(parsed.body) if isinstance(statement, ast.With))
+    prefix = compile(ast.Module(body=parsed.body[:first_with], type_ignores=[]), "workflow-import-guard", "exec")
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    environment = (checkout if venv_inside_checkout else runner_temp) / "installed"
+    installed_path = str(environment / "lib" / "site-packages")
+    paths = [installed_path, *([str(checkout)] if source_on_path else [])]
+    with monkeypatch.context() as patch:
+        patch.chdir(checkout)
+        patch.setenv("GITHUB_WORKSPACE", str(checkout))
+        patch.setenv("RUNNER_TEMP", str(runner_temp))
+        patch.setattr(sys, "prefix", str(environment))
+        patch.setattr(sys, "path", list(paths))
+        if source_on_path or venv_inside_checkout:
+            with pytest.raises(AssertionError):
+                exec(prefix, {})
+        else:
+            exec(prefix, {})
+        assert sys.path == paths

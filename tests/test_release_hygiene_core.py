@@ -314,14 +314,15 @@ def test_ci_proves_declared_python_matrix_and_clean_wheel_import():
         "Windows focused tests",
         "python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py -q -p no:cacheprovider -o addopts=",
         "Wheel install smoke (Windows)",
-        "python -m venv .wheel-smoke",
-        "python -m venv .wheel-workbench-smoke",
-        "python -m venv .wheel-api-smoke",
-        "python -m venv .wheel-pandas-smoke",
-        "python -m venv .wheel-full-smoke",
-        "python -m venv .sdist-smoke",
-        "python -m venv .wheel-smoke-win",
-        "--no-index --find-links dist role_aware_dashboard_toolkit",
+        'python -m venv "$RUNNER_TEMP/.wheel-smoke"',
+        'python -m venv "$RUNNER_TEMP/.wheel-workbench-smoke"',
+        'python -m venv "$RUNNER_TEMP/.wheel-api-smoke"',
+        'python -m venv "$RUNNER_TEMP/.wheel-pandas-smoke"',
+        'python -m venv "$RUNNER_TEMP/.wheel-full-smoke"',
+        'python -m venv "$RUNNER_TEMP/.sdist-smoke"',
+        '$venv = Join-Path $env:RUNNER_TEMP ".wheel-smoke-win"',
+        "python -m venv $venv",
+        "--no-index --find-links dist role-aware-dashboard-toolkit",
         "role_aware_dashboard_toolkit-*.tar.gz",
         "_is_repo_path",
         "repo in path.parents",
@@ -332,8 +333,9 @@ def test_ci_proves_declared_python_matrix_and_clean_wheel_import():
         "build_run_packet",
     ]:
         assert marker in workflow
-    assert ".sdist-smoke/bin/python -m pip install hatchling" in workflow
-    assert '.sdist-smoke/bin/python -m pip install --no-index --find-links dist --no-build-isolation "$sdist"' in workflow
+    assert '"$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip install --use-pep517 "$sdist"' in workflow
+    assert "--no-build-isolation" not in workflow
+    assert "pip install hatchling" not in workflow
     for marker in [
         "import fastapi",
         "import pandas",

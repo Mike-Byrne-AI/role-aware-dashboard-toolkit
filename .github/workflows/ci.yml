@@ -1,8 +1,6 @@
 name: ci
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       release_candidate_reason:
@@ -13,11 +11,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: xl422-candidate-validation
+  cancel-in-progress: false
+
 jobs:
   test:
-    # Disabled until the owner explicitly authorizes hosted CI spending.
-    if: ${{ false }}
+    name: test (${{ matrix.python-version }})
+    # No hosted run is authorized unless the owner opts in this exact commit.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
@@ -36,9 +40,10 @@ jobs:
         run: pytest -q
 
   coverage-gate:
-    # Disabled until the owner explicitly authorizes hosted CI spending.
-    if: ${{ false }}
+    # No hosted run is authorized unless the owner opts in this exact commit.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -54,9 +59,10 @@ jobs:
         run: pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75
 
   packaging-release-smoke:
-    # Disabled until the owner explicitly authorizes hosted CI spending.
-    if: ${{ false }}
+    # No hosted run is authorized unless the owner opts in this exact commit.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -83,7 +89,7 @@ jobs:
           event_name = os.environ.get("GITHUB_EVENT_NAME", "")
           is_release_context = ref.startswith("refs/tags/") or (ref == "refs/heads/main" and event_name != "workflow_dispatch")
           # Pre-OSS release state remains intentionally blocked only on these gates.
-          allowed_blocked = {"distribution_name_ownership", "oss_public_coordinates", "security_intake_contact"}
+          allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}
           blocked = sorted(report.get("blocked", []))
           unexpected_blocked = sorted(item for item in blocked if item not in allowed_blocked)
           failures = list(report.get("failures", []))
@@ -98,76 +104,102 @@ jobs:
           python -m twine check dist/*
           python - <<'PY'
           import pathlib
+          import stat
           import tarfile
           import zipfile
 
+          from role_aware_dashboard_toolkit import release_audit
           from role_aware_dashboard_toolkit.release_audit import audit_release_artifact_members
 
-          members = []
-          for artifact in pathlib.Path("dist").iterdir():
+          artifacts = sorted(pathlib.Path("dist").iterdir())
+          assert len(artifacts) == 2, "expected exactly one wheel and one sdist"
+          assert sum(path.suffix == ".whl" for path in artifacts) == 1
+          assert sum(path.name.endswith(".tar.gz") for path in artifacts) == 1
+          for artifact in artifacts:
+              assert artifact.is_file() and not artifact.is_symlink(), artifact.name
               if artifact.suffix == ".whl":
                   with zipfile.ZipFile(artifact) as archive:
-                      members.extend(archive.namelist())
-              elif artifact.name.endswith(".tar.gz"):
+                      entries = archive.infolist()
+                      assert all(not item.is_dir() and stat.S_IFMT(item.external_attr >> 16) in {0, stat.S_IFREG} for item in entries), "special wheel member"
+                      members = [item.filename for item in entries]
+                  expected = set(release_audit._PUBLIC_PACKAGE_MEMBERS) | {
+                      release_audit._WHEEL_METADATA_ROOT + "/" + name
+                      for name in release_audit._WHEEL_METADATA_MEMBERS
+                  }
+              else:
                   with tarfile.open(artifact, "r:gz") as archive:
-                      members.extend(archive.getnames())
-
-          assert members
-          audit = audit_release_artifact_members(members)
-          assert audit["ok"], audit
+                      entries = archive.getmembers()
+                      assert all(item.isfile() for item in entries), "special sdist member"
+                      members = [item.name for item in entries]
+                  expected = {
+                      release_audit._SDIST_ROOT + "/" + name
+                      for name in set(release_audit._PUBLIC_PACKAGE_MEMBERS) | set(release_audit._PUBLIC_SDIST_MEMBERS)
+                  }
+              assert len(members) == len(set(members)), "duplicate artifact member"
+              assert set(members) == expected, {
+                  "artifact": artifact.name,
+                  "missing": sorted(expected - set(members)),
+                  "unexpected": sorted(set(members) - expected),
+              }
+              audit = audit_release_artifact_members(members)
+              assert audit["ok"], audit
           PY
       - name: Wheel install smoke
         run: |
-          python -m venv .wheel-smoke
-          .wheel-smoke/bin/python -m pip install --no-index --find-links dist role_aware_dashboard_toolkit
-          .wheel-smoke/bin/python - <<'PY'
+          python -m venv "$RUNNER_TEMP/.wheel-smoke"
+          "$RUNNER_TEMP/.wheel-smoke/bin/python" -m pip install --no-index --find-links dist role-aware-dashboard-toolkit
+          "$RUNNER_TEMP/.wheel-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/.wheel-smoke/bin/python" -I - <<'PY'
           import importlib.util
           import os
           import pathlib
           import sys
           import tempfile
 
-          repo = pathlib.Path.cwd().resolve()
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
           def _resolved(value: str) -> pathlib.Path:
               return pathlib.Path(value or ".").resolve()
           def _is_repo_path(path: pathlib.Path) -> bool:
               return path == repo or repo in path.parents
 
-          sys.path[:] = [
-              value
-              for value in sys.path
-              if not _is_repo_path(_resolved(value))
-          ]
+          environment = pathlib.Path(sys.prefix).resolve()
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"]).resolve()
+          assert environment.is_relative_to(runner_temp)
+          assert not _is_repo_path(environment)
           assert all(not _is_repo_path(_resolved(value)) for value in sys.path)
 
-          with tempfile.TemporaryDirectory() as tmpdir:
-              os.chdir(tmpdir)
-              import role_aware_dashboard_toolkit as radt
-              from role_aware_dashboard_toolkit import dashboard as dashboard_module
-
-              assert ".wheel-smoke" in str(pathlib.Path(radt.__file__).resolve())
-              assert importlib.util.find_spec("streamlit") is None
-              assert "streamlit" not in sys.modules
-              assert radt.DashboardConfig is dashboard_module.DashboardConfig
-              assert radt.render is dashboard_module.render
-              config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
-              assert config.icon == "Core"
-              assert config.layout == "columns"
-              run = radt.build_run({"refresh_seconds": 10}, actor="ci")
-              packet = radt.build_run_packet(run)
-              assert packet["packet_type"] == "run"
-              assert packet["payload"]["run_id"] == run["run_id"]
+          previous_directory = pathlib.Path.cwd()
+          with tempfile.TemporaryDirectory(dir=runner_temp) as tmpdir:
               try:
-                  radt.render(config)
-              except ModuleNotFoundError as exc:
-                  assert exc.name == "streamlit"
-                  assert str(exc) == (
-                      "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-                      'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
-                  )
-              else:
-                  raise AssertionError("core wheel render should require the workbench extra")
-              print(radt.__version__)
+                  os.chdir(tmpdir)
+                  import role_aware_dashboard_toolkit as radt
+                  from role_aware_dashboard_toolkit import dashboard as dashboard_module
+
+                  assert pathlib.Path(radt.__file__).resolve().is_relative_to(environment)
+                  assert importlib.util.find_spec("streamlit") is None
+                  assert "streamlit" not in sys.modules
+                  assert radt.DashboardConfig is dashboard_module.DashboardConfig
+                  assert radt.render is dashboard_module.render
+                  config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
+                  assert config.icon == "Core"
+                  assert config.layout == "columns"
+                  run = radt.build_run({"refresh_seconds": 10}, actor="ci")
+                  packet = radt.build_run_packet(run)
+                  assert packet["packet_type"] == "run"
+                  assert packet["payload"]["run_id"] == run["run_id"]
+                  try:
+                      radt.render(config)
+                  except ModuleNotFoundError as exc:
+                      assert exc.name == "streamlit"
+                      assert str(exc) == (
+                          "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
+                          'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
+                      )
+                  else:
+                      raise AssertionError("core wheel render should require the workbench extra")
+                  print(radt.__version__)
+              finally:
+                  os.chdir(previous_directory)
           PY
       - name: Wheel optional-extra smokes
         run: |
@@ -179,26 +211,44 @@ jobs:
           print(wheels[0])
           PY
           )"
-          python -m venv .wheel-workbench-smoke
-          .wheel-workbench-smoke/bin/python -m pip install "${wheel}[workbench]"
+          python -m venv "$RUNNER_TEMP/.wheel-workbench-smoke"
+          "$RUNNER_TEMP/.wheel-workbench-smoke/bin/python" -m pip install "${wheel}[workbench]"
+          "$RUNNER_TEMP/.wheel-workbench-smoke/bin/python" -m pip check
           (
-            cd "$(mktemp -d)"
-            "$GITHUB_WORKSPACE/.wheel-workbench-smoke/bin/python" - <<'PY'
+            cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
+            "$RUNNER_TEMP/.wheel-workbench-smoke/bin/python" -I - <<'PY'
+          import os
           import pathlib
+          import sys
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
 
           import role_aware_dashboard_toolkit
           import streamlit
 
-          assert ".wheel-workbench-smoke" in str(pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve())
+          assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert streamlit.__name__ == "streamlit"
           PY
           )
-          python -m venv .wheel-api-smoke
-          .wheel-api-smoke/bin/python -m pip install "${wheel}[api]"
+          python -m venv "$RUNNER_TEMP/.wheel-api-smoke"
+          "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -m pip install "${wheel}[api]"
+          "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -m pip check
           (
-            cd "$(mktemp -d)"
-            "$GITHUB_WORKSPACE/.wheel-api-smoke/bin/python" - <<'PY'
+            cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
+            "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -I - <<'PY'
+          import os
           import pathlib
+          import sys
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
 
           import role_aware_dashboard_toolkit
           import fastapi
@@ -206,33 +256,51 @@ jobs:
           import uvicorn
           from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE
 
-          assert ".wheel-api-smoke" in str(pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve())
+          assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert FASTAPI_AVAILABLE is True
           assert fastapi.__name__ == "fastapi"
           assert pydantic.__name__ == "pydantic"
           assert uvicorn.__name__ == "uvicorn"
           PY
           )
-          python -m venv .wheel-pandas-smoke
-          .wheel-pandas-smoke/bin/python -m pip install "${wheel}[pandas]"
+          python -m venv "$RUNNER_TEMP/.wheel-pandas-smoke"
+          "$RUNNER_TEMP/.wheel-pandas-smoke/bin/python" -m pip install "${wheel}[pandas]"
+          "$RUNNER_TEMP/.wheel-pandas-smoke/bin/python" -m pip check
           (
-            cd "$(mktemp -d)"
-            "$GITHUB_WORKSPACE/.wheel-pandas-smoke/bin/python" - <<'PY'
+            cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
+            "$RUNNER_TEMP/.wheel-pandas-smoke/bin/python" -I - <<'PY'
+          import os
           import pathlib
+          import sys
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
 
           import role_aware_dashboard_toolkit
           import pandas
 
-          assert ".wheel-pandas-smoke" in str(pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve())
+          assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert pandas.__name__ == "pandas"
           PY
           )
-          python -m venv .wheel-full-smoke
-          .wheel-full-smoke/bin/python -m pip install "${wheel}[full]"
+          python -m venv "$RUNNER_TEMP/.wheel-full-smoke"
+          "$RUNNER_TEMP/.wheel-full-smoke/bin/python" -m pip install "${wheel}[full]"
+          "$RUNNER_TEMP/.wheel-full-smoke/bin/python" -m pip check
           (
-            cd "$(mktemp -d)"
-            "$GITHUB_WORKSPACE/.wheel-full-smoke/bin/python" - <<'PY'
+            cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
+            "$RUNNER_TEMP/.wheel-full-smoke/bin/python" -I - <<'PY'
+          import os
           import pathlib
+          import sys
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
 
           import role_aware_dashboard_toolkit
           import fastapi
@@ -241,7 +309,7 @@ jobs:
           import streamlit
           import uvicorn
 
-          assert ".wheel-full-smoke" in str(pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve())
+          assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert all(
               module.__name__
               for module in (fastapi, pandas, pydantic, streamlit, uvicorn)
@@ -250,8 +318,7 @@ jobs:
           )
       - name: Sdist install smoke
         run: |
-          python -m venv .sdist-smoke
-          .sdist-smoke/bin/python -m pip install hatchling
+          python -m venv "$RUNNER_TEMP/.sdist-smoke"
           sdist="$(python - <<'PY'
           import pathlib
 
@@ -260,65 +327,70 @@ jobs:
           print(sdists[0])
           PY
           )"
-          .sdist-smoke/bin/python -m pip install --no-index --find-links dist --no-build-isolation "$sdist"
-          .sdist-smoke/bin/python - <<'PY'
+          "$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip install --use-pep517 "$sdist"
+          "$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip check
+          "$RUNNER_TEMP/.sdist-smoke/bin/python" -I - <<'PY'
           import importlib.util
           import os
           import pathlib
           import sys
           import tempfile
 
-          repo = pathlib.Path.cwd().resolve()
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
           def _resolved(value: str) -> pathlib.Path:
               return pathlib.Path(value or ".").resolve()
           def _is_repo_path(path: pathlib.Path) -> bool:
               return path == repo or repo in path.parents
 
-          sys.path[:] = [
-              value
-              for value in sys.path
-              if not _is_repo_path(_resolved(value))
-          ]
+          environment = pathlib.Path(sys.prefix).resolve()
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"]).resolve()
+          assert environment.is_relative_to(runner_temp)
+          assert not _is_repo_path(environment)
           assert all(not _is_repo_path(_resolved(value)) for value in sys.path)
 
-          with tempfile.TemporaryDirectory() as tmpdir:
-              os.chdir(tmpdir)
-              import role_aware_dashboard_toolkit as radt
-              from role_aware_dashboard_toolkit import dashboard as dashboard_module
-
-              assert ".sdist-smoke" in str(pathlib.Path(radt.__file__).resolve())
-              assert importlib.util.find_spec("streamlit") is None
-              assert "streamlit" not in sys.modules
-              assert radt.DashboardConfig is dashboard_module.DashboardConfig
-              assert radt.render is dashboard_module.render
-              config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
-              assert config.icon == "Core"
-              assert config.layout == "columns"
-              run = radt.build_run({"refresh_seconds": 10}, actor="ci")
-              packet = radt.build_run_packet(run)
-              assert packet["packet_type"] == "run"
-              assert packet["payload"]["run_id"] == run["run_id"]
+          previous_directory = pathlib.Path.cwd()
+          with tempfile.TemporaryDirectory(dir=runner_temp) as tmpdir:
               try:
-                  radt.render(config)
-              except ModuleNotFoundError as exc:
-                  assert exc.name == "streamlit"
-                  assert 'pip install "role-aware-dashboard-toolkit[workbench]"' in str(exc)
-              else:
-                  raise AssertionError("core sdist render should require the workbench extra")
-              print(radt.__version__)
+                  os.chdir(tmpdir)
+                  import role_aware_dashboard_toolkit as radt
+                  from role_aware_dashboard_toolkit import dashboard as dashboard_module
+
+                  assert pathlib.Path(radt.__file__).resolve().is_relative_to(environment)
+                  assert importlib.util.find_spec("streamlit") is None
+                  assert "streamlit" not in sys.modules
+                  assert radt.DashboardConfig is dashboard_module.DashboardConfig
+                  assert radt.render is dashboard_module.render
+                  config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
+                  assert config.icon == "Core"
+                  assert config.layout == "columns"
+                  run = radt.build_run({"refresh_seconds": 10}, actor="ci")
+                  packet = radt.build_run_packet(run)
+                  assert packet["packet_type"] == "run"
+                  assert packet["payload"]["run_id"] == run["run_id"]
+                  try:
+                      radt.render(config)
+                  except ModuleNotFoundError as exc:
+                      assert exc.name == "streamlit"
+                      assert 'pip install "role-aware-dashboard-toolkit[workbench]"' in str(exc)
+                  else:
+                      raise AssertionError("core sdist render should require the workbench extra")
+                  print(radt.__version__)
+              finally:
+                  os.chdir(previous_directory)
           PY
       - name: Upload validated distribution artifacts
-        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: role_aware_dashboard_toolkit-validated-dist
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
   release-candidate:
-    # Disabled until the owner explicitly authorizes hosted CI spending.
-    if: ${{ false }}
+    # No hosted run is authorized unless the owner opts in this exact commit.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
     needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -345,7 +417,7 @@ jobs:
 
           report = json.loads(pathlib.Path("pre_release_report.json").read_text(encoding="utf-8"))
           # Pre-OSS release state remains intentionally blocked only on these gates.
-          allowed_blocked = {"distribution_name_ownership", "oss_public_coordinates", "security_intake_contact"}
+          allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}
           blocked = sorted(report.get("blocked", []))
           unexpected_blocked = sorted(item for item in blocked if item not in allowed_blocked)
           failures = list(report.get("failures", []))
@@ -360,23 +432,45 @@ jobs:
         run: |
           python - <<'PY'
           import pathlib
+          import stat
           import tarfile
           import zipfile
 
+          from role_aware_dashboard_toolkit import release_audit
           from role_aware_dashboard_toolkit.release_audit import audit_release_artifact_members
 
-          members = []
-          for artifact in pathlib.Path("dist").iterdir():
+          artifacts = sorted(pathlib.Path("dist").iterdir())
+          assert len(artifacts) == 2, "expected exactly one wheel and one sdist"
+          assert sum(path.suffix == ".whl" for path in artifacts) == 1
+          assert sum(path.name.endswith(".tar.gz") for path in artifacts) == 1
+          for artifact in artifacts:
+              assert artifact.is_file() and not artifact.is_symlink(), artifact.name
               if artifact.suffix == ".whl":
                   with zipfile.ZipFile(artifact) as archive:
-                      members.extend(archive.namelist())
-              elif artifact.name.endswith(".tar.gz"):
+                      entries = archive.infolist()
+                      assert all(not item.is_dir() and stat.S_IFMT(item.external_attr >> 16) in {0, stat.S_IFREG} for item in entries), "special wheel member"
+                      members = [item.filename for item in entries]
+                  expected = set(release_audit._PUBLIC_PACKAGE_MEMBERS) | {
+                      release_audit._WHEEL_METADATA_ROOT + "/" + name
+                      for name in release_audit._WHEEL_METADATA_MEMBERS
+                  }
+              else:
                   with tarfile.open(artifact, "r:gz") as archive:
-                      members.extend(archive.getnames())
-
-          assert members
-          audit = audit_release_artifact_members(members)
-          assert audit["ok"], audit
+                      entries = archive.getmembers()
+                      assert all(item.isfile() for item in entries), "special sdist member"
+                      members = [item.name for item in entries]
+                  expected = {
+                      release_audit._SDIST_ROOT + "/" + name
+                      for name in set(release_audit._PUBLIC_PACKAGE_MEMBERS) | set(release_audit._PUBLIC_SDIST_MEMBERS)
+                  }
+              assert len(members) == len(set(members)), "duplicate artifact member"
+              assert set(members) == expected, {
+                  "artifact": artifact.name,
+                  "missing": sorted(expected - set(members)),
+                  "unexpected": sorted(set(members) - expected),
+              }
+              audit = audit_release_artifact_members(members)
+              assert audit["ok"], audit
           PY
       - name: Build release-candidate evidence
         run: |
@@ -390,6 +484,16 @@ jobs:
           import role_aware_dashboard_toolkit as radt
           from role_aware_dashboard_toolkit.release_audit import build_release_manifest
 
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref != "refs/heads/candidate":
+              raise SystemExit("release-candidate evidence requires the candidate branch")
+          try:
+              run_id = int(os.environ["GITHUB_RUN_ID"])
+              run_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+          except (KeyError, ValueError) as exc:
+              raise SystemExit("positive GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required") from exc
+          if run_id <= 0 or run_attempt <= 0:
+              raise SystemExit("positive GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required")
           source_sha = os.environ.get("GITHUB_SHA", "").strip()
           if not source_sha:
               raise SystemExit("GITHUB_SHA is required for release-candidate evidence")
@@ -408,11 +512,17 @@ jobs:
               raise SystemExit("release candidate requires exactly one wheel")
           if len([path for path in artifacts if path.name.endswith(".tar.gz")]) != 1:
               raise SystemExit("release candidate requires exactly one sdist")
+          if len(artifacts) != 2:
+              raise SystemExit("release candidate requires exactly two distribution artifacts")
           artifact_sha256 = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}
           pre_release = json.loads(pathlib.Path("pre_release_report.json").read_text(encoding="utf-8"))
           evidence = {
               "version": radt.__version__,
               "source_sha": source_sha,
+              "run_id": run_id,
+              "run_attempt": run_attempt,
+              "head_branch": ref.removeprefix("refs/heads/"),
+              "workflow_path": ".github/workflows/ci.yml",
               "artifact_sha256": artifact_sha256,
               "pre_release_status": pre_release.get("status"),
               "blocked": pre_release.get("blocked", []),
@@ -430,6 +540,7 @@ jobs:
           name: role_aware_dashboard_toolkit-release-candidate-dist
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
       - name: Upload release-candidate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -438,10 +549,12 @@ jobs:
             pre_release_report.json
             release_candidate_evidence.json
           if-no-files-found: error
+          retention-days: 1
   windows-release-smoke:
-    # Disabled until the owner explicitly authorizes hosted CI spending.
-    if: ${{ false }}
+    # No hosted run is authorized unless the owner opts in this exact commit.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -461,7 +574,44 @@ jobs:
       - name: Wheel install smoke (Windows)
         shell: powershell
         run: |
-          python -m venv .wheel-smoke-win
-          .\.wheel-smoke-win\Scripts\python -m pip install --no-index --find-links dist role_aware_dashboard_toolkit
-          .\.wheel-smoke-win\Scripts\python -c "import os, pathlib, sys, tempfile; repo=pathlib.Path.cwd().resolve(); _resolved=lambda value: pathlib.Path(value or '.').resolve(); _is_repo_path=lambda path: path==repo or repo in path.parents; sys.path=[value for value in sys.path if not _is_repo_path(_resolved(value))]; assert all(not _is_repo_path(_resolved(value)) for value in sys.path); tmpdir=tempfile.mkdtemp(); os.chdir(tmpdir); import role_aware_dashboard_toolkit as radt; config=radt.DashboardConfig(icon='Core', layout='columns', run_store=None); assert config.icon=='Core'; assert config.layout=='columns'; run=radt.build_run({'refresh_seconds': 10}, actor='ci'); packet=radt.build_run_packet(run); assert packet['packet_type']=='run'; assert packet['payload']['run_id']==run['run_id']; print(radt.__version__)"
-          if (Test-Path -LiteralPath ".wheel-smoke-win") { Remove-Item -LiteralPath ".wheel-smoke-win" -Recurse -Force }
+          $venv = Join-Path $env:RUNNER_TEMP ".wheel-smoke-win"
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $venvPython = Join-Path $venv "Scripts\python.exe"
+          & $venvPython -m pip install --no-index --find-links dist role-aware-dashboard-toolkit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $venvPython -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $smoke = @"
+          import importlib.util
+          import os
+          import pathlib
+          import sys
+          import tempfile
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(runner_temp)
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
+          previous_directory = pathlib.Path.cwd()
+          with tempfile.TemporaryDirectory(dir=runner_temp) as tmpdir:
+              try:
+                  os.chdir(tmpdir)
+                  import role_aware_dashboard_toolkit as radt
+                  assert pathlib.Path(radt.__file__).resolve().is_relative_to(environment)
+                  assert importlib.util.find_spec("streamlit") is None
+                  config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
+                  assert config.icon == "Core"
+                  assert config.layout == "columns"
+                  run = radt.build_run({"refresh_seconds": 10}, actor="ci")
+                  packet = radt.build_run_packet(run)
+                  assert packet["packet_type"] == "run"
+                  assert packet["payload"]["run_id"] == run["run_id"]
+                  print(radt.__version__)
+              finally:
+                  os.chdir(previous_directory)
+          "@
+          $smoke | & $venvPython -I -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
