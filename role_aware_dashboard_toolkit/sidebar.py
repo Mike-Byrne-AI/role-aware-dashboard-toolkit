@@ -188,32 +188,57 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
 
 
 def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile_store: Any) -> None:
-    reg = config.registry
-    audit = config.audit
     st.divider()
     st.subheader("Profiles")
     profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
-    profile_options = ["(none)", *profiles]
-    current_choice = st.session_state.get("_radt_profile_choice", "(none)")
-    if current_choice not in profile_options:
-        st.session_state["_radt_profile_choice"] = "(none)"
+    selected_profile = st.session_state.get("_radt_profile_choice", "(none)")
+    if selected_profile not in profiles:
+        selected_profile = "(none)"
+        st.session_state["_radt_profile_choice"] = selected_profile
 
-    selected_profile = st.selectbox("Load profile", options=profile_options, key="_radt_profile_choice")
-    st.text_input("Profile name", value="my_profile", key="_radt_profile_name")
+    # Keep inputs visually above the buttons, but create their widgets after a
+    # successful write has refreshed membership. An early rerun would interrupt
+    # host/plugin widgets later in the script and can discard their state.
+    inputs = st.container()
+    try:
+        if _render_profile_actions(st, config, ctx, profile_store, selected_profile):
+            profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
+    finally:
+        # A failed store operation or denied load must still render these keyed
+        # inputs, so Streamlit does not remove the operator's selection/name.
+        with inputs:
+            profile_options = ["(none)", *profiles]
+            current_choice = st.session_state.get("_radt_profile_choice", "(none)")
+            st.session_state["_radt_profile_choice"] = (
+                current_choice if current_choice in profile_options else "(none)"
+            )
+            selected_profile = st.selectbox(
+                "Load profile", options=profile_options, key="_radt_profile_choice"
+            )
+            st.text_input("Profile name", value="my_profile", key="_radt_profile_name")
 
-    if selected_profile and selected_profile != "(none)":
-        loaded = _profile_store_call(load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
-        if loaded:
-            parent = str(loaded.get("parent_profile_id") or "").strip()
-            if parent:
-                st.caption(f"Parent profile: {parent}")
-            diff_count = len(loaded.get("diff_from_parent") or {})
-            if diff_count > 0:
-                st.caption(f"Diff entries: {diff_count}")
-            source = str(loaded.get("source") or "")
-            if source:
-                st.caption(f"Source: {redact_text_local_paths(source, repo_root=str(config.profile_dir))}")
+    with inputs:
+        if selected_profile and selected_profile != "(none)":
+            loaded = _profile_store_call(load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
+            if loaded:
+                parent = str(loaded.get("parent_profile_id") or "").strip()
+                if parent:
+                    st.caption(f"Parent profile: {parent}")
+                diff_count = len(loaded.get("diff_from_parent") or {})
+                if diff_count > 0:
+                    st.caption(f"Diff entries: {diff_count}")
+                source = str(loaded.get("source") or "")
+                if source:
+                    st.caption(f"Source: {redact_text_local_paths(source, repo_root=str(config.profile_dir))}")
 
+
+def _render_profile_actions(
+    st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str,
+) -> bool:
+    """Process profile actions once; report a successful membership-changing write."""
+    reg = config.registry
+    audit = config.audit
+    profiles_changed = False
     can_save_profiles = has_perm(ctx, "can_save_profiles")
     can_load_profiles = can_write(ctx, "can_load_profiles")
     c_save, c_load = st.columns(2)
@@ -245,6 +270,7 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
                 )
                 audit.log_profile_save(name, role=ctx.role)
                 st.toast(f"Saved profile: {name}")
+                profiles_changed = True
             else:
                 st.warning("Enter a profile name.")
 
@@ -272,7 +298,7 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
                     )
                     if denied:
                         st.warning("Profile requires permission to edit all restored controls. " + diagnostic_text("RADT-PERMISSION"))
-                        return
+                        return profiles_changed
                     for ctrl in reg.all():
                         st.session_state[ctrl.key] = staged_state[ctrl.key]
                     st.session_state["_radt_active_profile_id"] = str(result.get("profile_id") or choice)
@@ -305,9 +331,10 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
             if _profile_store_call(delete_profile, choice, profile_dir=config.profile_dir, store=profile_store):
                 audit.log("profile_delete", detail=choice, role=ctx.role)
                 st.toast(f"Deleted profile: {choice}")
-                st.rerun()
+                profiles_changed = True
             else:
                 st.warning(f"Could not delete '{choice}'.")
+    return profiles_changed
 
 
 

@@ -22,6 +22,8 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
   failure summaries and explicit partial-effect/durability limits.
 - Audit display preserves source value types while avoiding mixed-column
   Arrow conversion fallbacks.
+- Profile menus refresh immediately after saving or deleting, preserving
+  surrounding widgets and avoiding an additional script rerun.
 
 The core package has no required third-party dependencies. Public release
 remains subject to the metadata, security-intake, and validation gates in the
