@@ -19,6 +19,7 @@ EXPECTED_FAMILIES = {
     "packets",
     "profiles-and-audit",
     "release-tooling",
+    "installed-guidance",
     "runbook-and-snapshots",
     "runtime-and-observability",
     "validation-and-protocol",

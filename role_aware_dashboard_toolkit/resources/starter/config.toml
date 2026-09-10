@@ -1,0 +1,21 @@
+# Project theme: edit these values to change page, inputs, text and accent.
+# This starter's independent sidebar colors require Streamlit >=1.44.
+# Its Python group fills require keyed containers (Streamlit >=1.39).
+[theme]
+base = "light"
+backgroundColor = "#F3F6FA"
+secondaryBackgroundColor = "#E2E8F0"
+textColor = "#172033"
+primaryColor = "#0F766E"
+
+[theme.sidebar]
+backgroundColor = "#E8EEF4"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172033"
+
+[server]
+address = "127.0.0.1"
+headless = true
+
+[browser]
+gatherUsageStats = false

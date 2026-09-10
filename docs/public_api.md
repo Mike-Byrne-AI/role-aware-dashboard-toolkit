@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `36`
+- Documented module-only public symbols: `40`
 
 ## Usage recipes
 
@@ -83,6 +83,19 @@ Root exports: `9`; module-only symbols: `0`.
 - `make_security_context`
 
 Typed controls, value sanitation, and explicit role policy.
+
+## Installed offline guidance
+
+Classification: `stable`
+
+Root exports: `0`; module-only symbols: `4`.
+
+- `list_guide_topics` (module-only)
+- `read_guide` (module-only)
+- `read_starter` (module-only)
+- `inspect_capabilities` (module-only)
+
+Module-only reference helpers from role_aware_dashboard_toolkit.guidance; no host application execution.
 
 ## Operator record modules
 

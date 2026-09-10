@@ -34,11 +34,21 @@ separate release decision.
 
 ## Install
 
-From a source checkout:
+From an unpacked source release or source checkout:
 
-```bash
-python -m pip install -e .
+```powershell
+python -m pip install .
 ```
+
+For the styled starter, install the renderer in the same environment:
+
+```powershell
+python -m pip install ".[workbench]" "streamlit>=1.44"
+```
+
+Then work in your own application directory. A regular installation includes
+the toolkit's Python source, offline guides and starter; the source checkout is
+not needed to run the installed guide or create a consumer project.
 
 Only after a separate PyPI release:
 
@@ -54,6 +64,35 @@ python -m pip install "role-aware-dashboard-toolkit[api]"        # FastAPI route
 python -m pip install "role-aware-dashboard-toolkit[pandas]"     # Tabular history views
 python -m pip install "role-aware-dashboard-toolkit[full]"       # All supported runtime extras
 ```
+
+## Build with your assistant
+
+The installed package includes offline guidance and a complete starter. After
+installing the toolkit, use the same Python environment for these commands:
+
+```powershell
+python -m role_aware_dashboard_toolkit inspect --format json
+python -m role_aware_dashboard_toolkit guide start
+python -m role_aware_dashboard_toolkit init my-dashboard --dry-run
+python -m role_aware_dashboard_toolkit init my-dashboard
+Set-Location my-dashboard
+python -m streamlit run app.py
+```
+
+The starter needs Streamlit 1.44 or later for its card and sidebar styling.
+The guide and inspection commands work with the dependency-free core.
+`init` creates a new directory containing editable application code, a theme,
+a README and an `AGENTS.md` pointer to the installed handbook. It refuses an
+existing destination. For an existing project, read `guide` and
+`example starter --format json`, then integrate the pieces you need.
+
+Ask your assistant to read the project's instructions and run `inspect` and
+`guide start` before customizing the dashboard. The shipped guidance describes
+this installed version; your instructions and project policy remain authoritative.
+The package does not assume an assistant automatically reads files inside
+site-packages. Imports stay quiet, and only the explicit `init` command creates
+project files. Guide topics cover controls, appearance, sections, plugins,
+permissions, profiles, runs, telemetry, API configuration and troubleshooting.
 
 ## Five-minute dashboard
 

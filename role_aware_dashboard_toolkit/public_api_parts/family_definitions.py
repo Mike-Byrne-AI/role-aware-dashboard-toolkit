@@ -157,6 +157,12 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
             ),
             description="Module-only validators and protocol catalog metadata.",
         ),
+        "installed-guidance": family_cls(
+            family_id="installed-guidance",
+            display_name="Installed offline guidance",
+            symbols=("list_guide_topics", "read_guide", "read_starter", "inspect_capabilities"),
+            description="Module-only reference helpers from role_aware_dashboard_toolkit.guidance; no host application execution.",
+        ),
         "release-tooling": family_cls(
             family_id="release-tooling",
             display_name="Release tooling",

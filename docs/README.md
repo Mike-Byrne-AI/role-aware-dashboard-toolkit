@@ -5,6 +5,7 @@ Start with the path closest to what you are building.
 ## Get started
 
 - [Root README](../README.md) — project overview and first dashboard
+- [Installed assistant guidance](../role_aware_dashboard_toolkit/resources/guides/start.md) — offline handbook and starter commands
 - [Quickstart](quickstart.md) — dependency-free library walkthrough
 - [Dashboard tools](dashboard_tools.md) — controls, roles, profiles, and audit
 - [Examples](../examples/README.md) — runnable core and Streamlit examples

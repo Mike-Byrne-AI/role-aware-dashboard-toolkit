@@ -16,6 +16,8 @@ The OSS core owns:
 - neutral packet envelopes and protocol metadata
 - local operator records for teams, decisions, incidents, cases, and governance
 - runtime diagnostics and telemetry normalization
+- installed offline reference guidance, capability inspection and an explicit
+  starter-copy command for a new consumer directory
 
 All state transitions are explicit Python calls. UI rendering does not grant
 authority beyond the policy supplied by the host application.
@@ -84,10 +86,19 @@ Role-Aware Dashboard Toolkit is not:
 
 - an authentication provider
 - an autonomous execution or orchestration runtime
-- a repository bootstrapper
+- a repository management framework
 - a secret manager
 - a distributed database
 - a home for product-specific adapters
 
 Applications can compose those systems around Role-Aware Dashboard Toolkit through ordinary Python
 APIs, trusted plugins, or their own namespaced packets.
+
+## Installed guidance boundary
+
+The standard-library CLI reads version-matched package resources. It does not
+load a host application, install dependencies, call a model, contact a service,
+or supply authority over the host project. The explicit `init` command copies a
+small runnable example and a guidance pointer into a new directory; it never
+creates Git state or overwrites an existing project. Existing projects can read
+and adapt the same example through `example starter --format json`.
