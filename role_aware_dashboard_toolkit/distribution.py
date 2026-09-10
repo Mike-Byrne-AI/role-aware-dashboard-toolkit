@@ -108,7 +108,7 @@ def build_distribution_reference_markdown() -> str:
     lines = [
         "# Role-Aware Dashboard Toolkit distribution reference",
         "",
-        "Role-Aware Dashboard Toolkit publishes one package with a dependency-free core and explicit optional extras.",
+        "Role-Aware Dashboard Toolkit defines one Python distribution with a dependency-free core and explicit optional extras.",
         "",
     ]
     for artifact in list_distribution_artifacts():
@@ -140,7 +140,7 @@ def build_distribution_strategy_markdown() -> str:
             "# Role-Aware Dashboard Toolkit distribution strategy",
             "",
             f"- Strategy id: `{ROLE_AWARE_DASHBOARD_TOOLKIT_DISTRIBUTION_STRATEGY}`",
-            "- `role-aware-dashboard-toolkit` is the only published package.",
+            "- `role-aware-dashboard-toolkit` is the single Python distribution; package-index publication is a separate release decision.",
             "- The core has no required third-party dependencies.",
             "- `workbench`, `api`, and `pandas` add isolated optional capabilities.",
             "- `full` installs every supported public runtime dependency.",

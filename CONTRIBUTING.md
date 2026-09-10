@@ -33,9 +33,8 @@ resulting behavior, and the verification performed. Follow
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and consult [SECURITY.md](SECURITY.md)
 before sharing sensitive findings.
 
-## Release readiness
+## Contribution channels
 
-Pre-OSS release state remains blocked on `oss_public_coordinates` and
-`security_intake_contact` until real public project URLs and a monitored public
-security reporting contact are documented. This local candidate does not yet
-provide a public submission or reporting destination.
+Use the [issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
+for public bug reports and feature proposals. Follow [SECURITY.md](SECURITY.md)
+for vulnerability reports; do not include sensitive details in public issues.

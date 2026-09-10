@@ -19,7 +19,7 @@ jobs:
   test:
     name: test (${{ matrix.python-version }})
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -41,7 +41,7 @@ jobs:
 
   coverage-gate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -60,7 +60,7 @@ jobs:
 
   packaging-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -81,24 +81,26 @@ jobs:
           python tools/pre_release_check.py --json --require-clean > pre_release_report.json || true
           python - <<'PY'
           import json
-          import os
           import pathlib
 
           report = json.loads(pathlib.Path("pre_release_report.json").read_text(encoding="utf-8"))
-          ref = os.environ.get("GITHUB_REF", "")
-          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
-          is_release_context = ref.startswith("refs/tags/") or (ref == "refs/heads/main" and event_name != "workflow_dispatch")
-          # Pre-OSS release state remains intentionally blocked only on these gates.
-          allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}
-          blocked = sorted(report.get("blocked", []))
-          unexpected_blocked = sorted(item for item in blocked if item not in allowed_blocked)
-          failures = list(report.get("failures", []))
-          if failures:
-              raise SystemExit(f"pre_release_check failures present: {failures}")
-          if is_release_context and blocked:
-              raise SystemExit(f"pre_release_check blocked checks are not allowed for release contexts: {blocked}")
-          if unexpected_blocked:
-              raise SystemExit(f"pre_release_check unexpected blocked checks: {unexpected_blocked}")
+          required_checks = {
+              "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
+              "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
+              "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+          }
+          checks = report.get("checks", [])
+          if len(checks) != len(required_checks) or {item.get("id") for item in checks} != required_checks:
+              raise SystemExit("pre_release_check must contain every required local check exactly once")
+          if report.get("ok") is not True or report.get("status") != "pass" or any(item.get("status") != "pass" for item in checks):
+              raise SystemExit("pre_release_check requires all local configuration checks to pass")
+          for field, count in (("blocked", "blocked_count"), ("failures", "failure_count"), ("warnings", "warning_count")):
+              if report.get(field) != [] or type(report.get(count)) is not int or report[count] != 0:
+                  raise SystemExit(f"pre_release_check nonzero or missing {field} summary")
+          if report.get("validation_scope") != "local-configuration" or report.get("release_channel") != "github-source":
+              raise SystemExit("pre_release_check must declare local GitHub-source configuration scope")
+          if not report.get("live_validation_required"):
+              raise SystemExit("pre_release_check must retain separate live validation requirements")
           PY
           python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
           python -m twine check dist/*
@@ -387,7 +389,7 @@ jobs:
           retention-days: 1
   release-candidate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -416,15 +418,23 @@ jobs:
           import pathlib
 
           report = json.loads(pathlib.Path("pre_release_report.json").read_text(encoding="utf-8"))
-          # Pre-OSS release state remains intentionally blocked only on these gates.
-          allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}
-          blocked = sorted(report.get("blocked", []))
-          unexpected_blocked = sorted(item for item in blocked if item not in allowed_blocked)
-          failures = list(report.get("failures", []))
-          if failures:
-              raise SystemExit(f"pre_release_check failures present: {failures}")
-          if unexpected_blocked:
-              raise SystemExit(f"pre_release_check unexpected blocked checks: {unexpected_blocked}")
+          required_checks = {
+              "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
+              "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
+              "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+          }
+          checks = report.get("checks", [])
+          if len(checks) != len(required_checks) or {item.get("id") for item in checks} != required_checks:
+              raise SystemExit("pre_release_check must contain every required local check exactly once")
+          if report.get("ok") is not True or report.get("status") != "pass" or any(item.get("status") != "pass" for item in checks):
+              raise SystemExit("pre_release_check requires all local configuration checks to pass")
+          for field, count in (("blocked", "blocked_count"), ("failures", "failure_count"), ("warnings", "warning_count")):
+              if report.get(field) != [] or type(report.get(count)) is not int or report[count] != 0:
+                  raise SystemExit(f"pre_release_check nonzero or missing {field} summary")
+          if report.get("validation_scope") != "local-configuration" or report.get("release_channel") != "github-source":
+              raise SystemExit("pre_release_check must declare local GitHub-source configuration scope")
+          if not report.get("live_validation_required"):
+              raise SystemExit("pre_release_check must retain separate live validation requirements")
           PY
       - name: Twine check
         run: python -m twine check dist/*
@@ -485,8 +495,8 @@ jobs:
           from role_aware_dashboard_toolkit.release_audit import build_release_manifest
 
           ref = os.environ.get("GITHUB_REF", "")
-          if ref != "refs/heads/candidate":
-              raise SystemExit("release-candidate evidence requires the candidate branch")
+          if ref not in {"refs/heads/candidate", "refs/heads/main"}:
+              raise SystemExit("release-candidate evidence requires the candidate or main branch")
           try:
               run_id = int(os.environ["GITHUB_RUN_ID"])
               run_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
@@ -525,6 +535,9 @@ jobs:
               "workflow_path": ".github/workflows/ci.yml",
               "artifact_sha256": artifact_sha256,
               "pre_release_status": pre_release.get("status"),
+              "validation_scope": pre_release["validation_scope"],
+              "release_channel": pre_release["release_channel"],
+              "live_validation_required": pre_release["live_validation_required"],
               "blocked": pre_release.get("blocked", []),
               "failure_count": int(pre_release.get("failure_count", len(pre_release.get("failures", [])))),
               "release_manifest": build_release_manifest(),
@@ -552,7 +565,7 @@ jobs:
           retention-days: 1
   windows-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:

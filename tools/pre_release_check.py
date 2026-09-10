@@ -31,12 +31,6 @@ _SECURITY_PLACEHOLDER_MARKERS = (
     "official intake coordinates are published",
     "avoids placeholder public contact paths",
 )
-_PRE_OSS_BLOCKED_CHECK_IDS = ("oss_public_coordinates", "security_intake_contact")
-_INTAKE_DOC_BLOCKED_STATE_MARKERS = (
-    "pre-oss release state",
-    "oss_public_coordinates",
-    "security_intake_contact",
-)
 _PUBLIC_COORDINATE_PLACEHOLDER_MARKERS = (
     "example.",
     "localhost",
@@ -104,7 +98,7 @@ def build_report(*, require_clean: bool = False) -> dict[str, Any]:
         _check_public_coordinates(pyproject),
         _check_distribution_name_ownership(pyproject),
         _check_oss_intake_files(),
-        _check_security_intake_contact(),
+        _check_security_intake_contact(pyproject),
         _check_generated_cache_artifacts(),
     ]
     if require_clean:
@@ -114,6 +108,16 @@ def build_report(*, require_clean: bool = False) -> dict[str, Any]:
     failures = [item["id"] for item in checks if item["status"] == "fail"]
     warnings = [item["id"] for item in checks if item["status"] == "warn"]
     return {
+        "validation_scope": "local-configuration",
+        "release_channel": pyproject.get("tool", {}).get("role_aware_dashboard_toolkit", {}).get("release", {}).get("channel"),
+        "live_validation_required": [
+            "repository_reachability",
+            "security_reporting_activation",
+            "security_notification_configuration",
+            "branch_protection",
+            "hosted_ci_same_commit",
+            "public_visibility",
+        ],
         "ok": status == "pass",
         "status": status,
         "checks": checks,
@@ -222,7 +226,25 @@ def _check_public_coordinates(pyproject: dict[str, Any]) -> dict[str, Any]:
                 "Replace placeholder or invalid project URLs with canonical public HTTP(S) coordinates."
             ),
         )
-    return _record("oss_public_coordinates", "pass", "project URLs are present")
+    release = pyproject.get("tool", {}).get("role_aware_dashboard_toolkit", {}).get("release", {})
+    if isinstance(release, dict) and release.get("channel") == "github-source":
+        repository = str(release.get("repository") or "")
+        base = f"https://github.com/{repository}"
+        expected = {
+            "Repository": base,
+            "Issues": base + "/issues",
+            "Documentation": base + "/blob/main/docs/README.md",
+            "Homepage": base + "#readme",
+        }
+        if urls != expected:
+            return _record(
+                "oss_public_coordinates", "blocked",
+                "project URLs must match the configured GitHub source repository and main documentation",
+            )
+    return _record(
+        "oss_public_coordinates", "pass",
+        "project URL configuration is valid; reachability and public visibility are not checked",
+    )
 
 
 def _public_coordinate_problem(value: str) -> str:
@@ -258,119 +280,98 @@ def _public_coordinate_problem(value: str) -> str:
 def _check_distribution_name_ownership(pyproject: dict[str, Any]) -> dict[str, Any]:
     distribution_name = str(pyproject.get("project", {}).get("name") or "").strip()
     normalized_name = re.sub(r"[-_.]+", "-", distribution_name).lower()
-    release_config = (
-        pyproject.get("tool", {}).get("role_aware_dashboard_toolkit", {}).get("release", {})
-    )
-    if not isinstance(release_config, dict):
-        release_config = {}
-    verified_name = str(
-        release_config.get("verified-distribution-name") or ""
-    ).strip()
-    normalized_verified_name = re.sub(r"[-_.]+", "-", verified_name).lower()
-
-    if normalized_name and normalized_verified_name == normalized_name:
+    release = pyproject.get("tool", {}).get("role_aware_dashboard_toolkit", {}).get("release", {})
+    if not isinstance(release, dict):
+        release = {}
+    repository = str(release.get("repository") or "")
+    valid_repository = re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9][A-Za-z0-9_.-]*", repository)
+    if (
+        release.get("channel") == "github-source"
+        and release.get("package-index-publication") is False
+        and valid_repository
+        and normalized_name
+        and normalized_name == re.sub(r"[-_.]+", "-", repository.split("/", 1)[1]).lower()
+    ):
         return _record(
-            "distribution_name_ownership",
-            "pass",
-            (
-                f"configured distribution name {distribution_name!r} matches the "
-                "recorded normalized PyPI availability or ownership verification"
-            ),
-        )
-    if not normalized_name:
-        return _record(
-            "distribution_name_ownership",
-            "blocked",
-            "pyproject.toml does not define a distribution name",
-            required_inputs=["publishable PyPI distribution name"],
+            "distribution_name_ownership", "pass",
+            f"GitHub-source distribution {distribution_name!r} matches repository {repository!r}; "
+            "no PyPI ownership or reservation is verified or claimed",
         )
     return _record(
-        "distribution_name_ownership",
-        "blocked",
-        (
-            f"configured distribution name {distribution_name!r} has no matching "
-            "PyPI availability or ownership verification"
-        ),
-        required_inputs=[
-            f"verified availability or ownership for PyPI distribution name {distribution_name!r}"
-        ],
+        "distribution_name_ownership", "blocked",
+        "configure a matching GitHub-source repository identity with package-index publication disabled",
+        required_inputs=["GitHub source repository matching the normalized distribution name"],
         remediation=(
-            "Verify the normalized name on PyPI and confirm the releasing account can "
-            "publish it, then record the exact name under [tool.role_aware_dashboard_toolkit.release] "
-            "verified-distribution-name."
+            "Set channel='github-source', repository='owner/distribution-name', and "
+            "package-index-publication=false in [tool.role_aware_dashboard_toolkit.release]. "
+            "Package-index publication requires a separate ownership review."
         ),
     )
 
 
 def _check_oss_intake_files() -> dict[str, Any]:
-    required = ("SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md")
-    missing = [path for path in required if not (REPO_ROOT / path).exists()]
+    required = {
+        "SECURITY.md": ("# security policy", "## reporting", "## deployment responsibilities"),
+        "CONTRIBUTING.md": ("## development setup", "[security.md](security.md)", "[code_of_conduct.md](code_of_conduct.md)"),
+        "CODE_OF_CONDUCT.md": ("## expected behavior", "## unacceptable behavior", "## reporting", "[security.md](security.md)"),
+    }
+    missing = [path for path in required if not (REPO_ROOT / path).is_file()]
     if missing:
         return _record("oss_intake_files", "blocked", "missing OSS intake files: " + ", ".join(missing))
-    missing_markers: dict[str, list[str]] = {}
-    for path in required:
+    incomplete = []
+    for path, markers in required.items():
         lowered = (REPO_ROOT / path).read_text(encoding="utf-8").lower()
-        absent = [marker for marker in _INTAKE_DOC_BLOCKED_STATE_MARKERS if marker not in lowered]
-        if absent:
-            missing_markers[path] = absent
-    if missing_markers:
-        details = ", ".join(f"{path}: {', '.join(markers)}" for path, markers in missing_markers.items())
+        if any(marker not in lowered for marker in markers):
+            incomplete.append(path)
+    if incomplete:
+        return _record("oss_intake_files", "fail", "incomplete contribution or reporting policy: " + ", ".join(incomplete))
+    return _record("oss_intake_files", "pass", "contribution and reporting policy files are present; live intake is not checked")
+
+
+def _check_security_intake_contact(pyproject: dict[str, Any] | None = None) -> dict[str, Any]:
+    if pyproject is None:
+        pyproject = _load_pyproject()
+    release = pyproject.get("tool", {}).get("role_aware_dashboard_toolkit", {}).get("release", {})
+    if not isinstance(release, dict):
+        release = {}
+    repository = str(release.get("repository") or "")
+    expected_url = f"https://github.com/{repository}/security/advisories/new"
+    configured_url = str(release.get("security-reporting-url") or "")
+    if (
+        release.get("channel") != "github-source"
+        or release.get("security-reporting-mode") != "github-private-vulnerability-reporting"
+        or not repository
+        or configured_url != expected_url
+        or _public_coordinate_problem(configured_url)
+    ):
         return _record(
-            "oss_intake_files",
-            "fail",
-            "OSS intake docs missing explicit pre-OSS blocked-state markers: " + details,
-            remediation=(
-                "Update SECURITY.md, CONTRIBUTING.md, and CODE_OF_CONDUCT.md to explicitly state "
-                "that pre-OSS release remains blocked on "
-                f"{_PRE_OSS_BLOCKED_CHECK_IDS[0]} and {_PRE_OSS_BLOCKED_CHECK_IDS[1]}."
-            ),
+            "security_intake_contact", "blocked",
+            "configure the repository-matched GitHub private vulnerability reporting policy",
+            required_inputs=["GitHub private vulnerability reporting mode and repository URL"],
+            remediation="Set security-reporting-mode and security-reporting-url in the release configuration and document the same route in SECURITY.md.",
+        )
+    security_path = REPO_ROOT / "SECURITY.md"
+    if not security_path.is_file():
+        return _record("security_intake_contact", "blocked", "SECURITY.md is missing")
+    text = security_path.read_text(encoding="utf-8")
+    if (
+        configured_url not in text
+        or not _has_monitored_security_reporting_contact(text)
+        or any(marker in text.lower() for marker in _SECURITY_PLACEHOLDER_MARKERS)
+    ):
+        return _record(
+            "security_intake_contact", "blocked",
+            "SECURITY.md must document the configured vulnerability reporting route",
         )
     return _record(
-        "oss_intake_files",
-        "pass",
-        "OSS intake docs explicitly acknowledge pre-OSS blocked-state gates.",
+        "security_intake_contact", "pass",
+        "GitHub private vulnerability reporting policy is configured consistently; "
+        "live activation and notification configuration are not verified",
     )
 
 
-def _check_security_intake_contact() -> dict[str, Any]:
-    security_path = REPO_ROOT / "SECURITY.md"
-    if not security_path.exists():
-        return _record(
-            "security_intake_contact",
-            "blocked",
-            "SECURITY.md is missing",
-            required_inputs=["monitored security reporting contact"],
-            remediation=(
-                "Add SECURITY.md with a real monitored security reporting contact path before publishing."
-            ),
-        )
-    text = security_path.read_text(encoding="utf-8")
-    lowered = text.lower()
-    if any(marker in lowered for marker in _SECURITY_PLACEHOLDER_MARKERS):
-        return _record(
-            "security_intake_contact",
-            "blocked",
-            "SECURITY.md still uses private or placeholder intake wording; add a monitored public reporting contact.",
-            required_inputs=["monitored security reporting contact"],
-            remediation=(
-                "Replace private or placeholder security intake wording in SECURITY.md "
-                "with a real monitored public reporting path."
-            ),
-        )
-    if not _has_monitored_security_reporting_contact(text):
-        return _record(
-            "security_intake_contact",
-            "blocked",
-            "SECURITY.md does not include an explicit monitored security reporting contact path.",
-            required_inputs=["monitored security reporting contact"],
-            remediation=(
-                "Add a monitored security mailto/email or dedicated vulnerability reporting URL to SECURITY.md."
-            ),
-        )
-    return _record("security_intake_contact", "pass", "SECURITY.md names a monitored security reporting contact")
-
-
 def _has_monitored_security_reporting_contact(text: str) -> bool:
+    # Historical helper name: this validates contact syntax, never live monitoring.
     for line in str(text or "").splitlines():
         stripped = line.strip()
         if not stripped:

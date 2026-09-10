@@ -8,42 +8,31 @@ import pytest
 from tests.release_hygiene_helpers import REPO_ROOT, load_pre_release_check_module
 
 
-def test_pre_release_check_json_entrypoint_reports_known_release_gate():
+def test_pre_release_check_json_entrypoint_reports_local_configuration_scope():
     script = REPO_ROOT / "tools" / "pre_release_check.py"
-    assert script.exists()
     result = subprocess.run(
-        [sys.executable, str(script), "--json"],
-        cwd=str(REPO_ROOT),
-        text=True,
-        capture_output=True,
-        check=False,
+        [sys.executable, str(script), "--json"], cwd=str(REPO_ROOT),
+        text=True, capture_output=True, check=False,
     )
     payload = json.loads(result.stdout)
-    assert result.returncode == (0 if payload["ok"] else 1)
+    assert result.returncode == 0, payload
+    assert payload["ok"] is True
+    assert payload["status"] == "pass"
+    assert payload["validation_scope"] == "local-configuration"
+    assert payload["release_channel"] == "github-source"
+    assert set(payload["live_validation_required"]) == {
+        "repository_reachability", "security_reporting_activation",
+        "security_notification_configuration", "branch_protection",
+        "hosted_ci_same_commit", "public_visibility",
+    }
     checks = {item["id"]: item for item in payload["checks"]}
-    assert "release_audit_doc" in checks
-    assert checks["oss_public_coordinates"]["status"] == "blocked"
-    assert "Homepage" in checks["oss_public_coordinates"]["detail"]
-    assert checks["oss_public_coordinates"]["required_inputs"] == [
-        "Repository URL",
-        "Issues URL",
-        "Documentation URL",
-        "Homepage URL",
-    ]
-    assert "pyproject.toml [project.urls]" in checks["oss_public_coordinates"]["remediation"]
-    assert checks["distribution_name_ownership"]["status"] == "pass"
-    assert checks["security_intake_contact"]["status"] == "blocked"
-    assert "monitored" in checks["security_intake_contact"]["detail"]
-    assert checks["security_intake_contact"]["required_inputs"] == ["monitored security reporting contact"]
-    assert "SECURITY.md" in checks["security_intake_contact"]["remediation"]
-    assert payload["status"] == "blocked"
-    assert payload["blocked"] == [
-        "oss_public_coordinates",
-        "security_intake_contact",
-    ]
-    assert payload["blocked_count"] == 2
-    assert payload["failures"] == []
-    assert payload["failure_count"] == 0
+    assert len(checks) == 9
+    assert all(item["status"] == "pass" for item in checks.values())
+    assert "no PyPI ownership" in checks["distribution_name_ownership"]["detail"]
+    assert "not verified" in checks["security_intake_contact"]["detail"]
+    for field in ("blocked", "failures", "warnings"):
+        assert payload[field] == []
+    assert payload["blocked_count"] == payload["failure_count"] == payload["warning_count"] == 0
 
 
 def test_security_contact_helper_rejects_unrelated_contact_tokens():
@@ -132,40 +121,91 @@ def test_public_coordinate_gate_preserves_public_host_syntax(url):
     assert pre_release._check_public_coordinates({"project": {"urls": urls}})["status"] == "pass"
 
 
-def test_distribution_name_gate_uses_normalized_pypi_names():
-    pre_release = load_pre_release_check_module()
-
-    blocked = pre_release._check_distribution_name_ownership(
-        {"project": {"name": "ROLE_AWARE_DASHBOARD_TOOLKIT"}}
-    )
-    unverified = pre_release._check_distribution_name_ownership(
-        {"project": {"name": "dash-forge"}}
-    )
-    available = pre_release._check_distribution_name_ownership(
-        {
-            "project": {"name": "dash-forge"},
-            "tool": {
-                "role_aware_dashboard_toolkit": {
-                    "release": {"verified-distribution-name": "Dash_Forge"}
-                }
-            },
-        }
-    )
-
-    assert blocked["status"] == "blocked"
-    assert blocked["id"] == "distribution_name_ownership"
-    assert unverified["status"] == "blocked"
-    assert unverified["required_inputs"] == [
-        "verified availability or ownership for PyPI distribution name 'dash-forge'"
-    ]
-    assert available == {
-        "id": "distribution_name_ownership",
-        "status": "pass",
-        "detail": (
-            "configured distribution name 'dash-forge' matches the recorded "
-            "normalized PyPI availability or ownership verification"
-        ),
+def _source_policy():
+    repository = "Maintainer/toolkit-library"
+    base = f"https://github.com/{repository}"
+    return {
+        "project": {
+            "name": "TOOLKIT_Library",
+            "urls": {"Repository": base, "Issues": base + "/issues", "Documentation": base + "/blob/main/docs/README.md", "Homepage": base + "#readme"},
+        },
+        "tool": {"role_aware_dashboard_toolkit": {"release": {
+            "channel": "github-source", "repository": repository,
+            "package-index-publication": False,
+            "security-reporting-mode": "github-private-vulnerability-reporting",
+            "security-reporting-url": base + "/security/advisories/new",
+        }}},
     }
+
+
+def test_distribution_name_gate_is_source_identity_without_pypi_claim():
+    pre_release = load_pre_release_check_module()
+    configured = _source_policy()
+    result = pre_release._check_distribution_name_ownership(configured)
+    assert result["status"] == "pass"
+    assert "no PyPI ownership or reservation is verified or claimed" in result["detail"]
+    stale = {"project": {"name": "toolkit-library"}, "tool": {"role_aware_dashboard_toolkit": {"release": {"verified-distribution-name": "toolkit-library"}}}}
+    assert pre_release._check_distribution_name_ownership(stale)["status"] == "blocked"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("channel", "pypi"), ("repository", "Maintainer/unrelated-name"),
+    ("repository", "https://github.com/Maintainer/toolkit-library"),
+    ("repository", "Maintainer/toolkit-library/extra"),
+    ("package-index-publication", True), ("package-index-publication", 0),
+    ("package-index-publication", "false"),
+])
+def test_source_identity_rejects_mismatches_and_index_publication(key, value):
+    pre_release = load_pre_release_check_module()
+    configured = _source_policy()
+    configured["tool"]["role_aware_dashboard_toolkit"]["release"][key] = value
+    assert pre_release._check_distribution_name_ownership(configured)["status"] == "blocked"
+
+
+@pytest.mark.parametrize("key", ["Repository", "Issues", "Documentation", "Homepage"])
+def test_github_coordinates_must_match_the_configured_source_repository(key):
+    pre_release = load_pre_release_check_module()
+    configured = _source_policy()
+    assert pre_release._check_public_coordinates(configured)["status"] == "pass"
+    configured["project"]["urls"][key] = "https://github.com/Unrelated/toolkit-library"
+    assert pre_release._check_public_coordinates(configured)["status"] == "blocked"
+
+
+@pytest.mark.parametrize("problem", [None, "mode", "other_repo", "missing_config", "wrong_doc", "placeholder", "missing_doc"])
+def test_security_policy_requires_matching_github_configuration_and_document(monkeypatch, tmp_path, problem):
+    pre_release = load_pre_release_check_module()
+    configured = _source_policy()
+    release = configured["tool"]["role_aware_dashboard_toolkit"]["release"]
+    text = "Report security vulnerabilities at <" + release["security-reporting-url"] + ">."
+    if problem == "mode":
+        release["security-reporting-mode"] = "email"
+    elif problem == "other_repo":
+        release["security-reporting-url"] = "https://github.com/Other/toolkit-library/security/advisories/new"
+    elif problem == "missing_config":
+        del release["security-reporting-url"]
+    elif problem == "wrong_doc":
+        text = "Report security vulnerabilities at https://toolkit-fixture.dev/security"
+    elif problem == "placeholder":
+        text += " Use a private coordination channel."
+    if problem != "missing_doc":
+        (tmp_path / "SECURITY.md").write_text(text, encoding="utf-8")
+    monkeypatch.setattr(pre_release, "REPO_ROOT", tmp_path)
+    result = pre_release._check_security_intake_contact(configured)
+    assert result["status"] == ("pass" if problem is None else "blocked")
+    if problem is None:
+        assert "live activation and notification configuration are not verified" in result["detail"]
+
+
+def test_intake_gate_requires_policy_files_without_permanent_blocked_wording(monkeypatch, tmp_path):
+    pre_release = load_pre_release_check_module()
+    for name in ("SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"):
+        (tmp_path / name).write_bytes((REPO_ROOT / name).read_bytes())
+    monkeypatch.setattr(pre_release, "REPO_ROOT", tmp_path)
+    assert pre_release._check_oss_intake_files()["status"] == "pass"
+    (tmp_path / "CONTRIBUTING.md").write_text("# Incomplete", encoding="utf-8")
+    assert pre_release._check_oss_intake_files()["status"] == "fail"
+    (tmp_path / "SECURITY.md").unlink()
+    assert pre_release._check_oss_intake_files()["status"] == "blocked"
 
 
 def test_security_contact_helper_rejects_placeholder_contacts():
@@ -197,11 +237,9 @@ def test_security_contact_helper_rejects_placeholder_contacts():
         "mailto:security@toolkit-fixture.dev,",
     ],
 )
-def test_security_contact_gate_rejects_invalid_mailto_targets(monkeypatch, contact):
+def test_security_contact_helper_rejects_invalid_mailto_targets(contact):
     pre_release = load_pre_release_check_module()
-    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: f"Report vulnerabilities to [security]({contact}).")
-
-    assert pre_release._check_security_intake_contact()["status"] == "blocked"
+    assert pre_release._has_monitored_security_reporting_contact(f"Report vulnerabilities to [security]({contact}).") is False
 
 
 @pytest.mark.parametrize(
@@ -214,11 +252,9 @@ def test_security_contact_gate_rejects_invalid_mailto_targets(monkeypatch, conta
         "mailto:?to=security%40toolkit-fixture.dev",
     ],
 )
-def test_security_contact_gate_preserves_valid_mailto_targets(monkeypatch, contact):
+def test_security_contact_helper_preserves_valid_mailto_targets(contact):
     pre_release = load_pre_release_check_module()
-    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: f"Report vulnerabilities to [maintainers]({contact}).")
-
-    assert pre_release._check_security_intake_contact()["status"] == "pass"
+    assert pre_release._has_monitored_security_reporting_contact(f"Report vulnerabilities to [maintainers]({contact}).") is True
     assert pre_release._has_monitored_security_reporting_contact(
         "General contact: mailto:support@toolkit-fixture.dev"
     ) is False
@@ -326,10 +362,7 @@ def test_pre_release_cache_scan_fails_closed_on_walk_errors(monkeypatch, capsys)
     payload = json.loads(capsys.readouterr().out)
     checks = {item["id"]: item for item in payload["checks"]}
     assert payload["status"] == "fail"
-    assert payload["blocked"] == [
-        "oss_public_coordinates",
-        "security_intake_contact",
-    ]
+    assert payload["blocked"] == []
     assert payload["failures"] == ["generated_cache_artifacts"]
     assert payload["failure_count"] == 1
     assert checks["generated_cache_artifacts"]["scan_errors"] == result["scan_errors"]

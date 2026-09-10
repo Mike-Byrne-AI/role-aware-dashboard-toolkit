@@ -23,6 +23,15 @@ Role-Aware Dashboard Toolkit keeps those concerns reusable and local-first. It d
 hidden actions, authenticate users on your behalf, or replace your deployment
 security boundary.
 
+## Project links
+
+- [Source repository](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit)
+- [Issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
+- [Documentation](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/blob/main/docs/README.md)
+
+This release is distributed as GitHub source. Package-index publication is a
+separate release decision.
+
 ## Install
 
 From a source checkout:
@@ -31,13 +40,13 @@ From a source checkout:
 python -m pip install -e .
 ```
 
-After publication:
+Only after a separate PyPI release:
 
 ```bash
 python -m pip install role-aware-dashboard-toolkit
 ```
 
-After publication, choose the optional capability you need:
+Only after a separate PyPI release, choose the optional capability you need:
 
 ```bash
 python -m pip install "role-aware-dashboard-toolkit[workbench]"  # Streamlit rendering

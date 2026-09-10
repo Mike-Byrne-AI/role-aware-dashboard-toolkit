@@ -33,7 +33,7 @@ def test_distribution_strategy_is_explicit_and_product_neutral():
     )
     markdown = build_distribution_strategy_markdown()
     assert "single-package-optional-extras" in markdown
-    assert "`role-aware-dashboard-toolkit` is the only published package" in markdown
+    assert "`role-aware-dashboard-toolkit` is the single Python distribution; package-index publication is a separate release decision" in markdown
     assert "Product-specific adapters and application integrations are not part" in markdown
 
 

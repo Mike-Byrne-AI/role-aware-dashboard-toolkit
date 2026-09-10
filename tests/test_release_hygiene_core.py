@@ -424,15 +424,13 @@ def test_ci_and_release_checklist_enforce_publication_hygiene():
         "> pre_release_report.json || true"
     ) in workflow
     for marker in [
-        "is_release_context",
-        "refs/tags/",
         "refs/heads/main",
-        "Pre-OSS release state remains intentionally blocked only on these gates.",
-        "allowed_blocked",
+        "required_checks",
         "oss_public_coordinates",
         "security_intake_contact",
-        "pre_release_check blocked checks are not allowed for release contexts",
-        "pre_release_check unexpected blocked checks",
+        "pre_release_check requires all local configuration checks to pass",
+        '("blocked", "blocked_count"), ("failures", "failure_count"), ("warnings", "warning_count")',
+        '"live_validation_required"',
     ]:
         assert marker in workflow
     assert ci_ruff in workflow
@@ -734,7 +732,7 @@ def test_boundary_docs_and_sdist_describe_generic_example_surface():
     assert "public documentation and fixture-free examples" in oss_boundary
     assert "product-specific adapters or application integrations" in oss_boundary
     assert "private records and internal maintenance data" in oss_boundary
-    assert "one package with a dependency-free core" in distribution
+    assert "one Python distribution with a dependency-free core" in distribution
     for install_target in [
         "`role-aware-dashboard-toolkit`",
         "`role-aware-dashboard-toolkit[workbench]`",

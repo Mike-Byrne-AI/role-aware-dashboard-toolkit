@@ -11,7 +11,7 @@ From a source checkout:
 python -m pip install -e .
 ```
 
-After publication:
+Only after a separate PyPI release:
 
 ```bash
 python -m pip install role-aware-dashboard-toolkit

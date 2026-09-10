@@ -12,7 +12,7 @@ For the local source candidate:
 python -m pip install -e ".[workbench,dev]"
 ```
 
-After publication, install the core library or the Streamlit extra:
+Only after a separate PyPI release, install the core library or the Streamlit extra:
 
 ```powershell
 python -m pip install role-aware-dashboard-toolkit

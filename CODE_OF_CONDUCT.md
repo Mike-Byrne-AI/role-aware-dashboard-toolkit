@@ -18,11 +18,10 @@ all contribution channels.
 
 ## Reporting
 
-A monitored conduct-reporting contact must be published before public
-contribution channels open. This local candidate does not yet provide one.
-Do not post confidential concerns or identifying information in public issues.
+Use the [issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
+to open an issue asking a maintainer to arrange a private
+contact channel. Include only the contact request: do not post incident
+details, personal information, or names of the people involved. Wait for a
+maintainer to arrange a private channel before sharing details.
 
-Pre-OSS release state remains blocked on `oss_public_coordinates` and
-`security_intake_contact` until real public project URLs and a monitored public
-security reporting contact are documented. See [SECURITY.md](SECURITY.md) for
-the current security-reporting policy.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.

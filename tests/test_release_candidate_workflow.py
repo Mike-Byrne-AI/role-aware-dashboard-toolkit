@@ -58,17 +58,16 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "id-token: write" not in workflow
     assert "packages: write" not in workflow
 
-    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}\n" in job
+    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}\n" in job
     assert "needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]" in job
     assert (
         "python tools/pre_release_check.py --json --require-clean "
         "> pre_release_report.json || true"
     ) in job
-    assert "Pre-OSS release state remains intentionally blocked only on these gates." in job
-    assert (
-        'allowed_blocked = {"oss_public_coordinates", "security_intake_contact"}'
-    ) in job
-    assert "pre_release_check unexpected blocked checks" in job
+    assert "pre_release_check requires all local configuration checks to pass" in job
+    assert '("blocked", "blocked_count"), ("failures", "failure_count"), ("warnings", "warning_count")' in job
+    assert "allowed_blocked" not in workflow
+    assert "live_validation_required" in job
     assert 'source_sha = os.environ.get("GITHUB_SHA", "").strip()' in job
     assert '"source_sha": source_sha' in job
     assert "GITHUB_SHA is required for release-candidate evidence" in job
@@ -97,7 +96,8 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert packaging_job.index("name: Sdist install smoke") < upload_index
 
 
-def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp_path):
+@pytest.mark.parametrize("branch", ["candidate", "main"])
+def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp_path, branch):
     script = _release_candidate_evidence_script(_read(".github/workflows/ci.yml"))
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -108,7 +108,7 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     for name, content in artifacts.items():
         (dist / name).write_bytes(content)
     (tmp_path / "pre_release_report.json").write_text(
-        json.dumps({"status": "blocked", "blocked": ["oss_public_coordinates"], "failures": []}),
+        json.dumps(_passing_local_report()),
         encoding="utf-8",
     )
     workspace = tmp_path / "source"
@@ -151,7 +151,7 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     env = {
         **fixture_env,
         "GITHUB_SHA": source_sha,
-        "GITHUB_REF": "refs/heads/candidate",
+        "GITHUB_REF": f"refs/heads/{branch}",
         "GITHUB_RUN_ID": "123456",
         "GITHUB_RUN_ATTEMPT": "2",
         "GITHUB_WORKSPACE": str(workspace),
@@ -170,7 +170,10 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     assert evidence["source_sha"] == source_sha
     assert evidence["run_id"] == 123456
     assert evidence["run_attempt"] == 2
-    assert evidence["head_branch"] == "candidate"
+    assert evidence["head_branch"] == branch
+    assert evidence["validation_scope"] == "local-configuration"
+    assert evidence["release_channel"] == "github-source"
+    assert evidence["live_validation_required"] == _passing_local_report()["live_validation_required"]
     assert evidence["workflow_path"] == ".github/workflows/ci.yml"
     assert evidence["artifact_sha256"] == {
         name: hashlib.sha256(content).hexdigest() for name, content in artifacts.items()
@@ -188,7 +191,8 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     assert "does not match checked-out commit" in mismatch.stderr
 
     for overrides in [
-        {"GITHUB_REF": "refs/heads/main"},
+        {"GITHUB_REF": "refs/heads/feature"},
+        {"GITHUB_REF": "refs/tags/v1.0.0"},
         {"GITHUB_RUN_ID": ""},
         {"GITHUB_RUN_ID": "0"},
         {"GITHUB_RUN_ATTEMPT": "invalid"},
@@ -209,46 +213,55 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     assert "exactly two distribution artifacts" in rejected.stderr
 
 
-def test_packaging_hygiene_distinguishes_non_publish_dispatch(tmp_path):
+def _passing_local_report():
+    check_ids = [
+        "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
+        "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
+        "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+    ]
+    return {
+        "ok": True, "status": "pass", "checks": [{"id": name, "status": "pass"} for name in check_ids],
+        "blocked": [], "failures": [], "warnings": [],
+        "blocked_count": 0, "failure_count": 0, "warning_count": 0,
+        "validation_scope": "local-configuration", "release_channel": "github-source",
+        "live_validation_required": ["repository_reachability", "security_reporting_activation", "security_notification_configuration", "branch_protection", "hosted_ci_same_commit", "public_visibility"],
+    }
+
+
+@pytest.mark.parametrize("problem", [None, "blocked", "failures", "warnings", "missing", "duplicate", "skipped", "false_ok", "bad_status", "nonzero_count", "missing_count", "live_claim", "wrong_channel", "no_live_requirements"])
+def test_both_hygiene_lanes_require_complete_passing_local_configuration(tmp_path, problem):
     workflow = _read(".github/workflows/ci.yml")
     script = _publication_hygiene_script(workflow)
-    report_path = tmp_path / "pre_release_report.json"
-    report_path.write_text(
-        json.dumps(
-            {
-                "blocked": ["oss_public_coordinates", "security_intake_contact"],
-                "failures": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    base_env = dict(os.environ)
-    cases = [
-        ("workflow_dispatch", "refs/heads/main", True),
-        ("push", "refs/heads/main", False),
-        ("workflow_dispatch", "refs/tags/v1.0.0", False),
-        ("push", "refs/heads/feature", True),
-    ]
-    for event_name, ref, should_pass in cases:
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=tmp_path,
-            env={**base_env, "GITHUB_EVENT_NAME": event_name, "GITHUB_REF": ref},
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert (result.returncode == 0) is should_pass, (event_name, ref, result.stderr)
-
-    report_path.write_text(json.dumps({"blocked": ["distribution_name_ownership"], "failures": []}), encoding="utf-8")
-    rejected = subprocess.run(
+    assert textwrap.indent(script, "          ") in _release_candidate_job(workflow)
+    report = _passing_local_report()
+    if problem in {"blocked", "failures", "warnings"}:
+        report[problem] = ["security_intake_contact"]
+    elif problem == "missing":
+        report["checks"].pop()
+    elif problem == "duplicate":
+        report["checks"][-1] = report["checks"][0]
+    elif problem == "skipped":
+        report["checks"][0]["status"] = "skipped"
+    elif problem == "false_ok":
+        report["ok"] = False
+    elif problem == "bad_status":
+        report["status"] = "blocked"
+    elif problem == "nonzero_count":
+        report["warning_count"] = 1
+    elif problem == "missing_count":
+        del report["failure_count"]
+    elif problem == "live_claim":
+        report["validation_scope"] = "live-readiness"
+    elif problem == "wrong_channel":
+        report["release_channel"] = "pypi"
+    elif problem == "no_live_requirements":
+        report["live_validation_required"] = []
+    (tmp_path / "pre_release_report.json").write_text(json.dumps(report), encoding="utf-8")
+    result = subprocess.run(
         [sys.executable, "-c", script], cwd=tmp_path,
-        env={**base_env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/candidate"},
         text=True, capture_output=True, check=False,
     )
-    assert rejected.returncode != 0
-    assert "unexpected blocked checks" in rejected.stderr
+    assert (result.returncode == 0) is (problem is None), result.stderr
 
 
 def test_release_docs_cover_non_publish_release_candidate_lane():
@@ -267,13 +280,15 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "## Build once" in runbook
     assert "## Verify source did not move" in runbook
     assert "All later lanes must reuse these exact bytes." in runbook
-    assert "Verify artifact digests against the release" in runbook
+    assert "digests against the release candidate evidence" in runbook
     assert "$releaseCommit = (git rev-parse HEAD).Trim()" in runbook
     assert "git status --porcelain" in runbook
-    assert 'git tag "v$version" $releaseCommit' in runbook
-    assert "configured PyPI distribution name is available" in runbook
-    assert "project metadata contains real public coordinates" in runbook
-    assert "monitored reporting path" in runbook
+    assert "Push the prepared local candidate commit to remote `main` only." in runbook
+    assert "public without changing `main` or adding a metadata commit" in runbook
+    assert "No PyPI name ownership, reservation, or publishing authority is claimed." in runbook
+    assert "live_validation_required" in runbook
+    assert "twine upload" not in runbook
+    assert "--no-build-isolation" not in runbook
     assert "A pre-publication smoke must use local artifacts" in runbook
 
     checklist = _read("docs/release_checklist.md")

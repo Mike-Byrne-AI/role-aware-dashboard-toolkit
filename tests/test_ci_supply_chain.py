@@ -130,7 +130,7 @@ def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
     assert {name for name, _block in job_blocks} == set(expected_timeouts)
     for name, block in job_blocks:
         guards = re.findall(r"^    if:\s*(.+)$", block, flags=re.MULTILINE)
-        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && github.ref == 'refs/heads/candidate' }}"], name
+        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}"], name
         assert re.findall(r"^    timeout-minutes: (\d+)$", block, flags=re.MULTILINE) == [str(expected_timeouts[name])]
     assert "permissions:\n  contents: read\n" in workflow
     assert len(re.findall(r"^\s*permissions:", workflow, flags=re.MULTILINE)) == 1

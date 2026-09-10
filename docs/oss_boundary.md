@@ -50,14 +50,21 @@ the actual wheel and source distribution before publication.
 
 ## Publication gates
 
-Publication requires:
+The GitHub-source release channel requires:
 
-- real repository, issue tracker, documentation, and homepage URLs;
-- a verified distribution name and authority to publish it;
-- a monitored public security-reporting contact;
+- configured repository, issue tracker, documentation, and homepage URLs;
+- a source-repository identity matching the Python distribution;
+- a documented private vulnerability reporting policy;
 - complete tests, coverage, and lint verification;
 - generated public API, distribution, and release-audit references in sync;
-- wheel and source-distribution member audits;
+- separate complete wheel and source-distribution member audits;
 - isolated installation checks for the core and optional capabilities.
 
-Until these gates pass, build artifacts are release candidates only.
+Those local configuration checks do not establish live readiness. The launch
+also requires live repository and branch-protection checks, hosted CI for the
+final SHA, and public URL and security-reporting activation checks. Notification
+configuration does not prove report delivery or human monitoring.
+
+Package-index publication is a separate future task; this channel does not
+verify or claim PyPI ownership, reservation, or publishing rights. Until the
+applicable launch checks pass, artifacts remain release candidates.

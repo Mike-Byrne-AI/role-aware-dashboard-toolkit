@@ -1,6 +1,6 @@
 # Role-Aware Dashboard Toolkit distribution reference
 
-Role-Aware Dashboard Toolkit publishes one package with a dependency-free core and explicit optional extras.
+Role-Aware Dashboard Toolkit defines one Python distribution with a dependency-free core and explicit optional extras.
 
 ## Role-Aware Dashboard Toolkit API
 

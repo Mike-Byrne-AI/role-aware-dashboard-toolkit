@@ -3,21 +3,21 @@
 Role-Aware Dashboard Toolkit treats authorization, sensitive values, and
 persistence integrity as part of its public library contract.
 
-## Reporting-channel status
+## Reporting vulnerabilities
 
-This local release candidate does not yet publish a verified, monitored
-security-reporting contact. No reporting address or response-time commitment
-is claimed here.
+Use GitHub private vulnerability reporting for this repository:
 
-Pre-OSS release state remains blocked on `oss_public_coordinates` and
-`security_intake_contact` until real public project URLs and a monitored public
-security reporting contact are documented. A maintained reporting channel and
-response expectations must be established before publication.
+Report a vulnerability at
+<https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/security/advisories/new>.
 
-## Reporting guidance
+Maintainers use private reports to assess vulnerabilities and coordinate
+fixes and disclosure. If the private form is unavailable, open an
+[issue](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
+asking only for a private contact channel. Wait for a maintainer to arrange
+that channel before sharing any vulnerability details.
 
 Do not disclose credentials, personal information, or exploitable details in
-public issues. Once a verified reporting channel is available, include:
+public issues. In a private vulnerability report, include:
 
 - the affected version and relevant configuration;
 - the security impact and required access;

@@ -9,7 +9,7 @@ description = "Dashboard/admin-control library for governed operator controls, p
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
-    { name = "Michael" },
+    { name = "Michael Byrne" },
 ]
 keywords = ["dashboard", "admin-controls", "profiles", "audit", "plugins", "observability", "rbac", "streamlit"]
 classifiers = [
@@ -25,6 +25,12 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit"
+Issues = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues"
+Documentation = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/blob/main/docs/README.md"
+Homepage = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit#readme"
 
 [project.optional-dependencies]
 workbench = ["streamlit>=1.30.0"]
@@ -142,8 +148,8 @@ exclude = [
 ]
 
 [tool.role_aware_dashboard_toolkit.release]
-verified-distribution-name = "role-aware-dashboard-toolkit"
-# Observed PyPI HTTP 404; this is not a reservation or account-ownership proof.
-name-checked-at = "2026-09-08T07:56:14Z"
-name-check-url = "https://pypi.org/pypi/role-aware-dashboard-toolkit/json"
-name-check-http-status = 404
+channel = "github-source"
+repository = "Mike-Byrne-AI/role-aware-dashboard-toolkit"
+package-index-publication = false
+security-reporting-mode = "github-private-vulnerability-reporting"
+security-reporting-url = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/security/advisories/new"
