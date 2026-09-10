@@ -61,7 +61,11 @@ in dashboard warnings, and also expose:
 
 If `setup(context)` fails, the plugin is not marked initialized and its render
 hooks are skipped. A dashboard render attempts setup once and does not retry it
-during sidebar or panel phases; the original setup diagnostic remains visible.
+during sidebar or panel phases; the original setup diagnostic remains visible
+once the dashboard authenticates and passes configuration preflight. If
+appearance validation stops rendering before authentication, its error reports
+only the setup failure count and an action to check setup callbacks; plugin
+names and exception messages are not disclosed before authentication.
 A later dashboard rerun or direct initialize/render call retries setup.
 Hosts that call `initialize()` explicitly can pass `initialize_plugins=False`
 to render methods so one explicit initialization owns that cycle.

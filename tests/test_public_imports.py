@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def test_root_exports_are_exact_unique_and_resolvable():
     assert tuple(role_aware_dashboard_toolkit.__all__) == PUBLIC_EXPORTS
     assert tuple(PUBLIC_EXPORT_MAP) == PUBLIC_EXPORTS
-    assert len(PUBLIC_EXPORTS) == len(set(PUBLIC_EXPORTS)) == 58
+    assert len(PUBLIC_EXPORTS) == len(set(PUBLIC_EXPORTS)) == 59
     assert list_public_exports() == list(PUBLIC_EXPORTS)
     for symbol in PUBLIC_EXPORTS:
         assert getattr(role_aware_dashboard_toolkit, symbol) is not None
@@ -41,7 +41,7 @@ def test_clean_root_import_loads_no_optional_or_archived_modules():
 import sys
 import role_aware_dashboard_toolkit
 
-assert len(role_aware_dashboard_toolkit.__all__) == 58
+assert len(role_aware_dashboard_toolkit.__all__) == 59
 blocked_roots = {"streamlit", "pandas", "fastapi", "PIL"}
 assert blocked_roots.isdisjoint(sys.modules)
 blocked_role_aware_dashboard_toolkit = (

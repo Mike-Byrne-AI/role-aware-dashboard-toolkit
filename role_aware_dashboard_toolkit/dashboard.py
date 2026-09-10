@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ._ui_state import retain_control_state
+from .appearance import validate_dashboard_appearance, validate_dashboard_colors
 from .audit import AuditLog
 from .controls import ControlRegistry
 from .dashboard_context import prepare_render_state
@@ -20,6 +21,7 @@ from .profile_store import BaseProfileStore
 from .security import RoleDef, SecurityContext, has_perm
 from .runbook_panels import render_runbook_panel
 from .sidebar import render_sidebar
+from .sections import DashboardSections, section_visible
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 st: Any | None = None
@@ -59,6 +61,9 @@ class DashboardConfig:
         governance_title: str = "Governance",
         version: str = ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION,
         audit_dir: str = "audit_logs",
+        sections: DashboardSections | None = None,
+        card_background_color: str | None = None,
+        group_background_colors: Mapping[str, str] | None = None,
     ):
         self.title = title
         self.subtitle = subtitle
@@ -89,6 +94,12 @@ class DashboardConfig:
         self.governance_store = governance_store
         self.governance_title = str(governance_title or "Governance")
         self.version = version
+        if sections is not None and not isinstance(sections, DashboardSections):
+            raise TypeError("sections must be DashboardSections or None")
+        self.sections = sections if sections is not None else DashboardSections()
+        self.card_background_color, self.group_background_colors = validate_dashboard_colors(
+            card_background_color, group_background_colors
+        )
 
 
 def _require_streamlit() -> Any:
@@ -113,6 +124,21 @@ def render(config: DashboardConfig) -> SecurityContext:
     streamlit_runtime = _require_streamlit()
     retain_control_state(config.registry, streamlit_runtime.session_state)
     plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": None})
+    # Setup can register additional controls on every Streamlit script run.
+    # Retain those values too before sidebar actions can trigger an early rerun.
+    retain_control_state(config.registry, streamlit_runtime.session_state)
+    # Plugins may register groups during setup; validate overrides before widgets.
+    try:
+        validate_dashboard_appearance(config, st=streamlit_runtime)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        if not plugin_setup_errors:
+            raise
+        # Authentication has not run yet: report the dependency failure without
+        # revealing plugin names or exception details from trusted host code.
+        raise type(exc)(
+            f"{exc} Plugin setup also failed for {len(plugin_setup_errors)} plugin(s); "
+            "check plugin setup configuration and retry."
+        ) from None
     state = prepare_render_state(config, streamlit_runtime.session_state)
     sidebar = render_sidebar(streamlit_runtime, config)
     ctx = sidebar.ctx
@@ -132,13 +158,15 @@ def render(config: DashboardConfig) -> SecurityContext:
         if corrected > 0:
             streamlit_runtime.info(f"Role-Aware Dashboard Toolkit corrected {corrected} out-of-range or stale control value(s) before render.")
 
-        render_groups(streamlit_runtime, state.groups, ctx, config)
+        if section_visible(config, "controls"):
+            render_groups(streamlit_runtime, state.groups, ctx, config)
 
-        if config.observability and config.observability.enabled:
+        if section_visible(config, "observability") and config.observability and config.observability.enabled:
             panel = ObservabilityPanel(config.observability, state.audit, streamlit_runtime.session_state)
             panel.render(streamlit_runtime)
 
-    render_runbook_panel(streamlit_runtime, config, ctx)
+    if section_visible(config, "runbook"):
+        render_runbook_panel(streamlit_runtime, config, ctx)
 
     for error in config.plugins.discovery_errors():
         streamlit_runtime.warning(f"Plugin discovery error: {error}")
@@ -146,14 +174,17 @@ def render(config: DashboardConfig) -> SecurityContext:
     for error in plugin_setup_errors:
         streamlit_runtime.warning(f"Plugin setup error: {error}")
 
-    plugin_errors = config.plugins.render_panels(
-        {"st": streamlit_runtime, "config": config, "ctx": ctx},
-        initialize_plugins=False,
+    plugin_errors = (
+        config.plugins.render_panels(
+            {"st": streamlit_runtime, "config": config, "ctx": ctx},
+            initialize_plugins=False,
+        )
+        if section_visible(config, "plugin_panels") else []
     )
     for error in plugin_errors:
         streamlit_runtime.warning(f"Plugin panel error: {error}")
 
-    if has_perm(ctx, "can_view_audit"):
+    if section_visible(config, "audit_log") and has_perm(ctx, "can_view_audit"):
         render_audit_panel(streamlit_runtime, state.audit, ctx)
 
     return ctx

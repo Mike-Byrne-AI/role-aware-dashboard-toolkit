@@ -230,3 +230,125 @@ python -m streamlit run examples/dashboard_admin_controls_app.py
 
 That example is the canonical visual smoke test for controls, roles, profiles,
 audit history, and plugins.
+
+
+## Customize colors
+
+Page, input, text and accent colors use Streamlit's official project theme.
+The toolkit can produce a validated configuration snippet without changing files:
+
+```python
+from role_aware_dashboard_toolkit.appearance import build_streamlit_theme_toml
+
+print(build_streamlit_theme_toml(
+    base="dark",
+    background_color="#0F172A",
+    secondary_background_color="#334155",
+    text_color="#F8FAFC",
+    primary_color="#38BDF8",
+    sidebar_background_color="#1E293B",
+))
+```
+
+Merge that snippet into your project's `.streamlit/config.toml` before starting
+Streamlit. Preserve unrelated existing settings. Color changes can also be
+applied while the app is running by saving the config and rerunning the app;
+see [Streamlit configuration](https://docs.streamlit.io/develop/concepts/configuration/options).
+Independent sidebar colors require Streamlit 1.44 or newer.
+`build_streamlit_theme_toml` returns text only; imports never change theme files.
+
+Group cards have explicit Python options:
+
+```python
+config = radt.DashboardConfig(
+    registry=registry,
+    layout="columns",
+    card_background_color="#172554",
+    group_background_colors={"Operations": "#134E4A"},
+)
+```
+
+Use six-digit hexadecimal colors (`#RRGGBB`). Per-group fills override the
+shared card fill; unknown group names fail before widget rendering. Hidden
+registered groups are valid override targets. Plugin setup may register groups
+before the names are checked. Card fills use Streamlit's documented keyed
+containers and require Streamlit 1.39 or newer. Both stacked and column layouts
+support them. With no fill options, the existing unstyled layout and the
+Streamlit 1.30 minimum remain unchanged.
+
+## Choose built-in panels and menus
+
+```python
+config = radt.DashboardConfig(
+    registry=registry,
+    sections=radt.DashboardSections(
+        profiles=False,
+        audit_writer=False,
+        plugin_details=False,
+        governance=False,
+    ),
+)
+```
+
+Every section defaults to `True`. Values must be actual booleans; unknown names
+fail immediately. These options control presentation and do not grant permission.
+Role/authentication resolution and the writable switch remain active.
+
+| Option | Visible content |
+|---|---|
+| `controls` | Registered control groups |
+| `profiles` | Profile sidebar menu |
+| `runbook` | Run sidebar, runbook panel and all its child sections |
+| `audit_writer` | Audit writer configuration form |
+| `audit_log` | Main audit log panel |
+| `observability` | Telemetry panel and sampling |
+| `plugin_details` | Plugin metadata expander |
+| `plugin_sidebar` | Registered sidebar callbacks |
+| `plugin_panels` | Registered main panel callbacks |
+| `team_ops` | Team sidebar and panel |
+| `decisions` | Decision panel |
+| `operator_memory` | Memory sidebar and timeline |
+| `caseboard` | Caseboard panel |
+| `governance` | Governance panel |
+
+A hidden runbook suppresses its entire subtree. Visible children still require
+an appropriate store and permission. Hidden controls retain registered state;
+hidden observability does not sample. Hiding the audit writer form preserves
+its settings and lifecycle, and failures remain visible. Hiding plugin details
+or callbacks does not undo plugin setup or suppress setup/discovery errors.
+
+## Add and remove fields and custom content
+
+Add fields with `registry.register(...)` or `register_many(...)`. Set a control's
+`visible` flag to hide it while keeping its definition; use `group` to choose its
+box. Remove its definition explicitly with `registry.unregister(key)`. The method
+returns the removed `ControlDef` and raises `KeyError` for an unknown key. It does
+not migrate or delete persisted profiles or run records. A re-registered field
+appears at the end of registration order.
+
+Custom panels and sidebar menus use the existing plugin callbacks:
+
+```python
+def project_panel(context):
+    if radt.has_perm(context["ctx"], "can_view_metrics"):
+        context["st"].subheader("Project overview")
+        context["st"].write("Your application-specific content goes here.")
+
+def project_menu(context):
+    context["st"].selectbox("View", ["This week", "Next week"], key="project_view")
+
+plugins = radt.PluginRegistry()
+plugins.register(radt.DashboardPlugin(
+    name="project-overview",
+    render_panel=project_panel,
+    render_sidebar=project_menu,
+))
+config = radt.DashboardConfig(registry=registry, plugins=plugins)
+```
+
+Pass `plugins` to the configuration you render. Call
+`plugins.unregister("project-overview")` to remove that registration; it returns
+the removed plugin and raises `KeyError` if absent. Removal stops future callbacks
+but does not undo setup effects. Setup runs once per registration in each registry;
+re-registering a removed plugin starts a fresh registration. Trusted callbacks
+must check the permissions needed for their own data and actions.

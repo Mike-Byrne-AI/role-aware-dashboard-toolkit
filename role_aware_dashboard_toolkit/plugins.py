@@ -82,8 +82,12 @@ class DashboardPlugin:
 
 
 class PluginRegistry:
+    """Own plugin registrations, with setup once per registration in this registry."""
+
     def __init__(self) -> None:
         self._plugins: dict[str, DashboardPlugin] = {}
+        self._initialized_names: set[str] = set()
+        self._registration_tokens: dict[str, object] = {}
         self._sources: dict[str, PluginSourceRecord] = {}
         self._discovery_errors: list[PluginErrorRecord] = []
 
@@ -96,12 +100,26 @@ class PluginRegistry:
         if invalid:
             raise ValueError(f"Plugin '{plugin.name}' has invalid capabilities: {invalid}")
         self._plugins[plugin.name] = plugin
+        self._registration_tokens[plugin.name] = object()
         self._sources[plugin.name] = source or PluginSourceRecord(
             plugin_name=plugin.name,
             source_type="manual",
             source_ref="manual_registration",
             trusted=True,
         )
+        return plugin
+
+    def unregister(self, name: str) -> DashboardPlugin:
+        """Remove and return a plugin by name; raise KeyError when absent.
+
+        Future dispatches skip its callbacks. Prior setup effects and stored
+        records remain. Registering the plugin again runs setup again in this
+        registry, without changing initialization in any other registry.
+        """
+        plugin = self._plugins.pop(name)
+        self._sources.pop(name, None)
+        self._registration_tokens.pop(name, None)
+        self._initialized_names.discard(name)
         return plugin
 
     def all(self) -> list[DashboardPlugin]:
@@ -183,9 +201,11 @@ class PluginRegistry:
     def _render(self, attr: str, context: Any, *, initialize_plugins: bool) -> list[PluginErrorRecord]:
         errors: list[PluginErrorRecord] = []
         for plugin in self.all():
+            if self._plugins.get(plugin.name) is not plugin:
+                continue
             if initialize_plugins and not self._initialize_plugin(plugin, context, errors):
                 continue
-            if not initialize_plugins and not plugin._initialized:
+            if not initialize_plugins and plugin.name not in self._initialized_names:
                 continue
             fn = getattr(plugin, attr)
             if fn is None:
@@ -197,9 +217,13 @@ class PluginRegistry:
         return errors
 
     def _initialize_plugin(self, plugin: DashboardPlugin, context: Any, errors: list[PluginErrorRecord]) -> bool:
-        if plugin._initialized:
+        if self._plugins.get(plugin.name) is not plugin:
+            return False
+        if plugin.name in self._initialized_names:
             return True
+        registration = self._registration_tokens[plugin.name]
         if plugin.setup is None:
+            self._initialized_names.add(plugin.name)
             plugin._initialized = True
             return True
         try:
@@ -207,6 +231,13 @@ class PluginRegistry:
         except Exception as exc:
             errors.append(_plugin_error(plugin, "setup", exc))
             return False
+        # Setup may remove and re-register even the same plugin object.
+        # Completion belongs only to the registration that invoked this setup.
+        if self._registration_tokens.get(plugin.name) is not registration:
+            return False
+        self._initialized_names.add(plugin.name)
+        # Retain the historical informational flag, but a registry's own
+        # initialization state decides whether its setup has already run.
         plugin._initialized = True
         return True
 

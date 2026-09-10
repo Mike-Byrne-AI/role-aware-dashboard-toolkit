@@ -9,6 +9,7 @@ PUBLIC_EXPORT_MAP: dict[str, tuple[str, str]] = {
     "ControlDef": ("controls", "ControlDef"),
     "ControlRegistry": ("controls", "ControlRegistry"),
     "DashboardConfig": ("dashboard", "DashboardConfig"),
+    "DashboardSections": ("sections", "DashboardSections"),
     "render": ("dashboard", "render"),
     "DashboardPlugin": ("plugins", "DashboardPlugin"),
     "PluginRegistry": ("plugins", "PluginRegistry"),

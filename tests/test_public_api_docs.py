@@ -16,11 +16,11 @@ def test_public_api_manifest_matches_the_small_root_boundary():
     manifest = public_api_manifest()
 
     assert manifest["exports"] == ROOT_EXPORTS
-    assert manifest["export_count"] == 58
+    assert manifest["export_count"] == 59
     assert manifest["export_count"] <= manifest["root_export_budget"]["total"] == 60
     assert manifest["classification_counts"] == {
         "experimental": 0,
-        "stable": 58,
+        "stable": 59,
     }
     assert manifest["undocumented_exports"] == []
 
@@ -44,7 +44,7 @@ def test_generated_public_api_reference_is_product_neutral():
     lowered = markdown.lower()
 
     assert "# Role-Aware Dashboard Toolkit public API families" in markdown
-    assert "Total root exports: `58`" in markdown
+    assert "Total root exports: `59`" in markdown
     for forbidden in (
         "repoos",
         "codex builder",

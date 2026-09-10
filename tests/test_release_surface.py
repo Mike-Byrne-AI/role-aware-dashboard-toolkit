@@ -74,7 +74,7 @@ def test_release_audit_markdown_tracks_the_oss_standard_shape():
     assert f"Version: `{radt.__version__}`" in audit_markdown
     for artifact_id in EXPECTED_ARTIFACTS:
         assert f"`{artifact_id}`" in audit_markdown
-    assert "Stable root exports: `58`" in audit_markdown
+    assert "Stable root exports: `59`" in audit_markdown
     assert "Integration-specific root exports" not in audit_markdown
     assert "Undocumented root exports: `0`" in audit_markdown
     for forbidden in ("repoos", "codex builder", "harness", "federation"):

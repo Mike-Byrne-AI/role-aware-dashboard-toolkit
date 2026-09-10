@@ -132,6 +132,14 @@ class ControlRegistry:
         """Register multiple controls from a list of kwarg dicts."""
         return [self.register(**d) for d in defs]
 
+    def unregister(self, key: str) -> ControlDef:
+        """Remove and return a definition, raising KeyError for an unknown key.
+
+        Existing session values and persisted profiles/runs are not deleted.
+        Re-registering this key creates a new definition at the end of the order.
+        """
+        return self._controls.pop(key)
+
     def get(self, key: str) -> ControlDef | None:
         return self._controls.get(key)
 

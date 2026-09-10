@@ -10,6 +10,8 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
             display_name="Dashboard app shell",
             symbols=(
                 "DashboardConfig",
+                "DashboardSections",
+                "build_streamlit_theme_toml",
                 "render",
                 "DashboardPlugin",
                 "PluginRegistry",

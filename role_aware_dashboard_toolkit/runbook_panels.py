@@ -22,12 +22,13 @@ from .runbook_panels_parts.shared import (
 )
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
 from .security import has_perm
+from .sections import section_visible
 
 
 
 def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
     store = getattr(config, "run_store", None)
-    if store is None or not has_perm(ctx, "can_view_team_ops", default=False):
+    if not section_visible(config, "runbook") or store is None or not has_perm(ctx, "can_view_team_ops", default=False):
         return
 
     st.divider()
@@ -118,14 +119,16 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
             st.toast(f"Ended run: {finished['run_id']}")
             st.rerun()
 
-    _render_team_ops_sidebar(st, config, ctx, active_run)
-    _render_operator_memory_sidebar(st, config, ctx, active_run)
+    if section_visible(config, "team_ops"):
+        _render_team_ops_sidebar(st, config, ctx, active_run)
+    if section_visible(config, "operator_memory"):
+        _render_operator_memory_sidebar(st, config, ctx, active_run)
 
 
 
 def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
     store = getattr(config, "run_store", None)
-    if store is None or not has_perm(ctx, "can_view_team_ops", default=False):
+    if not section_visible(config, "runbook") or store is None or not has_perm(ctx, "can_view_team_ops", default=False):
         return
 
     run_ids = store.list_ids()
@@ -239,11 +242,16 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
             right_run = next(run for run in runs if run.get("run_id") == right_run_id)
             st.json(compare_runs(left_run, right_run))
 
-        _render_team_ops_panel(st, config, ctx, selected_run)
-        _render_decision_panel(st, config, ctx, selected_run, selected_checkpoint)
-        _render_operator_memory_panel(st, config, ctx, selected_run, selected_checkpoint)
-        _render_caseboard_panel(st, config, ctx, runs, selected_run)
-        _render_governance_panel(st, config, ctx, runs)
+        if section_visible(config, "team_ops"):
+            _render_team_ops_panel(st, config, ctx, selected_run)
+        if section_visible(config, "decisions"):
+            _render_decision_panel(st, config, ctx, selected_run, selected_checkpoint)
+        if section_visible(config, "operator_memory"):
+            _render_operator_memory_panel(st, config, ctx, selected_run, selected_checkpoint)
+        if section_visible(config, "caseboard"):
+            _render_caseboard_panel(st, config, ctx, runs, selected_run)
+        if section_visible(config, "governance"):
+            _render_governance_panel(st, config, ctx, runs)
 
 
 

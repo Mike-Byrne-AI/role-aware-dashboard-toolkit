@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from ._optional_pandas import load_optional_pandas
+from .appearance import group_background_color, styled_group_container
 from .audit import audit_event_view
 from .controls import ControlDef, _looks_like_int
 from .path_redaction import redact_text_local_paths
@@ -259,7 +261,12 @@ def _filter_audit_panel_events(
 
 def _render_stacked(st: Any, groups: list[tuple], ctx: SecurityContext, config: Any) -> None:
     for group_name, controls in groups:
-        with st.expander(f"{group_name}", expanded=True):
+        color = group_background_color(config, group_name)
+        wrapper = (
+            styled_group_container(st, group_name, color, border=False)
+            if color is not None else nullcontext()
+        )
+        with wrapper, st.expander(f"{group_name}", expanded=True):
             for ctrl in controls:
                 _render_control(st, ctrl, ctx, config)
 
@@ -271,10 +278,16 @@ def _render_columns(st: Any, groups: list[tuple], ctx: SecurityContext, config: 
         chunk = groups[i : i + n]
         cols = st.columns(len(chunk))
         for col, (group_name, controls) in zip(cols, chunk, strict=False):
-            with col, st.container(border=True):
-                st.markdown(f"**{group_name}**")
-                for ctrl in controls:
-                    _render_control(st, ctrl, ctx, config)
+            with col:
+                color = group_background_color(config, group_name)
+                card = (
+                    styled_group_container(st, group_name, color, border=True)
+                    if color is not None else st.container(border=True)
+                )
+                with card:
+                    st.markdown(f"**{group_name}**")
+                    for ctrl in controls:
+                        _render_control(st, ctrl, ctx, config)
 
 
 def _load_pandas():

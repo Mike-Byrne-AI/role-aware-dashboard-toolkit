@@ -4,12 +4,12 @@ This reference is generated from the OSS-standard API manifest.
 
 ## Root export boundary
 
-- Total root exports: `58`
-- Stable exports: `58`
+- Total root exports: `59`
+- Stable exports: `59`
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `35`
+- Documented module-only public symbols: `36`
 
 ## Usage recipes
 
@@ -55,9 +55,11 @@ Install `role-aware-dashboard-toolkit[api]` before constructing the FastAPI appl
 
 Classification: `stable`
 
-Root exports: `4`; module-only symbols: `0`.
+Root exports: `5`; module-only symbols: `1`.
 
 - `DashboardConfig`
+- `DashboardSections`
+- `build_streamlit_theme_toml` (module-only)
 - `render`
 - `DashboardPlugin`
 - `PluginRegistry`

@@ -11,6 +11,7 @@ from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import delete_profile, list_profiles, load_profile, load_profile_data, save_profile
 from .runbook_panels import render_runbook_sidebar
+from .sections import section_visible
 from .security import (
     SecurityContext,
     can_write,
@@ -67,6 +68,12 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
     audit = config.audit
     all_roles = get_role_names(config.custom_roles)
     plugin_errors: list[PluginErrorRecord] = []
+
+    # Preserve writer configuration when its form is hidden or an earlier run
+    # action reruns the sidebar before that form can render.
+    for key in ("_radt_audit_writer", "_radt_audit_path"):
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
 
     with st.sidebar:
         st.header(f"{config.icon} {config.title}".strip())
@@ -126,17 +133,19 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
         ctx = make_security_context(new_role, perms, controls_writable=writable)
 
         apply_pending_replay(st, config, ctx)
-        _render_profiles(st, config, ctx, all_roles)
+        if section_visible(config, "profiles"):
+            _render_profiles(st, config, ctx, all_roles)
         render_runbook_sidebar(st, config, ctx)
         _render_audit_writer_controls(st, config, ctx)
 
-        plugin_errors.extend(
-            config.plugins.render_sidebar(
-                {"st": st, "config": config, "ctx": ctx},
-                initialize_plugins=False,
+        if section_visible(config, "plugin_sidebar"):
+            plugin_errors.extend(
+                config.plugins.render_sidebar(
+                    {"st": st, "config": config, "ctx": ctx},
+                    initialize_plugins=False,
+                )
             )
-        )
-        if config.plugins.describe():
+        if section_visible(config, "plugin_details") and config.plugins.describe():
             with st.expander("Plugins", expanded=False):
                 st.json(config.plugins.describe())
         for error in plugin_errors:
@@ -301,21 +310,23 @@ def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) ->
     default_audit_path = (audit_root / "audit.jsonl").as_posix()
     can_manage_writer = has_perm(ctx, "can_manage_audit")
 
-    st.divider()
-    st.subheader("Audit Logging")
-    writer_on = st.toggle(
-        "Write audit to JSONL",
-        value=bool(st.session_state.get("_radt_audit_writer", False)),
-        key="_radt_audit_writer",
-        help="Writes audit events to disk in a background thread.",
-        disabled=not can_manage_writer,
-    )
-    audit_path = st.text_input(
-        "Audit file path",
-        value=str(st.session_state.get("_radt_audit_path", default_audit_path)),
-        key="_radt_audit_path",
-        disabled=not can_manage_writer,
-    )
+    writer_on = bool(st.session_state.get("_radt_audit_writer", False))
+    audit_path = str(st.session_state.get("_radt_audit_path", default_audit_path))
+    if section_visible(config, "audit_writer"):
+        st.divider()
+        st.subheader("Audit Logging")
+        writer_on = st.toggle(
+            "Write audit to JSONL",
+            key="_radt_audit_writer",
+            help="Writes audit events to disk in a background thread.",
+            disabled=not can_manage_writer,
+        )
+        audit_path = st.text_input(
+            "Audit file path",
+            key="_radt_audit_path",
+            disabled=not can_manage_writer,
+            **({"value": audit_path} if "_radt_audit_path" not in st.session_state else {}),
+        )
     lifecycle_error: dict[str, str] = {}
     startup_error: dict[str, str] = {}
     try:
