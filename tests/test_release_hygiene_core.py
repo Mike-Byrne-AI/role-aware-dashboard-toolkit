@@ -663,10 +663,12 @@ try:
     role_aware_dashboard_toolkit.render(config)
 except ModuleNotFoundError as exc:
     assert exc.name == "streamlit"
-    assert str(exc) == (
+    assert str(exc).startswith(
         "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
         'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
     )
+    assert exc.diagnostic["code"] == "RADT-STREAMLIT"
+    assert exc.diagnostic["guide_command"] in str(exc)
 else:
     raise AssertionError("dashboard render should require streamlit")
 assert attempts == ["streamlit"]

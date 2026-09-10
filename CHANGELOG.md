@@ -18,6 +18,10 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
 - Validated page/card themes, explicit section visibility and registry removal.
 - Offline installed guides, capability inspection, structured command output and
   an editable starter with a project-local assistant guidance pointer.
+- Versioned runtime diagnostics with installed guide links, safe callback
+  failure summaries and explicit partial-effect/durability limits.
+- Audit display preserves source value types while avoiding mixed-column
+  Arrow conversion fallbacks.
 
 The core package has no required third-party dependencies. Public release
 remains subject to the metadata, security-intake, and validation gates in the

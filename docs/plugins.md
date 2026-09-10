@@ -50,18 +50,22 @@ distribution name when available).
 
 `PluginRegistry.initialize()`, `render_sidebar()`, and `render_panels()` return
 `PluginErrorRecord` objects when plugin setup or render hooks fail.
-The records stringify to the same operator-friendly `plugin: message` shape used
-in dashboard warnings, and also expose:
+Records retain the `plugin: message` prefix, followed by a stable diagnostic
+code, possible effects and an installed guide command. Generated records omit
+raw exception messages to avoid copying secrets from trusted callback failures.
+They expose:
 
 - `plugin_name`
 - `stage`
 - `source`
 - `exception_type`
-- `message`
+- `message` (fixed safe summary for library-generated failures)
+- `.diagnostic` and a nested `diagnostic` in `to_dict()` (version, code,
+  operation, effect and offline help command)
 
 If `setup(context)` fails, the plugin is not marked initialized and its render
 hooks are skipped. A dashboard render attempts setup once and does not retry it
-during sidebar or panel phases; the original setup diagnostic remains visible
+during sidebar or panel phases; the sanitized setup diagnostic remains visible
 once the dashboard authenticates and passes configuration preflight. If
 appearance validation stops rendering before authentication, its error reports
 only the setup failure count and an action to check setup callbacks; plugin

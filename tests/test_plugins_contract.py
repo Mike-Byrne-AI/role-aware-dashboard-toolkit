@@ -2,6 +2,7 @@ import pytest
 
 from role_aware_dashboard_toolkit import DashboardPlugin, PluginRegistry
 from role_aware_dashboard_toolkit.plugins import PluginErrorRecord
+from role_aware_dashboard_toolkit.diagnostics import diagnostic_text
 
 
 def test_plugin_metadata_and_describe():
@@ -47,13 +48,14 @@ def test_plugin_render_errors_are_structured_records():
     assert len(errors) == 1
     error = errors[0]
     assert isinstance(error, PluginErrorRecord)
-    assert str(error) == "bad: bad plugin"
+    assert str(error) == "bad (RuntimeError): " + diagnostic_text("RADT-PLUGIN")
     assert error.to_dict() == {
         "plugin_name": "bad",
         "stage": "render_panel",
         "source": "bad.render_panel",
         "exception_type": "RuntimeError",
-        "message": "bad plugin",
+        "message": "Plugin operation failed (RuntimeError).",
+        "diagnostic": error.diagnostic,
     }
 
 
@@ -68,7 +70,7 @@ def test_plugin_error_records_redact_local_paths(tmp_path):
     errors = registry.render_panels({})
 
     assert len(errors) == 1
-    assert "<redacted-local-path>" in errors[0].message
+    assert errors[0].message == "Plugin operation failed (RuntimeError)."
     assert str(secret_path) not in errors[0].message
 
 
@@ -85,7 +87,7 @@ def test_plugin_setup_errors_are_structured_records():
     assert errors[0].stage == "setup"
     assert errors[0].source == "setup-bad.setup"
     assert errors[0].exception_type == "ValueError"
-    assert errors[0].message == "setup failed"
+    assert errors[0].message == "Plugin operation failed (ValueError)."
 
 
 def test_plugin_setup_failure_is_not_marked_initialized():
@@ -104,7 +106,7 @@ def test_plugin_setup_failure_is_not_marked_initialized():
     assert calls == ["setup", "setup"]
     assert [error.stage for error in first_errors] == ["setup"]
     assert [error.stage for error in second_errors] == ["setup"]
-    assert second_errors[0].message == "setup still failing"
+    assert second_errors[0].message == "Plugin operation failed (RuntimeError)."
 
 
 def test_explicit_initialization_can_own_failed_setup_attempt():
@@ -232,7 +234,7 @@ def test_plugin_discovery_skips_broken_entry_points_and_records_warning(monkeypa
     assert errors[0].stage == "discover"
     assert errors[0].source == "role_aware_dashboard_toolkit.panels:broken_ep"
     assert errors[0].exception_type == "RuntimeError"
-    assert errors[0].message == "entry point exploded"
+    assert errors[0].message == "Plugin operation failed (RuntimeError)."
 
 
 def test_plugin_discovery_errors_redact_local_paths(monkeypatch, tmp_path):
@@ -256,5 +258,5 @@ def test_plugin_discovery_errors_redact_local_paths(monkeypatch, tmp_path):
     assert loaded == []
     errors = registry.discovery_errors()
     assert len(errors) == 1
-    assert "<redacted-local-path>" in errors[0].message
+    assert errors[0].message == "Plugin operation failed (RuntimeError)."
     assert str(secret_path) not in errors[0].message

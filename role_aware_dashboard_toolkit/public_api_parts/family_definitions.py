@@ -61,6 +61,9 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
             display_name="Runtime and observability",
             symbols=(
                 "cleanup_runtime",
+                "build_diagnostic",
+                "diagnostic_text",
+                "list_diagnostics",
                 "normalize_telemetry",
                 "safe_call",
                 "summarize_telemetry",
@@ -68,7 +71,7 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
                 "ObservabilityPanel",
                 "build_observability_snapshot",
             ),
-            description="Visible callback failures, telemetry normalization, and optional metrics UI.",
+            description="Visible callback failures, telemetry normalization, optional metrics UI, and module-only guidance helpers from role_aware_dashboard_toolkit.diagnostics.",
         ),
         "runbook-and-snapshots": family_cls(
             family_id="runbook-and-snapshots",

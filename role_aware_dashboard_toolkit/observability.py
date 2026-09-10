@@ -9,6 +9,7 @@ from collections.abc import Callable
 from ._json_safety import sanitize_non_finite_numbers
 from ._optional_pandas import load_optional_pandas
 from .audit import AuditLog
+from .diagnostics import diagnostic_text
 from .runtime import normalize_telemetry, summarize_telemetry
 
 pd = None
@@ -84,13 +85,19 @@ class ObservabilityPanel:
                 latest = None
                 st.warning(
                     f"Telemetry sampling failed ({type(exc).__name__}). "
-                    "The last successful displayed sample is retained for checkpoints."
+                    + diagnostic_text("RADT-TELEMETRY")
                 )
             history = self.history()
 
             if latest is None and not history:
                 st.caption("No telemetry samples yet.")
                 return
+
+            if latest is None:
+                st.caption(
+                    f"Showing the retained sample from {history[-1].get('ts', '')}; "
+                    "no new sample was collected on this render."
+                )
 
             snapshot = build_observability_snapshot(history, self.audit)
 

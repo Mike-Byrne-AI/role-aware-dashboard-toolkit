@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ._json_safety import sanitize_non_finite_numbers
-from .path_redaction import redact_payload_local_paths, redact_text_local_paths
+from .diagnostics import diagnostic_text
+from .path_redaction import redact_payload_local_paths
 from .audit_store import (
     AUDIT_EVENT_SCHEMA_VERSION,
     BaseAuditStore,
@@ -25,19 +26,12 @@ _WRITER_SHUTDOWN_ERROR_TOKEN = object()
 _WRITER_STARTUP_ERROR_TOKEN = object()
 _LOGGER = logging.getLogger(__name__)
 _WRITER_STOP_TIMEOUT_SECONDS = 3.0
-_UNAVAILABLE_ERROR_MESSAGE = "<unavailable-error-message>"
 
 
 def _safe_writer_error_message(exc: Exception) -> str:
-    try:
-        return redact_text_local_paths(str(exc))
-    except Exception as format_exc:
-        _LOGGER.warning(
-            "Audit writer diagnostic could not format %s (%s)",
-            type(exc).__name__,
-            type(format_exc).__name__,
-        )
-        return _UNAVAILABLE_ERROR_MESSAGE
+    # Third-party exceptions can contain credentials or have unsafe __str__ methods.
+    # Status and logging share fixed guidance; callers retain the exception type.
+    return diagnostic_text("RADT-AUDIT-IO")
 
 
 def _get_writer_error(

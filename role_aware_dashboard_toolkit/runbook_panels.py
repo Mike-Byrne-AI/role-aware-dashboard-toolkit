@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .diagnostics import diagnostic_text
+
 from ._ui_state import queue_replay, stage_replay
 from .checkpoints import checkpoint_summary
 from .compare import compare_checkpoints, compare_runs
@@ -222,7 +224,7 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                     queue_replay(st.session_state, replay_packet, selected_checkpoint_id)
                     st.rerun()
                 else:
-                    st.caption("Replay denied: permission is required for every affected control.")
+                    st.caption("Replay denied: permission is required for every affected control. " + diagnostic_text("RADT-PERMISSION"))
 
             if can_view_metrics and len(checkpoints) >= 2:
                 st.subheader("Checkpoint Compare")

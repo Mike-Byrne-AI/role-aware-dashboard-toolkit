@@ -59,6 +59,7 @@ def inspect_capabilities() -> dict[str, Any]:
     from .appearance import build_streamlit_theme_toml
     from .controls import ControlDef, ControlRegistry, VALID_KINDS
     from .dashboard import DashboardConfig
+    from .diagnostics import list_diagnostics
     from .plugins import DashboardPlugin, PluginRegistry
     from .public_api import public_api_manifest
     from .sections import DashboardSections
@@ -84,6 +85,7 @@ def inspect_capabilities() -> dict[str, Any]:
                               "import_tested": False, "compatibility_tested": False}
     return {
         "api_manifest": public_api_manifest(),
+        "diagnostics": list_diagnostics(),
         "control_kinds": list(VALID_KINDS),
         "supported_layouts": ["stacked", "columns"],
         "appearance_requirements": {

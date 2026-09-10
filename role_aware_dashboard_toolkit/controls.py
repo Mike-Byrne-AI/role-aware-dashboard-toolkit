@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from .diagnostics import attach_diagnostic
+
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -90,7 +92,7 @@ class ControlRegistry:
     ) -> ControlDef:
         """Register a control. Returns the ControlDef for chaining."""
         if kind not in VALID_KINDS:
-            raise ValueError(f"Invalid kind '{kind}'. Must be one of {VALID_KINDS}")
+            raise attach_diagnostic(ValueError(f"Invalid kind. Must be one of {VALID_KINDS}"), "RADT-CONTROL-DEFINITION")
 
         if key is None:
             key = name.lower().replace(" ", "_")
@@ -99,7 +101,7 @@ class ControlRegistry:
 
 
         if key in self._controls:
-            raise KeyError(f"Control key '{key}' already registered")
+            raise attach_diagnostic(KeyError(f"Control key '{key}' already registered"), "RADT-CONTROL-DEFINITION")
 
         if default is None:
             default = _default_for_kind(kind, min_value, max_value, options)
@@ -346,21 +348,21 @@ def _validate_numeric_configuration(ctrl: ControlDef) -> None:
     for field_name in ("min_value", "max_value", "step"):
         configured = getattr(ctrl, field_name)
         if configured is not None and _finite_float(configured) is None:
-            raise ValueError(
+            raise attach_diagnostic(ValueError(
                 f"Numeric control '{ctrl.key}' {field_name} must be a finite number"
-            )
+            ), "RADT-CONTROL-DEFINITION")
 
     min_value = _finite_float(ctrl.min_value)
     max_value = _finite_float(ctrl.max_value)
     step = _finite_float(ctrl.step)
     if min_value is not None and max_value is not None and min_value > max_value:
-        raise ValueError(
+        raise attach_diagnostic(ValueError(
             f"Numeric control '{ctrl.key}' min_value must be less than or equal to max_value"
-        )
+        ), "RADT-CONTROL-DEFINITION")
     if step is not None and step <= 0:
-        raise ValueError(
+        raise attach_diagnostic(ValueError(
             f"Numeric control '{ctrl.key}' step must be greater than zero"
-        )
+        ), "RADT-CONTROL-DEFINITION")
 
 
 def _finite_float(value: Any) -> float | None:

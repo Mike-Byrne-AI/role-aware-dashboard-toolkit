@@ -93,6 +93,9 @@ The package does not assume an assistant automatically reads files inside
 site-packages. Imports stay quiet, and only the explicit `init` command creates
 project files. Guide topics cover controls, appearance, sections, plugins,
 permissions, profiles, runs, telemetry, API configuration and troubleshooting.
+Runtime diagnostics include stable codes, operation/effect information and a
+command for the matching installed guide. `inspect --format json` lists the
+complete diagnostic catalog.
 
 ## Five-minute dashboard
 

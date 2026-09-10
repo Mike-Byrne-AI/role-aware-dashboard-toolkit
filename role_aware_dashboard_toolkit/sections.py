@@ -6,6 +6,8 @@ remain active independently of these presentation choices.
 """
 from __future__ import annotations
 
+from .diagnostics import attach_diagnostic
+
 from dataclasses import dataclass, fields
 from typing import Any
 
@@ -37,7 +39,7 @@ class DashboardSections:
     def __post_init__(self) -> None:
         for item in fields(self):
             if type(getattr(self, item.name)) is not bool:
-                raise TypeError(f"DashboardSections.{item.name} must be bool")
+                raise attach_diagnostic(TypeError(f"DashboardSections.{item.name} must be bool"), "RADT-SECTIONS")
 
 
 _SECTION_NAMES = frozenset(item.name for item in fields(DashboardSections))
@@ -47,12 +49,12 @@ _DEFAULT_SECTIONS = DashboardSections()
 def section_visible(config: Any, name: str) -> bool:
     """Read a known section; omitted configuration preserves previous behavior."""
     if name not in _SECTION_NAMES:
-        raise ValueError(f"Unknown dashboard section: {name}")
+        raise attach_diagnostic(ValueError(f"Unknown dashboard section: {name}"), "RADT-SECTIONS")
     sections = getattr(config, "sections", None)
     if sections is None:
         sections = _DEFAULT_SECTIONS
     if not isinstance(sections, DashboardSections):
-        raise TypeError("sections must be a DashboardSections instance or None")
+        raise attach_diagnostic(TypeError("sections must be a DashboardSections instance or None"), "RADT-SECTIONS")
     return getattr(sections, name)
 
 

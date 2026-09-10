@@ -6,6 +6,7 @@ import warnings
 from typing import Any
 from collections.abc import Callable
 
+from .diagnostics import build_diagnostic, diagnostic_text
 from .path_redaction import redact_text_local_paths
 
 
@@ -22,16 +23,25 @@ class PluginErrorRecord:
     exception_type: str
     message: str
 
-    def __str__(self) -> str:
-        return f"{self.plugin_name}: {self.message}"
+    @property
+    def diagnostic(self) -> dict[str, Any]:
+        """Installed help and effect scope; never includes callback payloads."""
+        return build_diagnostic("RADT-PLUGIN")
 
-    def to_dict(self) -> dict[str, str]:
+    def __str__(self) -> str:
+        return (
+            f"{_diagnostic_label(self.plugin_name)} ({_exception_label(self.exception_type)}): "
+            + diagnostic_text("RADT-PLUGIN")
+        )
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "plugin_name": self.plugin_name,
             "stage": self.stage,
             "source": self.source,
             "exception_type": self.exception_type,
             "message": self.message,
+            "diagnostic": self.diagnostic,
         }
 
 
@@ -247,7 +257,7 @@ class PluginRegistry:
         warnings.warn(
             (
                 "Role-Aware Dashboard Toolkit plugin discovery skipped "
-                f"{error.source}: {error.exception_type}: {error.message}"
+                f"{error.source}: {error}"
             ),
             RuntimeWarning,
             stacklevel=3,
@@ -256,10 +266,10 @@ class PluginRegistry:
 
 def _plugin_error(plugin: DashboardPlugin, stage: str, exc: Exception) -> PluginErrorRecord:
     return PluginErrorRecord(
-        plugin_name=plugin.name,
+        plugin_name=_diagnostic_label(plugin.name),
         stage=stage,
-        source=f"{plugin.name}.{stage}",
-        exception_type=type(exc).__name__,
+        source=_diagnostic_label(f"{plugin.name}.{stage}"),
+        exception_type=_exception_label(type(exc).__name__),
         message=_diagnostic_message(exc),
     )
 
@@ -268,16 +278,30 @@ def _entry_point_error(*, entry_point: Any, group: str, exc: Exception) -> Plugi
     entry_name = str(getattr(entry_point, "name", "") or "entry_point")
     source_ref = f"{group}:{entry_name}"
     return PluginErrorRecord(
-        plugin_name=entry_name,
+        plugin_name=_diagnostic_label(entry_name),
         stage="discover",
-        source=source_ref,
-        exception_type=type(exc).__name__,
+        source=_diagnostic_label(source_ref),
+        exception_type=_exception_label(type(exc).__name__),
         message=_diagnostic_message(exc),
     )
 
 
+def _diagnostic_label(value: str) -> str:
+    # Names identify the failing integration, but need not expose local paths
+    # or allow unbounded/control-character output in warnings and records.
+    redacted = redact_text_local_paths(str(value))
+    printable = "".join(char if char.isprintable() else " " for char in redacted)
+    return " ".join(printable.split())[:160]
+
+
+def _exception_label(value: str) -> str:
+    return value if len(value) <= 80 and value.isidentifier() else "Exception"
+
+
 def _diagnostic_message(exc: Exception) -> str:
-    return redact_text_local_paths(str(exc))
+    # A third-party exception can include credentials even after path redaction.
+    # Do not inspect its message (or invoke its potentially broken __str__).
+    return f"Plugin operation failed ({_exception_label(type(exc).__name__)})."
 
 
 def _iter_entry_points(group: str):

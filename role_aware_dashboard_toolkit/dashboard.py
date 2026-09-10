@@ -8,6 +8,7 @@ from .appearance import validate_dashboard_appearance, validate_dashboard_colors
 from .audit import AuditLog
 from .controls import ControlRegistry
 from .dashboard_context import prepare_render_state
+from .diagnostics import attach_diagnostic, diagnostic_text
 from .dashboard_panels import render_audit_panel, render_groups
 from .observability import ObservabilityConfig, ObservabilityPanel
 from .run_store import BaseRunStore
@@ -95,7 +96,7 @@ class DashboardConfig:
         self.governance_title = str(governance_title or "Governance")
         self.version = version
         if sections is not None and not isinstance(sections, DashboardSections):
-            raise TypeError("sections must be DashboardSections or None")
+            raise attach_diagnostic(TypeError("sections must be DashboardSections or None"), "RADT-SECTIONS")
         self.sections = sections if sections is not None else DashboardSections()
         self.card_background_color, self.group_background_colors = validate_dashboard_colors(
             card_background_color, group_background_colors
@@ -111,11 +112,11 @@ def _require_streamlit() -> Any:
     except ModuleNotFoundError as exc:
         if exc.name != "streamlit":
             raise
-        raise ModuleNotFoundError(
+        raise attach_diagnostic(ModuleNotFoundError(
             "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
             'Install with: pip install "role-aware-dashboard-toolkit[workbench]"',
             name="streamlit",
-        ) from None
+        ), "RADT-STREAMLIT") from None
     st = streamlit_runtime
     return st
 
@@ -135,10 +136,11 @@ def render(config: DashboardConfig) -> SecurityContext:
             raise
         # Authentication has not run yet: report the dependency failure without
         # revealing plugin names or exception details from trusted host code.
-        raise type(exc)(
+        exc.args = (
             f"{exc} Plugin setup also failed for {len(plugin_setup_errors)} plugin(s); "
-            "check plugin setup configuration and retry."
-        ) from None
+            "check plugin setup configuration and retry. " + diagnostic_text("RADT-PLUGIN"),
+        )
+        raise
     state = prepare_render_state(config, streamlit_runtime.session_state)
     sidebar = render_sidebar(streamlit_runtime, config)
     ctx = sidebar.ctx

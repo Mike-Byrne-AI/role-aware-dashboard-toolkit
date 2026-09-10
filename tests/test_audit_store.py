@@ -12,6 +12,7 @@ import pytest
 import role_aware_dashboard_toolkit.audit as audit_module
 import role_aware_dashboard_toolkit.store_diagnostics as store_diagnostics
 from role_aware_dashboard_toolkit import AuditLog, FileAuditStore, InMemoryAuditStore
+from role_aware_dashboard_toolkit.diagnostics import diagnostic_text
 from role_aware_dashboard_toolkit.audit_store import (
     AUDIT_EVENT_SCHEMA_VERSION,
     redact_audit_event,
@@ -554,7 +555,7 @@ def test_audit_log_writer_status_surfaces_persistence_failures_without_losing_me
     assert status["writer_error_count"] == 1
     assert status["last_writer_error"]["error_type"] == "RuntimeError"
     assert status["last_writer_error"]["exception_type"] == "RuntimeError"
-    assert "disk write failed" in status["last_writer_error"]["message"]
+    assert status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
 
 
 def test_file_audit_store_append_preserves_order_flags_and_native_newlines(
@@ -1150,7 +1151,7 @@ def test_audit_log_writer_error_redacts_local_paths(tmp_path):
 
     audit._writer_loop()
     message = audit.writer_status()["last_writer_error"]["message"]
-    assert "<redacted-local-path>" in message
+    assert message == diagnostic_text("RADT-AUDIT-IO")
     assert str(tmp_path) not in message
 
 
@@ -1238,7 +1239,7 @@ def test_start_writer_constructor_failure_is_atomic_and_retryable(
     assert failed_status["dropped_events"] == 4
     assert failed_status["writer_error_count"] == 1
     assert failed_status["last_writer_error"]["error_type"] == "RuntimeError"
-    assert "<redacted-local-path>" in failed_status["last_writer_error"]["message"]
+    assert failed_status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
     assert raw_path not in failed_status["last_writer_error"]["message"]
     assert (
         audit_module._get_writer_startup_error(error)
@@ -1284,7 +1285,7 @@ def test_start_writer_pre_live_failure_clears_state_and_rethrows_original(
     _assert_writer_state_cleared(audit)
     failed_status = audit.writer_status()
     assert failed_status["writer_error_count"] == 1
-    assert "<redacted-local-path>" in failed_status["last_writer_error"]["message"]
+    assert failed_status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
     assert raw_path not in failed_status["last_writer_error"]["message"]
     assert (
         audit_module._get_writer_startup_error(error)
@@ -1325,7 +1326,7 @@ def test_start_writer_live_failure_retains_ownership_until_reaped(
     failed_status = audit.writer_status()
     assert failed_status["writer_active"] is True
     assert failed_status["writer_error_count"] == 1
-    assert "<redacted-local-path>" in failed_status["last_writer_error"]["message"]
+    assert failed_status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
     assert raw_path not in failed_status["last_writer_error"]["message"]
 
     retained_queue = audit._writer_queue
@@ -1403,7 +1404,7 @@ def test_start_writer_unknown_liveness_retains_ownership_and_logs_redacted_warni
         for record in caplog.records
         if "thread liveness" in record.getMessage()
     )
-    assert "<redacted-local-path>" in warning
+    assert diagnostic_text("RADT-AUDIT-IO") in warning
     assert raw_path not in warning
 
     writer_thread.alive = False
@@ -1439,7 +1440,7 @@ def test_start_writer_marker_attachment_failure_rethrows_original_and_warns(
     _assert_writer_state_cleared(audit)
     status = audit.writer_status()
     assert status["writer_error_count"] == 1
-    assert "<redacted-local-path>" in status["last_writer_error"]["message"]
+    assert status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
     assert raw_path not in status["last_writer_error"]["message"]
 
     warning = next(
@@ -1447,7 +1448,7 @@ def test_start_writer_marker_attachment_failure_rethrows_original_and_warns(
         for record in caplog.records
         if "could not be attached" in record.getMessage()
     )
-    assert "<redacted-local-path>" in warning
+    assert diagnostic_text("RADT-AUDIT-IO") in warning
     assert raw_path not in warning
 
 
@@ -1504,10 +1505,10 @@ def test_start_writer_preserves_unprintable_exception_identity(
     _assert_writer_state_cleared(audit)
     status = audit.writer_status()
     assert status["writer_error_count"] == 1
-    assert status["last_writer_error"]["message"] == "<unavailable-error-message>"
+    assert status["last_writer_error"]["message"] == diagnostic_text("RADT-AUDIT-IO")
     assert audit_module._get_writer_startup_error(error) == status["last_writer_error"]
     warnings = "\n".join(record.getMessage() for record in caplog.records)
-    assert "could not format _UnprintableStartupError (ValueError)" in warnings
+    assert warnings == ""  # Exception formatting is never attempted.
     assert raw_path not in warnings
 
 

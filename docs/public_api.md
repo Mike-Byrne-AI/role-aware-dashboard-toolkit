@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `40`
+- Documented module-only public symbols: `43`
 
 ## Usage recipes
 
@@ -222,9 +222,12 @@ Local run history, dashboard snapshots, replay previews, and comparisons.
 
 Classification: `stable`
 
-Root exports: `7`; module-only symbols: `0`.
+Root exports: `7`; module-only symbols: `3`.
 
 - `cleanup_runtime`
+- `build_diagnostic` (module-only)
+- `diagnostic_text` (module-only)
+- `list_diagnostics` (module-only)
 - `normalize_telemetry`
 - `safe_call`
 - `summarize_telemetry`
@@ -232,7 +235,7 @@ Root exports: `7`; module-only symbols: `0`.
 - `ObservabilityPanel`
 - `build_observability_snapshot`
 
-Visible callback failures, telemetry normalization, and optional metrics UI.
+Visible callback failures, telemetry normalization, optional metrics UI, and module-only guidance helpers from role_aware_dashboard_toolkit.diagnostics.
 
 ## Validation and protocol metadata
 

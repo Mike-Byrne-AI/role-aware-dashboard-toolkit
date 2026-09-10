@@ -133,7 +133,8 @@ def test_runtime_diagnostic_record_includes_fallback():
     assert record["source"] == "st.graphviz_chart"
     assert record["exception_type"] == "RuntimeError"
     assert record["error_type"] == "RuntimeError"
-    assert record["message"] == "no graphviz"
+    assert record["message"] == "A callback failed."
+    assert record["diagnostic"]["code"] == "RADT-CALLBACK"
     assert record["fallback"] == "DOT markdown"
 
 
@@ -149,7 +150,8 @@ def test_runtime_diagnostic_record_redacts_local_paths(tmp_path):
 
     assert record["stage"] == "ui at <redacted-local-path>"
     assert record["source"] == "st.graphviz_chart <redacted-local-path>"
-    assert record["message"] == "cannot render <redacted-local-path>"
+    assert record["message"] == "A callback failed."
+    assert record["diagnostic"]["code"] == "RADT-CALLBACK"
     assert record["fallback"] == "DOT markdown from <redacted-local-path>"
     assert str(fallback_path) not in record["fallback"]
     assert str(secret_path) not in record["stage"]
@@ -166,7 +168,8 @@ def test_runtime_diagnostic_record_redacts_standard_windows_oserror_filename():
         PermissionError(13, "render denied", secret_path),
     )
 
-    assert record["message"] == "[Errno 13] render denied: '<redacted-local-path>'"
+    assert record["message"] == "A callback failed."
+    assert record["diagnostic"]["code"] == "RADT-CALLBACK"
 
 
 def test_store_read_error_contract_includes_type_aliases():

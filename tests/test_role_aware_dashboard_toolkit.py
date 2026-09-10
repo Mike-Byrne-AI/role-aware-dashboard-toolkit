@@ -30,6 +30,7 @@ from role_aware_dashboard_toolkit import (
     summarize_telemetry,
 )
 from role_aware_dashboard_toolkit.audit_store import AUDIT_EVENT_SCHEMA_VERSION
+from role_aware_dashboard_toolkit.diagnostics import build_diagnostic, diagnostic_text
 from role_aware_dashboard_toolkit.observability import coerce_telemetry_sample, summarize_observability
 from role_aware_dashboard_toolkit.plugins import DashboardPlugin
 from role_aware_dashboard_toolkit.profile_store import InMemoryProfileStore
@@ -673,7 +674,7 @@ class TestHardeningHelpers:
         assert seen["record"]["stage"] == "safe_call"
         assert seen["record"]["source"].endswith("test_safe_call_returns_default_and_calls_handler.<locals>.boom")
         assert seen["record"]["exception_type"] == "RuntimeError"
-        assert seen["record"]["message"] == "nope"
+        assert seen["record"]["message"] == "A callback failed."
 
     def test_safe_call_error_record_redacts_local_paths(self, tmp_path):
         seen = {}
@@ -688,7 +689,7 @@ class TestHardeningHelpers:
         result = safe_call(boom, default="fallback", on_error=on_error)
 
         assert result == "fallback"
-        assert seen["record"]["message"] == "failed reading <redacted-local-path>"
+        assert seen["record"]["message"] == "A callback failed."
         assert str(secret_path) not in seen["record"]["message"]
 
     def test_safe_call_without_handler_warns_before_returning_default(self):
@@ -742,13 +743,14 @@ class TestHardeningHelpers:
             try_torch_cuda_empty_cache=False,
         )
 
-        assert report["warnings"][0] == "audit.stop_writer failed: RuntimeError: stop failed"
+        assert report["warnings"][0] == f"audit.stop_writer failed: RuntimeError: {diagnostic_text('RADT-AUDIT-IO')}"
         assert report["error_records"][0] == {
             "stage": "audit.stop_writer",
             "source": "AuditLog.stop_writer",
             "exception_type": "RuntimeError",
             "error_type": "RuntimeError",
-            "message": "stop failed",
+            "message": "Audit persistence could not be confirmed.",
+            "diagnostic": build_diagnostic("RADT-AUDIT-IO"),
         }
         assert report["error_records"][1]["stage"] == "clear_ref"
         assert report["error_records"][1]["source"] == "str.missing"
@@ -783,10 +785,11 @@ class TestHardeningHelpers:
             "source": "AuditLog.stop_writer",
             "exception_type": "TimeoutError",
             "error_type": "TimeoutError",
-            "message": "Audit writer did not stop within 3 seconds.",
+            "message": "Audit persistence could not be confirmed.",
+            "diagnostic": build_diagnostic("RADT-AUDIT-IO"),
         }
         assert report["warnings"] == [
-            "audit.stop_writer failed: TimeoutError: Audit writer did not stop within 3 seconds."
+            f"audit.stop_writer failed: TimeoutError: {diagnostic_text('RADT-AUDIT-IO')}"
         ]
         assert status["writer_active"] is True
         assert audit._writer_path == str(tmp_path / "audit.jsonl")
@@ -853,10 +856,11 @@ class TestHardeningHelpers:
                 "source": "import torch",
                 "exception_type": expected_type,
                 "error_type": expected_type,
-                "message": expected_message,
+                "message": "A callback failed.",
+                "diagnostic": build_diagnostic("RADT-CALLBACK"),
             }
         ]
-        assert report["warnings"] == [f"cuda cleanup skipped: {expected_type}: {expected_message}"]
+        assert report["warnings"] == [f"cuda cleanup skipped: {expected_type}: {diagnostic_text('RADT-CALLBACK')}"]
 
     def test_cleanup_runtime_treats_missing_cuda_namespace_as_expected(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace())
@@ -884,10 +888,11 @@ class TestHardeningHelpers:
                 "source": "torch.cuda",
                 "exception_type": "OSError",
                 "error_type": "OSError",
-                "message": "CUDA namespace lookup failed",
+                "message": "A callback failed.",
+                "diagnostic": build_diagnostic("RADT-CALLBACK"),
             }
         ]
-        assert report["warnings"] == ["cuda cleanup skipped: OSError: CUDA namespace lookup failed"]
+        assert report["warnings"] == [f"cuda cleanup skipped: OSError: {diagnostic_text('RADT-CALLBACK')}"]
 
     def test_cleanup_runtime_treats_falsey_cuda_namespace_as_expected(self, monkeypatch):
         class FalseyCuda:
@@ -929,10 +934,11 @@ class TestHardeningHelpers:
                 "source": "torch.cuda",
                 "exception_type": "RuntimeError",
                 "error_type": "RuntimeError",
-                "message": "CUDA truthiness failed",
+                "message": "A callback failed.",
+                "diagnostic": build_diagnostic("RADT-CALLBACK"),
             }
         ]
-        assert report["warnings"] == ["cuda cleanup skipped: RuntimeError: CUDA truthiness failed"]
+        assert report["warnings"] == [f"cuda cleanup skipped: RuntimeError: {diagnostic_text('RADT-CALLBACK')}"]
 
     def test_cleanup_runtime_treats_unavailable_cuda_as_expected(self, monkeypatch):
         calls = []
@@ -995,10 +1001,11 @@ class TestHardeningHelpers:
                 "source": expected_source,
                 "exception_type": expected_type,
                 "error_type": expected_type,
-                "message": expected_message,
+                "message": "A callback failed.",
+                "diagnostic": build_diagnostic("RADT-CALLBACK"),
             }
         ]
-        assert report["warnings"] == [f"cuda cleanup skipped: {expected_type}: {expected_message}"]
+        assert report["warnings"] == [f"cuda cleanup skipped: {expected_type}: {diagnostic_text('RADT-CALLBACK')}"]
 
     def test_cleanup_runtime_marks_successful_cuda_cache_clear(self, monkeypatch):
         calls = []
@@ -1037,7 +1044,7 @@ class TestObservabilityAndPlugins:
 
         registry.register(DashboardPlugin(name="bad", render_panel=boom))
         errors = registry.render_panels({})
-        assert [str(error) for error in errors] == ["bad: bad plugin"]
+        assert [str(error) for error in errors] == ["bad (RuntimeError): " + diagnostic_text("RADT-PLUGIN")]
         assert errors[0].stage == "render_panel"
         assert errors[0].exception_type == "RuntimeError"
 
@@ -1383,12 +1390,12 @@ class TestDashboardPanels:
         assert [event["type"] for event in events] == ["control_change", "callback_error", "callback_error"]
         assert events[0]["key"] == "gain"
         assert [event["detail"] for event in events[1:]] == [
-            "control exploded at <redacted-local-path>",
-            "global exploded at <redacted-local-path>",
+            "RuntimeError. " + diagnostic_text("RADT-CALLBACK"),
+            "ValueError. " + diagnostic_text("RADT-CALLBACK"),
         ]
         assert fake_st.messages["error"] == [
-            "Callback error on gain: control exploded at <redacted-local-path>",
-            "Global on_change error on gain: global exploded at <redacted-local-path>",
+            "Callback error on gain: RuntimeError. " + diagnostic_text("RADT-CALLBACK"),
+            "Global on_change error on gain: ValueError. " + diagnostic_text("RADT-CALLBACK"),
         ]
         assert str(tmp_path) not in "\n".join(fake_st.messages["error"])
         assert str(tmp_path) not in "\n".join(event["detail"] for event in events[1:])
@@ -1631,6 +1638,7 @@ class TestDashboardSmoke:
                 if classification == "UnknownRole"
                 else "auth hook must return a role name string."
             )
+            + " " + diagnostic_text("RADT-AUTH")
         ]
 
     def test_sidebar_auth_hook_exception_fails_closed_without_leaking_details(self):
@@ -1650,7 +1658,8 @@ class TestDashboardSmoke:
             controls_writable=False,
         )
         assert fake_st.messages["error"] == [
-            "Authentication failed (RuntimeError): auth hook raised an exception."
+            "Authentication failed (RuntimeError): auth hook raised an exception. "
+            + diagnostic_text("RADT-AUTH")
         ]
         assert "secret identity-provider detail" not in fake_st.messages["error"][0]
 
@@ -1807,7 +1816,7 @@ class TestDashboardSmoke:
         render_sidebar(fake_st, config)
 
         assert config.audit.writer_status()["writer_active"] is False
-        assert fake_st.messages["error"] == ["Audit file path must stay within configured audit directory."]
+        assert fake_st.messages["error"] == ["Audit file path must stay within configured audit directory. " + diagnostic_text("RADT-AUDIT-IO")]
 
 
     def test_sidebar_audit_writer_persists_inside_configured_root(self, tmp_path):
@@ -1855,8 +1864,8 @@ class TestDashboardSmoke:
         errors = fake_st.messages["error"]
         assert len(errors) == 1
         displayed_error = errors[0]
-        assert displayed_error.startswith("Audit writer error (OSError): cannot open ")
-        assert "<redacted-local-path>" in displayed_error
+        assert displayed_error.startswith("Audit writer error (OSError): ")
+        assert diagnostic_text("RADT-AUDIT-IO") in displayed_error
         assert str(audit_path) not in displayed_error
 
         audit.log("memory_only_after_sidebar_start_failure")
@@ -1927,7 +1936,7 @@ class TestDashboardSmoke:
         errors = fake_st.messages["error"]
         assert len(errors) == 1
         assert "Audit writer error (RuntimeError)" in errors[0]
-        assert "<redacted-local-path>" in errors[0]
+        assert diagnostic_text("RADT-AUDIT-IO") in errors[0]
         assert str(audit_path) not in errors[0]
         audit.log("memory_only_while_start_state_is_unknown")
         assert audit._writer_queue.qsize() == 0
@@ -2009,7 +2018,7 @@ class TestDashboardSmoke:
         render_sidebar(fake_st, config)
 
         assert fake_st.messages["error"] == [
-            "Audit writer error (OSError): cannot write <redacted-local-path>"
+            "Audit writer error (OSError): " + diagnostic_text("RADT-AUDIT-IO")
         ]
 
 
@@ -2042,7 +2051,7 @@ class TestDashboardSmoke:
 
         errors = fake_st.messages["error"]
         assert errors == [
-            "Audit writer error (TimeoutError): Audit writer did not stop within 3 seconds."
+            "Audit writer error (TimeoutError): " + diagnostic_text("RADT-AUDIT-IO")
         ]
         assert str(writer_path) not in "\n".join(errors)
         status = audit.writer_status()
@@ -2197,7 +2206,7 @@ class TestDashboardSmoke:
 
         assert calls == ["setup"]
         assert fake_st.messages["warning"] == [
-            "Plugin setup error: setup-once: setup failed"
+            "Plugin setup error: setup-once (RuntimeError): " + diagnostic_text("RADT-PLUGIN")
         ]
 
     def test_render_surfaces_plugin_discovery_errors(self, monkeypatch):
@@ -2226,7 +2235,7 @@ class TestDashboardSmoke:
 
         dashboard_mod.render(config)
 
-        assert "Plugin discovery error: broken_ep: entry point exploded" in fake_st.messages["warning"]
+        assert "Plugin discovery error: broken_ep (RuntimeError): " + diagnostic_text("RADT-PLUGIN") in fake_st.messages["warning"]
 
     def test_render_sanitizes_preexisting_session_values(self, monkeypatch):
         fake_st = FakeStreamlit()

@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .diagnostics import diagnostic_text
+
 from .replay import apply_replay_packet
 from .security import can_write
 
@@ -49,7 +51,7 @@ def apply_pending_replay(st: Any, config: Any, ctx: Any) -> None:
         return
     staged = stage_replay(config, st.session_state, ctx, pending["packet"])
     if staged is None:
-        st.warning("Replay denied: current role and writable state must permit every affected control. No replay values were applied.")
+        st.warning("Replay denied: current role and writable state must permit every affected control. No replay values were applied. " + diagnostic_text("RADT-PERMISSION"))
         return
     values, result = staged
     for key, value in values.items():

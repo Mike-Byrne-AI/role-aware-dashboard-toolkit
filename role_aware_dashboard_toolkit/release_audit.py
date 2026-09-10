@@ -122,6 +122,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
         "role_aware_dashboard_toolkit/decision_store.py",
         "role_aware_dashboard_toolkit/decisions.py",
         "role_aware_dashboard_toolkit/distribution.py",
+        "role_aware_dashboard_toolkit/diagnostics.py",
         "role_aware_dashboard_toolkit/governance.py",
         "role_aware_dashboard_toolkit/governance_store.py",
         "role_aware_dashboard_toolkit/ledger.py",

@@ -212,7 +212,8 @@ def test_hiding_plugin_details_keeps_callback_failures_visible(app):
     app.session_state["plugin_sidebar_failure"] = True
     _run(app)
     assert "Plugins" not in [item.label for item in app.expander]
-    assert any("synthetic sidebar callback failure" in item.value for item in app.warning)
+    assert any("RADT-PLUGIN" in item.value and "RuntimeError" in item.value for item in app.warning)
+    assert not any("synthetic sidebar callback failure" in item.value for item in app.warning)
     assert "Custom panel visible" in [item.value for item in app.caption]
 
 

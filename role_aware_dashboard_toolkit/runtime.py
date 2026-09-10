@@ -16,6 +16,7 @@ from typing import Any
 from collections.abc import Callable, Iterable
 
 from .audit import AuditLog
+from .diagnostics import build_diagnostic, diagnostic_text
 from .path_redaction import redact_text_local_paths
 
 
@@ -26,26 +27,41 @@ class RuntimeErrorRecord:
     exception_type: str
     message: str
 
-    def to_dict(self) -> dict[str, str]:
+    @property
+    def diagnostic(self) -> dict[str, Any]:
+        """Return detached recovery guidance without changing constructor fields."""
+        return build_diagnostic(_runtime_diagnostic_code(self.stage))
+
+    def to_dict(self) -> dict[str, Any]:
         return {
             "stage": self.stage,
             "source": self.source,
             "exception_type": self.exception_type,
             "error_type": self.exception_type,
             "message": self.message,
+            "diagnostic": self.diagnostic,
         }
 
 
+def _runtime_diagnostic_code(stage: str) -> str:
+    return "RADT-AUDIT-IO" if stage == "audit.stop_writer" else "RADT-CALLBACK"
+
+
 def build_runtime_error_record(stage: str, source: str, exc: Exception) -> RuntimeErrorRecord:
+    """Describe a failure without copying an arbitrary exception payload.
+
+    The caller's explicit error handler still receives the original exception.
+    Only the generated record uses fixed text, so non-path secrets are excluded.
+    """
     return RuntimeErrorRecord(
         stage=redact_text_local_paths(str(stage)),
         source=redact_text_local_paths(str(source)),
         exception_type=type(exc).__name__,
-        message=redact_text_local_paths(str(exc)),
+        message=build_diagnostic(_runtime_diagnostic_code(stage))["message"],
     )
 
 
-def build_runtime_diagnostic_record(stage: str, source: str, exc: Exception, *, fallback: str = "") -> dict[str, str]:
+def build_runtime_diagnostic_record(stage: str, source: str, exc: Exception, *, fallback: str = "") -> dict[str, Any]:
     record = build_runtime_error_record(stage, source, exc).to_dict()
     record["fallback"] = redact_text_local_paths(str(fallback or ""))
     return record
@@ -206,7 +222,8 @@ def _attach_runtime_error_record(exc: Exception, record: RuntimeErrorRecord) -> 
         warnings.warn(
             (
                 "safe_call could not attach role_aware_dashboard_toolkit_error_record to "
-                f"{type(exc).__name__}: {type(attach_exc).__name__}: {attach_exc}"
+                f"{type(exc).__name__}: {type(attach_exc).__name__}. "
+                f"{diagnostic_text('RADT-CALLBACK')}"
             ),
             RuntimeWarning,
             stacklevel=3,
@@ -217,7 +234,7 @@ def _warn_safe_call_failure(record: RuntimeErrorRecord) -> None:
     warnings.warn(
         (
             f"safe_call suppressed {record.exception_type} from {record.source}; "
-            f"returning default: {record.message}"
+            f"returning default: {diagnostic_text(record.diagnostic['code'])}"
         ),
         RuntimeWarning,
         stacklevel=3,
@@ -233,7 +250,9 @@ def _record_runtime_warning(
 ) -> None:
     record = build_runtime_error_record(stage, source, exc)
     report["error_records"].append(record.to_dict())
-    report["warnings"].append(f"{warning_prefix}: {record.exception_type}: {record.message}")
+    report["warnings"].append(
+        f"{warning_prefix}: {record.exception_type}: {diagnostic_text(record.diagnostic['code'])}"
+    )
 
 
 def _walk_payload(payload: Any, out: dict[str, float], prefix: str = "") -> None:

@@ -7,7 +7,7 @@ from ._optional_pandas import load_optional_pandas
 from .appearance import group_background_color, styled_group_container
 from .audit import audit_event_view
 from .controls import ControlDef, _looks_like_int
-from .path_redaction import redact_text_local_paths
+from .diagnostics import diagnostic_text
 from .security import SecurityContext, can_write, has_perm
 
 pd = None
@@ -82,7 +82,14 @@ def render_audit_panel(
         if pandas is None:
             st.json(filtered[:50])
         else:
-            radt = pandas.DataFrame(filtered)
+            # Mixed control kinds share these columns. Convert only display cells;
+            # the audit records, replay preview, and exports keep their original types.
+            display_events = [
+                {key: str(value) if key in {"old", "new"} and value is not None else value
+                 for key, value in event.items()}
+                for event in filtered
+            ]
+            radt = pandas.DataFrame(display_events)
             display_cols = [c for c in ["ts", "type", "key", "old", "new", "role", "detail", "source"] if c in radt.columns]
             st.dataframe(radt[display_cols], use_container_width=True, hide_index=True)
 
@@ -231,7 +238,7 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
 
 
 def _callback_error_detail(exc: Exception) -> str:
-    return redact_text_local_paths(str(exc)) or type(exc).__name__
+    return f"{type(exc).__name__}. {diagnostic_text('RADT-CALLBACK')}"
 
 
 def _audit_event_type(event: Any) -> str:

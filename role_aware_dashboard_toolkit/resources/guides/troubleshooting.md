@@ -34,3 +34,39 @@ whole workflow.
 
 The library's guides are scoped technical reference. User instructions, project
 authority, data access boundaries and deployment decisions remain with the host.
+
+## Runtime messages connect to this installed handbook
+
+Library configuration exceptions preserve their base type and expose a
+`diagnostic` dictionary with schema version, toolkit version, code, operation,
+message, effect, guide topic and help command. Plugin/runtime error records
+expose the same guidance through `.diagnostic` and their `to_dict()` output.
+`inspect --format json` includes the fixed diagnostic catalog.
+
+| Code | Operation | Offline topic |
+|---|---|---|
+| `RADT-CONTROL-DEFINITION` | `register_control` | `guide controls` |
+| `RADT-APPEARANCE` | `configure_appearance` | `guide appearance` |
+| `RADT-SECTIONS` | `configure_sections` | `guide sections` |
+| `RADT-STREAMLIT` | `render_dashboard` | `guide start` |
+| `RADT-PERMISSION` | `apply_controls` | `guide permissions` |
+| `RADT-PROFILE-IO` | `access_profiles` | `guide profiles` |
+| `RADT-PLUGIN` | `plugin_callback` | `guide plugins` |
+| `RADT-TELEMETRY` | `sample_telemetry` | `guide telemetry` |
+| `RADT-AUDIT-IO` | `persist_audit` | `guide troubleshooting` |
+| `RADT-AUTH` | `authenticate` | `guide permissions` |
+| `RADT-CALLBACK` | `call_callback` | `guide troubleshooting` |
+
+Read the specific validation detail first, then use the linked guide. A plugin
+or callback can fail after making changes; the library does not roll back host
+side effects. Profile I/O failure preserves live controls but cannot promise
+that custom storage did not partially write. Audit persistence failure means
+durability needs checking. Telemetry fallback keeps the old sample timestamp.
+
+Generated callback/plugin/audit diagnostic text omits arbitrary exception
+messages, which can contain credentials. It retains the failure type and
+operation. `safe_call(on_error=...)` still passes the original exception to the
+host's explicitly supplied error handler; that handler owns any further logging.
+Avoid copying secrets into source names, plugin metadata or custom diagnostics.
+The catalog is scoped reference, not instructions to grant permissions or retry
+external mutations automatically.

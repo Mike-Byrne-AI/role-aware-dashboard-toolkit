@@ -6,6 +6,7 @@ from typing import Any
 
 from ._ui_state import apply_pending_replay
 from .profile_store import FileProfileStore
+from .diagnostics import build_diagnostic, diagnostic_text
 from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
@@ -90,7 +91,7 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
             st.session_state["_radt_writable"] = False
             st.session_state["_radt_previous_writable"] = False
             st.session_state.pop("_radt_pending_replay", None)
-            st.error(auth_error)
+            st.error(auth_error + " " + diagnostic_text("RADT-AUTH"))
             return SidebarResult(
                 ctx=make_security_context(
                     _AUTH_FAILURE_ROLE,
@@ -175,9 +176,15 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
     except _ProfileStorageFailure as exc:
         # Custom and file stores may raise before returning diagnostics. Do not
         # expose exception text: paths and credentials can appear in it.
-        st.error(f"Profile storage failed ({exc}). The requested operation did not complete; live controls were preserved.")
+        st.error(f"Profile storage failed ({exc}). " + diagnostic_text("RADT-PROFILE-IO"))
     if getattr(profile_store, "read_errors", None):
-        st.warning("Profile storage has unreadable records. Existing records were preserved; check storage access and repair invalid profile data.")
+        # Read errors may outlive the read that recorded them. A successful
+        # save/load/delete in this render must not be described as a failure.
+        st.warning(
+            "Profile storage has unreadable records. Unreadable records were skipped; "
+            "other profile operations may still succeed. Help: "
+            + build_diagnostic("RADT-PROFILE-IO")["guide_command"]
+        )
 
 
 def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile_store: Any) -> None:
@@ -264,7 +271,7 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
                         or staged_state[ctrl.key] != st.session_state[ctrl.key]
                     )
                     if denied:
-                        st.warning("Profile requires permission to edit all restored controls.")
+                        st.warning("Profile requires permission to edit all restored controls. " + diagnostic_text("RADT-PERMISSION"))
                         return
                     for ctrl in reg.all():
                         st.session_state[ctrl.key] = staged_state[ctrl.key]
@@ -336,7 +343,8 @@ def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) ->
                     safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)
                 except (OSError, ValueError, StorePathSecurityError):
                     st.error(
-                        "Audit file path must stay within configured audit directory."
+                        "Audit file path must stay within configured audit directory. "
+                        + diagnostic_text("RADT-AUDIT-IO")
                     )
                     audit.stop_writer()
                 else:
@@ -363,11 +371,11 @@ def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) ->
         last_error = startup_error or lifecycle_error or writer_status.get("last_writer_error")
         error_record = last_error if isinstance(last_error, dict) else {}
         error_type = str(error_record.get("error_type") or error_record.get("exception_type") or "Error")
-        message = redact_text_local_paths(
-            str(error_record.get("message") or "unknown writer failure"),
-            repo_root=str(audit_root),
-        )
-        st.error(f"Audit writer error ({error_type}): {message}")
+        if len(error_type) > 80 or not error_type.isidentifier():
+            error_type = "Error"
+        # Writer exception messages may contain paths or credentials. The fixed
+        # diagnostic describes uncertain persistence without echoing that data.
+        st.error(f"Audit writer error ({error_type}): " + diagnostic_text("RADT-AUDIT-IO"))
 
 
 __all__ = ["SidebarResult", "render_sidebar"]
