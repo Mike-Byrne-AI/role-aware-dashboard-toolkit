@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -77,7 +78,14 @@ class ObservabilityPanel:
     def render(self, st: Any) -> None:
         st.divider()
         with st.expander(self.config.title, expanded=False):
-            latest = self.record_sample()
+            try:
+                latest = self.record_sample()
+            except Exception as exc:
+                latest = None
+                st.warning(
+                    f"Telemetry sampling failed ({type(exc).__name__}). "
+                    "The last successful displayed sample is retained for checkpoints."
+                )
             history = self.history()
 
             if latest is None and not history:
@@ -113,6 +121,11 @@ class ObservabilityPanel:
             elif history:
                 st.subheader("History")
                 st.json(history[-10:])
+
+            # Commit only after the normalized sample has rendered successfully.
+            # A checkpoint uses this exact sample and timestamp, not a fresh hook call.
+            if history:
+                self.session_state["_radt_last_telemetry"] = deepcopy(history[-1])
 
 
 def coerce_telemetry_sample(payload: Any) -> dict[str, Any]:

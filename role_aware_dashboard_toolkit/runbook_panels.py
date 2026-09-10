@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._ui_state import queue_replay, stage_replay
 from .checkpoints import checkpoint_summary
 from .compare import compare_checkpoints, compare_runs
 from .ledger import build_run_ledger, ledger_summary
 from .packets import build_checkpoint_packet, build_run_packet
-from .replay import apply_replay_packet, build_replay_packet_from_checkpoint
+from .replay import build_replay_packet_from_checkpoint
 from .runs import append_checkpoint, build_run, end_run, run_summary
 from .runbook_panels_parts.caseboard import _render_caseboard_panel
 from .runbook_panels_parts.decisions import _render_decision_panel
@@ -96,6 +97,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                     else {}
                 ),
             )
+            updated["active_profile_id"] = _selected_profile_id(st.session_state)
             store.save(updated)
             checkpoint_id = str(updated.get("last_checkpoint_id", ""))
             config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
@@ -109,6 +111,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 notes=str(st.session_state.get("_radt_run_notes", "")),
                 status="completed",
             )
+            finished["active_profile_id"] = _selected_profile_id(st.session_state)
             store.save(finished)
             st.session_state["_radt_active_run_id"] = ""
             config.audit.log("run_end", detail=finished["run_id"], role=ctx.role, source="ui")
@@ -210,26 +213,10 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 key="_radt_checkpoint_replay_btn",
                 disabled=not can_apply_replay,
             ) and can_apply_replay:
-                staged_state = dict(st.session_state)
-                applied = apply_replay_packet(replay_packet, config.registry, staged_state)
-                required_keys = set(applied["touched_keys"])
-                required_keys.update(
-                    ctrl.key
-                    for ctrl in config.registry.all()
-                    if ctrl.key in staged_state
-                    and (
-                        ctrl.key not in st.session_state
-                        or staged_state[ctrl.key] != st.session_state[ctrl.key]
-                    )
-                )
-                if all(
-                    has_perm(ctx, config.registry.get(key).permission, default=False)
-                    for key in required_keys
-                ):
-                    for key in required_keys:
-                        st.session_state[key] = staged_state[key]
-                    config.audit.log("checkpoint_replay", detail=selected_checkpoint_id, role=ctx.role, source="ui")
-                    st.toast(f"Replayed checkpoint: {selected_checkpoint_id} ({applied['applied']} values)")
+                if stage_replay(config, st.session_state, ctx, replay_packet) is not None:
+                    # The control widgets already exist. Apply before widgets on
+                    # the next render, rechecking the current role and freeze.
+                    queue_replay(st.session_state, replay_packet, selected_checkpoint_id)
                     st.rerun()
                 else:
                     st.caption("Replay denied: permission is required for every affected control.")

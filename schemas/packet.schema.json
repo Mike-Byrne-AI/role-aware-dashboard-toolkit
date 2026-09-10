@@ -14,16 +14,61 @@
     "meta"
   ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "packet_type": {"type": "string", "minLength": 1},
-    "packet_id": {"type": "string", "minLength": 1},
-    "exported_at": {"type": "string"},
-    "source_app": {"type": "string", "minLength": 1},
-    "source_version": {"type": "string"},
-    "payload_schema_version": {"type": "integer", "minimum": 1},
-    "payload": {"type": "object"},
-    "meta": {"type": "object"},
-    "extensions": {"type": "object"}
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "packet_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]{0,63}(?![\\s\\S])",
+      "description": "Canonical serialized identifier. Builders, import and export normalize surrounding whitespace and case.",
+      "anyOf": [
+        {
+          "enum": [
+            "profile",
+            "run",
+            "checkpoint",
+            "audit_slice",
+            "compare",
+            "replay",
+            "ledger",
+            "narrative_handoff"
+          ]
+        },
+        {
+          "pattern": "^x_"
+        }
+      ]
+    },
+    "packet_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "exported_at": {
+      "type": "string"
+    },
+    "source_app": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_version": {
+      "type": "string"
+    },
+    "payload_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "payload": {
+      "type": "object"
+    },
+    "meta": {
+      "type": "object"
+    },
+    "extensions": {
+      "type": "object"
+    }
   },
   "additionalProperties": false
 }

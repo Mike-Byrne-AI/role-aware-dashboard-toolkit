@@ -393,72 +393,74 @@ def validate_packet(record: dict[str, Any]) -> dict[str, Any]:
         result["warnings"] = warnings
         return _finalize(result)
     _check_mapping_field(result, record, "payload")
-    packet_type = str(record.get("packet_type") or "").strip().lower()
-    if not packet_type:
-        result["errors"].append("Field 'packet_type' must be present.")
-    else:
-        known_packet_types, packet_type_registry_error = _known_packet_types()
-        if packet_type_registry_error:
-            result["errors"].append(packet_type_registry_error)
-        extension_packet = _is_extension_packet_type(packet_type)
-        if not packet_type_registry_error and packet_type not in known_packet_types:
-            if extension_packet:
-                warnings.append(f"Unknown extension packet_type '{packet_type}' accepted by extension policy.")
-            else:
-                result["errors"].append(f"Invalid packet_type: {packet_type}")
+    try:
+        from .packet_core import VALID_PACKET_TYPES, _normalize_packet_type
+    except Exception as exc:
+        result["errors"].append(_packet_validation_import_error("packet type registry", exc))
+        result["warnings"] = warnings
+        return _finalize(result)
+    try:
+        packet_type = _normalize_packet_type(record.get("packet_type"))
+    except ValueError as exc:
+        result["errors"].append(str(exc))
+        result["warnings"] = warnings
+        return _finalize(result)
+    known_packet_types = set(VALID_PACKET_TYPES)
+    extension_packet = _is_extension_packet_type(packet_type)
+    if packet_type not in known_packet_types:
+        warnings.append(f"Unknown extension packet_type '{packet_type}' accepted by extension policy.")
 
-        payload = record.get("payload")
-        payload_schema_version = _coerce_int_schema_version(record.get("payload_schema_version"))
-        payload_body_schema_version = _coerce_int_schema_version((payload or {}).get("schema_version")) if isinstance(payload, dict) else None
-        expected_schema_version: int | None = None
-        protocol_catalog_error: str | None = None
-        if not extension_packet and not packet_type_registry_error and packet_type in known_packet_types:
-            expected_schema_version, protocol_catalog_error = _protocol_schema_version(packet_type)
-            if protocol_catalog_error:
-                result["errors"].append(protocol_catalog_error)
+    payload = record.get("payload")
+    payload_schema_version = _coerce_int_schema_version(record.get("payload_schema_version"))
+    payload_body_schema_version = _coerce_int_schema_version((payload or {}).get("schema_version")) if isinstance(payload, dict) else None
+    expected_schema_version: int | None = None
+    protocol_catalog_error: str | None = None
+    if not extension_packet and packet_type in known_packet_types:
+        expected_schema_version, protocol_catalog_error = _protocol_schema_version(packet_type)
+        if protocol_catalog_error:
+            result["errors"].append(protocol_catalog_error)
 
-        if expected_schema_version is not None:
-            if payload_schema_version is None:
-                result["errors"].append(f"Missing or invalid payload_schema_version for packet_type '{packet_type}'.")
-            elif payload_schema_version != expected_schema_version:
-                result["errors"].append(
-                    f"Unexpected payload_schema_version for packet_type '{packet_type}': "
-                    f"{payload_schema_version} != {expected_schema_version}"
-                )
-            if payload_body_schema_version is not None and payload_body_schema_version != expected_schema_version:
-                result["errors"].append(
-                    f"Unexpected payload.schema_version for packet_type '{packet_type}': "
-                    f"{payload_body_schema_version} != {expected_schema_version}"
-                )
-        elif extension_packet:
-            if payload_schema_version is None:
-                result["errors"].append(
-                    f"Extension packet_type '{packet_type}' must provide an integer payload_schema_version."
-                )
-            elif payload_schema_version < 1:
-                result["errors"].append(
-                    f"Extension packet_type '{packet_type}' must use payload_schema_version >= 1."
-                )
-
-        if (
-            payload_schema_version is not None
-            and payload_body_schema_version is not None
-            and payload_schema_version != payload_body_schema_version
-        ):
+    if expected_schema_version is not None:
+        if payload_schema_version is None:
+            result["errors"].append(f"Missing or invalid payload_schema_version for packet_type '{packet_type}'.")
+        elif payload_schema_version != expected_schema_version:
             result["errors"].append(
-                f"payload_schema_version ({payload_schema_version}) does not match "
-                f"payload.schema_version ({payload_body_schema_version}) for packet_type '{packet_type}'."
+                f"Unexpected payload_schema_version for packet_type '{packet_type}': "
+                f"{payload_schema_version} != {expected_schema_version}"
             )
-        if (
-            not packet_type_registry_error
-            and packet_type in known_packet_types
-            and expected_schema_version is None
-            and protocol_catalog_error is None
-        ):
-            warnings.append(
-                f"No protocol catalog schema metadata found for packet_type '{packet_type}'; "
-                "schema version compatibility was not verified."
+        if payload_body_schema_version is not None and payload_body_schema_version != expected_schema_version:
+            result["errors"].append(
+                f"Unexpected payload.schema_version for packet_type '{packet_type}': "
+                f"{payload_body_schema_version} != {expected_schema_version}"
             )
+    elif extension_packet:
+        if payload_schema_version is None:
+            result["errors"].append(
+                f"Extension packet_type '{packet_type}' must provide an integer payload_schema_version."
+            )
+        elif payload_schema_version < 1:
+            result["errors"].append(
+                f"Extension packet_type '{packet_type}' must use payload_schema_version >= 1."
+            )
+
+    if (
+        payload_schema_version is not None
+        and payload_body_schema_version is not None
+        and payload_schema_version != payload_body_schema_version
+    ):
+        result["errors"].append(
+            f"payload_schema_version ({payload_schema_version}) does not match "
+            f"payload.schema_version ({payload_body_schema_version}) for packet_type '{packet_type}'."
+        )
+    if (
+        packet_type in known_packet_types
+        and expected_schema_version is None
+        and protocol_catalog_error is None
+    ):
+        warnings.append(
+            f"No protocol catalog schema metadata found for packet_type '{packet_type}'; "
+            "schema version compatibility was not verified."
+        )
 
     result["warnings"] = warnings
     return _finalize(result)
@@ -506,14 +508,6 @@ def validate_record(record_type: str, record: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "record_type": normalized, "errors": [f"Unknown record type: {record_type}"]}
     return dispatch[normalized](record)
 
-
-
-def _known_packet_types() -> tuple[set[str], str | None]:
-    try:
-        from .packet_core import VALID_PACKET_TYPES
-    except Exception as exc:
-        return set(), _packet_validation_import_error("packet type registry", exc)
-    return {str(item).strip().lower() for item in VALID_PACKET_TYPES}, None
 
 
 def _protocol_schema_version(packet_type: str) -> tuple[int | None, str | None]:

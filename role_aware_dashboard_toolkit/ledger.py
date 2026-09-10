@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,7 +16,8 @@ VALID_LEDGER_ENTRY_TYPES = (
 
 
 def build_run_ledger(run: dict[str, Any]) -> dict[str, Any]:
-    run_copy = dict(run or {})
+    """Build a detached chronological view without changing run sequence semantics."""
+    run_copy = deepcopy(dict(run or {}))
     checkpoints = list(run_copy.get("checkpoints") or [])
     initial_controls = dict(run_copy.get("initial_controls") or {})
     entries: list[dict[str, Any]] = [
@@ -26,7 +28,7 @@ def build_run_ledger(run: dict[str, Any]) -> dict[str, Any]:
             "run_id": run_copy.get("run_id", ""),
             "actor": run_copy.get("actor", ""),
             "role": run_copy.get("role", ""),
-            "approval_state": "proposed",
+            "approval_state": "",
             "controls": initial_controls,
             "controls_diff": profile_diff({}, initial_controls),
             "telemetry": {},
@@ -82,13 +84,22 @@ def build_run_ledger(run: dict[str, Any]) -> dict[str, Any]:
                 "run_id": run_copy.get("run_id", ""),
                 "actor": run_copy.get("actor", ""),
                 "role": run_copy.get("role", ""),
-                "approval_state": "approved" if run_copy.get("status") == "completed" else "proposed",
-                "controls": dict(run_copy.get("latest_controls") or previous_controls),
+                "approval_state": "",
+                "controls": dict(
+                    run_copy["latest_controls"]
+                    if isinstance(run_copy.get("latest_controls"), dict)
+                    else previous_controls
+                ),
                 "controls_diff": {},
                 "telemetry": {},
                 "detail": run_copy.get("outcome", "") or run_copy.get("status", ""),
             }
         )
+    # Display time can differ from append order (clock skew, imported evidence).
+    # Preserve source sequence so sorting never changes authoritative snapshots.
+    for sequence, entry in enumerate(entries):
+        entry["source_sequence"] = sequence
+    entries.sort(key=_entry_timestamp_key)
     latest_controls = reconstruct_controls_from_entries(entries)
     return {
         "schema_version": LEDGER_SCHEMA_VERSION,
@@ -109,10 +120,11 @@ def reconstruct_controls_from_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
 
 def reconstruct_controls_from_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
     current: dict[str, Any] = {}
-    for entry in entries:
+    for entry in _source_order(entries):
         controls = entry.get("controls")
-        if isinstance(controls, dict) and controls:
-            current = dict(controls)
+        is_snapshot = entry.get("entry_type") in {"run_started", "checkpoint", "run_ended"}
+        if isinstance(controls, dict) and (controls or is_snapshot):
+            current = deepcopy(controls)
     return current
 
 
@@ -129,8 +141,37 @@ def ledger_summary(ledger: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _source_order(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Use complete sequence metadata; legacy ledgers retain their list order."""
+    sequences = [entry.get("source_sequence") for entry in entries]
+    if (
+        all(type(sequence) is int and sequence >= 0 for sequence in sequences)
+        and len(set(sequences)) == len(sequences)
+    ):
+        return sorted(entries, key=lambda entry: entry["source_sequence"])
+    return entries
+
+
+def _entry_timestamp_key(entry: dict[str, Any]) -> tuple[bool, datetime]:
+    # Never guess local time: historical naive ISO timestamps mean UTC.
+    # Keep undated/malformed evidence, sorting it after dated entries stably.
+    try:
+        text = str(entry.get("ts") or "")
+        # Python 3.10 requires the explicit UTC offset instead of a trailing Z.
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        timestamp = datetime.fromisoformat(text)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return False, timestamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return True, datetime.max.replace(tzinfo=timezone.utc)
+
+
 def _latest_approval_state(entries: list[dict[str, Any]]) -> str:
-    for entry in reversed(entries):
+    for entry in reversed(_source_order(entries)):
+        if entry.get("entry_type") != "checkpoint":
+            continue
         state = str(entry.get("approval_state") or "")
         if state:
             return state

@@ -87,6 +87,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
         "role_aware_dashboard_toolkit/_json_safety.py",
         "role_aware_dashboard_toolkit/_optional_pandas.py",
         "role_aware_dashboard_toolkit/_record_utils.py",
+        "role_aware_dashboard_toolkit/_ui_state.py",
         "role_aware_dashboard_toolkit/api.py",
         "role_aware_dashboard_toolkit/approvals.py",
         "role_aware_dashboard_toolkit/audit.py",

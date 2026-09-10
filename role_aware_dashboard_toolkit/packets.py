@@ -8,6 +8,7 @@ from .packet_core import (
     DIFF_PACKET_SCHEMA_VERSION,
     PACKET_SCHEMA_VERSION,
     VALID_PACKET_TYPES,
+    _normalize_packet_type,
     build_packet,
 )
 from .validators import validate_packet
@@ -132,7 +133,8 @@ def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
     validated = validate_packet(packet)
     if not validated["ok"]:
         raise ValueError("Cannot export invalid packet: " + "; ".join(validated["errors"]))
-    return json.dumps(packet, indent=indent, sort_keys=True, allow_nan=False)
+    canonical = {**packet, "packet_type": _normalize_packet_type(packet["packet_type"])}
+    return json.dumps(canonical, indent=indent, sort_keys=True, allow_nan=False)
 
 
 def load_packet_json(raw: str) -> dict[str, Any]:
@@ -140,6 +142,7 @@ def load_packet_json(raw: str) -> dict[str, Any]:
     validated = validate_packet(data)
     if not validated["ok"]:
         raise ValueError("Invalid packet JSON: " + "; ".join(validated["errors"]))
+    data["packet_type"] = _normalize_packet_type(data["packet_type"])
     return data
 
 

@@ -25,6 +25,22 @@ VALID_PACKET_TYPES = (
 )
 
 
+def _normalize_packet_type(packet_type: Any) -> str:
+    """Apply the same identifier rules to construction, import and export."""
+    normalized_type = str(packet_type or "").strip().lower()
+    if not _PACKET_TYPE_PATTERN.fullmatch(normalized_type):
+        raise ValueError(
+            "packet_type must be 1-64 characters, start with a lowercase letter "
+            "and contain only lowercase letters, digits, and underscores"
+        )
+    if normalized_type not in VALID_PACKET_TYPES and not normalized_type.startswith("x_"):
+        raise ValueError(
+            f"Unknown packet_type '{normalized_type}'. "
+            "Custom packet types must use an 'x_' prefix."
+        )
+    return normalized_type
+
+
 def build_packet(
     packet_type: str,
     payload: dict[Any, Any],
@@ -43,17 +59,7 @@ def build_packet(
     the application.
     """
 
-    normalized_type = str(packet_type or "").strip().lower()
-    if not _PACKET_TYPE_PATTERN.fullmatch(normalized_type):
-        raise ValueError(
-            "packet_type must start with a lowercase letter and contain only "
-            "lowercase letters, digits, and underscores"
-        )
-    if normalized_type not in VALID_PACKET_TYPES and not normalized_type.startswith("x_"):
-        raise ValueError(
-            f"Unknown packet_type '{normalized_type}'. "
-            "Custom packet types must use an 'x_' prefix."
-        )
+    normalized_type = _normalize_packet_type(packet_type)
 
     payload_copy = dict(payload or {})
     if isinstance(repo_root, os.PathLike):

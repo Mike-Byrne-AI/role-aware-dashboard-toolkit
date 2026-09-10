@@ -44,3 +44,27 @@ Plugin loading is a separate trust boundary from API auth. Dashboard plugins are
 in-process trusted code, not sandboxed extensions. When using entry-point
 discovery, prefer explicit allowlists (`trusted_entry_points=[...]`) and avoid
 loading unreviewed third-party plugins into production dashboards.
+
+## Profile identifiers and audit provenance
+
+The API removes surrounding spaces from `profile_id` before saving. The POST
+response, stored record, profile listing and audit events use that same canonical
+identifier. Empty names, the exact names `.` and `..`, nonprintable characters,
+and `/`, `\`, `%`, `?` or `#` are rejected with HTTP 422 before a store write or
+success audit event. Dots within names, internal spaces and printable Unicode
+are supported. Encode the returned identifier as one URL path segment when
+reading, activating or deleting it; for example, Python clients can use
+`urllib.parse.quote(profile_id, safe="")`.
+
+These rules apply to API-created profiles. Existing records written directly
+through a store or an earlier version are not renamed or silently removed from
+listings. If such a record has an unaddressable identifier, migrate it through
+its store adapter to an identifier satisfying the API rules before using the
+HTTP routes.
+
+API control updates, profile saves, activations and successful deletions record
+`source="api"` with the request's authorized role. API-created profiles also
+persist `source="api"`. A profile's `role` remains descriptive metadata and does
+not change the request's authorized role. Missing, unauthorized or failed
+profile deletions produce no successful `profile_delete` event; failed saves
+likewise produce no successful `profile_save` event.

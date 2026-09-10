@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._ui_state import apply_pending_replay
+from .profile_store import FileProfileStore
 from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
@@ -80,6 +82,7 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
             st.session_state["_radt_previous_role"] = _AUTH_FAILURE_ROLE
             st.session_state["_radt_writable"] = False
             st.session_state["_radt_previous_writable"] = False
+            st.session_state.pop("_radt_pending_replay", None)
             st.error(auth_error)
             return SidebarResult(
                 ctx=make_security_context(
@@ -122,6 +125,7 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
         perms = dict(role_def.perms) if role_def else {}
         ctx = make_security_context(new_role, perms, controls_writable=writable)
 
+        apply_pending_replay(st, config, ctx)
         _render_profiles(st, config, ctx, all_roles)
         render_runbook_sidebar(st, config, ctx)
         _render_audit_writer_controls(st, config, ctx)
@@ -142,13 +146,37 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
 
 
 
+class _ProfileStorageFailure(Exception):
+    """Sanitized failure raised only around a profile store operation."""
+
+
+def _profile_store_call(operation: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return operation(*args, **kwargs)
+    except (OSError, StorePathSecurityError) as exc:
+        raise _ProfileStorageFailure(type(exc).__name__) from None
+
+
 def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list[str]) -> None:
+    profile_store = getattr(config, "profile_store", None)
+    try:
+        if profile_store is None:
+            profile_store = _profile_store_call(FileProfileStore, config.profile_dir)
+        _render_profile_controls(st, config, ctx, profile_store)
+    except _ProfileStorageFailure as exc:
+        # Custom and file stores may raise before returning diagnostics. Do not
+        # expose exception text: paths and credentials can appear in it.
+        st.error(f"Profile storage failed ({exc}). The requested operation did not complete; live controls were preserved.")
+    if getattr(profile_store, "read_errors", None):
+        st.warning("Profile storage has unreadable records. Existing records were preserved; check storage access and repair invalid profile data.")
+
+
+def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile_store: Any) -> None:
     reg = config.registry
     audit = config.audit
     st.divider()
     st.subheader("Profiles")
-    profile_store = getattr(config, "profile_store", None)
-    profiles = list_profiles(config.profile_dir, store=profile_store)
+    profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
     profile_options = ["(none)", *profiles]
     current_choice = st.session_state.get("_radt_profile_choice", "(none)")
     if current_choice not in profile_options:
@@ -158,7 +186,7 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
     st.text_input("Profile name", value="my_profile", key="_radt_profile_name")
 
     if selected_profile and selected_profile != "(none)":
-        loaded = load_profile_data(selected_profile, profile_dir=config.profile_dir, store=profile_store)
+        loaded = _profile_store_call(load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
         if loaded:
             parent = str(loaded.get("parent_profile_id") or "").strip()
             if parent:
@@ -183,8 +211,9 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
             name = str(st.session_state.get("_radt_profile_name", "")).strip()
             if name:
                 parent_profile_id = selected_profile if selected_profile != "(none)" else ""
-                parent_data = load_profile_data(parent_profile_id, profile_dir=config.profile_dir, store=profile_store) if parent_profile_id else None
-                save_profile(
+                parent_data = _profile_store_call(load_profile_data, parent_profile_id, profile_dir=config.profile_dir, store=profile_store) if parent_profile_id else None
+                _profile_store_call(
+                    save_profile,
                     name,
                     reg,
                     st.session_state,
@@ -213,7 +242,7 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
             choice = st.session_state.get("_radt_profile_choice", "(none)")
             if choice and choice != "(none)":
                 staged_state = dict(st.session_state)
-                result = load_profile(choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
+                result = _profile_store_call(load_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
                 if result:
                     # A bulk restore must not bypass a control's permission,
                     # including changes made by whole-registry sanitization.
@@ -230,6 +259,7 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
                         return
                     for ctrl in reg.all():
                         st.session_state[ctrl.key] = staged_state[ctrl.key]
+                    st.session_state["_radt_active_profile_id"] = str(result.get("profile_id") or choice)
                     audit.log_profile_load(choice, role=ctx.role)
                     loaded_keys = set(result.get("values", {}).keys())
                     registry_keys = set(reg.keys())
@@ -238,15 +268,13 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
                     if extra:
                         st.warning(f"Profile contains {len(extra)} unknown controls: {', '.join(sorted(extra)[:5])}")
                     if missing:
-                        st.info(f"Profile is missing {len(missing)} controls; defaults were used.")
+                        st.info(f"Profile is missing {len(missing)} controls; existing values were retained.")
                     corrected = int(result.get("corrected_values", 0) or 0)
                     if corrected > 0:
                         st.info(f"Corrected {corrected} profile value(s) to match the current registry.")
-                    saved_role = result.get("role")
-                    if saved_role and saved_role in all_roles:
-                        st.session_state["_radt_role"] = saved_role
+                    # Saved role is provenance only; loading values never changes
+                    # the current role, its permissions, or an auth-locked identity.
                     st.toast(f"Loaded profile: {choice}")
-                    st.rerun()
                 else:
                     st.warning(f"Profile '{choice}' not found.")
 
@@ -258,7 +286,7 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
     if delete_requested and can_save_profiles:
         choice = st.session_state.get("_radt_profile_choice", "(none)")
         if choice and choice != "(none)":
-            if delete_profile(choice, profile_dir=config.profile_dir, store=profile_store):
+            if _profile_store_call(delete_profile, choice, profile_dir=config.profile_dir, store=profile_store):
                 audit.log("profile_delete", detail=choice, role=ctx.role)
                 st.toast(f"Deleted profile: {choice}")
                 st.rerun()

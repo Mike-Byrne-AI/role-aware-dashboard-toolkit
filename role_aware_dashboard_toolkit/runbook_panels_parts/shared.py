@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from .._optional_pandas import load_optional_pandas
@@ -23,7 +24,7 @@ def _parse_tags(raw: Any) -> list[str]:
 
 
 def _selected_profile_id(session_state: dict[str, Any]) -> str:
-    for key in ("_radt_selected_profile_id", "_radt_last_profile_id", "_radt_active_profile_id"):
+    for key in ("_radt_active_profile_id", "_radt_selected_profile_id", "_radt_last_profile_id"):
         value = str(session_state.get(key, "") or "")
         if value:
             return value
@@ -41,7 +42,7 @@ def _current_approval_state(ctx: Any, *, can_approve: bool) -> str:
 def _latest_telemetry(session_state: dict[str, Any]) -> dict[str, Any]:
     latest = session_state.get("_radt_last_telemetry")
     if isinstance(latest, dict):
-        return dict(latest)
+        return deepcopy(latest)
     return {}
 
 

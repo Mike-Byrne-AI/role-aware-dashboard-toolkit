@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,11 +30,11 @@ def build_profile(
     session_id: str = "",
     source: str = "ui",
 ) -> dict[str, Any]:
-    """Build a serializable profile dict from the current dashboard state."""
+    """Build a detached serializable snapshot of state and profile metadata."""
     values = registry.persistable_snapshot(session_state)
     safe_parent_values = registry.filter_persistable_values(parent_values or {})
     diff_from_parent = profile_diff(safe_parent_values, values) if parent_profile_id else {}
-    return {
+    return deepcopy({
         "schema_version": PROFILE_SCHEMA_VERSION,
         "profile_id": profile_id,
         "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -47,7 +48,7 @@ def build_profile(
         "session_id": str(session_id or ""),
         "source": str(source or "ui"),
         "extra": registry.filter_persistable_values(extra or {}),
-    }
+    })
 
 
 def save_profile(

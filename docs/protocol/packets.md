@@ -31,7 +31,12 @@ The built-in packet types are:
 - `narrative_handoff`
 
 Applications may define types prefixed with `x_`. Other unknown types are
-rejected. Type names are lowercase identifiers of at most 64 characters.
+rejected. Type names are lowercase identifiers of at most 64 characters, starting
+with a letter and containing only letters, digits and underscores. Construction,
+validation, import and export share these rules. Surrounding whitespace and
+uppercase letters are accepted and canonicalized to lowercase by construction,
+import and export. Validation reports validity without mutating the input;
+export also leaves the original packet unchanged.
 
 ## Builders
 

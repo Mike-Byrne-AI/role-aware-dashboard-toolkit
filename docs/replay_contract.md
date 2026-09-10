@@ -32,3 +32,13 @@ do not count as applied. `corrected` remains the registry sanitation count.
 
 Replay does not perform external actions or bypass the dashboard's
 authorization boundary.
+
+## Native dashboard lifecycle
+
+The native replay button stages an operation without changing live widgets or
+recording success. On the next render, after resolving the current auth role and
+writable switch but before control widgets are created, the dashboard rechecks
+the action permission and every affected control permission. A denial cancels
+the whole operation with visible feedback and no success audit event. An auth
+failure also cancels a pending replay. Successful application records one
+`checkpoint_replay` event and preserves sensitive values.

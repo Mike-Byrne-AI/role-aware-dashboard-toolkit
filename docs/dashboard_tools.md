@@ -133,12 +133,27 @@ loaded = radt.load_profile("baseline", registry, state, store=store)
 ```
 
 Loading a profile restores only registered, persistable values and reports how
-many stale or out-of-range values were corrected.
+many stale or out-of-range values were corrected. Missing profile fields retain
+their existing live values. Sensitive values remain in memory and are never
+restored from a profile. A saved role is provenance only: loading cannot change
+the active role, grant permissions, or override an auth hook.
+
+Selecting a profile previews it; only a successful load marks it active. Runs
+record the loaded profile as their source at start and refresh the active
+profile identifier at checkpoint capture and completion.
+
+Profile store I/O and path-security failures appear inline without resetting
+controls or recording a successful load/save/delete. File-store read diagnostics
+also remain visible; unreadable records are not silently overwritten.
 Dashboard profile loading requires `can_load_profiles`, an enabled write-policy
 switch, and each restored control's declared permission. All controls are checked
 before any live value changes; a denied control rejects the entire load.
 Checkpoint replay follows the same rule with `can_replay_runs` as its action
-permission.
+permission. In Streamlit, replay is staged after the current widgets render and
+applied before control creation on the following render. That application
+rechecks the current role, writable switch, and every affected control permission.
+Native sidebar reruns retain all registered live values, including sensitive,
+hidden, and frozen controls.
 
 Packet export does not override visibility permissions. Full run and checkpoint
 packet previews require `can_export_packets`, `can_view_metrics`, and

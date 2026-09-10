@@ -113,6 +113,7 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     wheel_members = _logical_members(built_release_artifacts["wheel"])
     assert "role_aware_dashboard_toolkit/py.typed" in wheel_members
     assert "role_aware_dashboard_toolkit/_record_utils.py" in wheel_members
+    assert "role_aware_dashboard_toolkit/_ui_state.py" in wheel_members
 
     sdist_members = _logical_members(built_release_artifacts["sdist"])
     assert "examples/dashboard_admin_controls_app.py" in sdist_members

@@ -145,6 +145,32 @@ def _require_permission(ctx: SecurityContext, permission: str | None) -> None:
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
 
 
+def _canonical_api_profile_id(profile_id: str) -> str:
+    """Return the identifier that the API will persist and clients can address.
+
+    Normalize before saving so a file store's filename and payload agree. Avoid
+    path separators, URL delimiters and encoded separators whose interpretation
+    can change across clients/proxies. Unicode and ordinary spaces are retained;
+    clients must URL-encode the returned identifier as one path segment.
+    """
+    canonical = profile_id.strip()
+    if (
+        not canonical
+        or canonical in {".", ".."}
+        or not profile_id.isprintable()
+        or any(char in canonical for char in "/\\%?#")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Invalid profile_id: use a nonempty printable name without "
+                "slash, backslash, percent, question mark or hash; '.' and '..' "
+                "are reserved. Surrounding spaces are removed."
+            ),
+        )
+    return canonical
+
+
 # Request / response models
 
 class ControlValue(BaseModel):
@@ -290,6 +316,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 old,
                 stored,
                 role=ctx.role or "api",
+                source="api",
                 sensitive=ctrl.sensitive,
             )
             updated.append(_control_value(app_state, ctrl.key))
@@ -324,18 +351,20 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         req: ProfileRequest,
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
+        profile_id = _canonical_api_profile_id(req.profile_id)
         save_profile(
-            req.profile_id,
+            profile_id,
             app_state.registry,
             app_state.state,
             role=req.role,
             extra=req.extra,
+            source="api",
             profile_dir=app_state.profile_dir,
             store=app_state.profile_store,
         )
-        app_state.audit.log_profile_save(req.profile_id, role=ctx.role or req.role or "api")
+        app_state.audit.log_profile_save(profile_id, role=ctx.role or req.role or "api", source="api")
         return ProfileResponse(
-            profile_id=req.profile_id,
+            profile_id=profile_id,
             role=req.role,
             values=app_state.registry.persistable_snapshot(app_state.state),
         )
@@ -367,7 +396,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         app_state.state.update(
             {ctrl.key: staged_state[ctrl.key] for ctrl in app_state.registry.all()}
         )
-        app_state.audit.log_profile_load(profile_id, role=ctx.role or "api")
+        app_state.audit.log_profile_load(profile_id, role=ctx.role or "api", source="api")
         return ProfileResponse(
             profile_id=data.get("profile_id", profile_id),
             saved_at=data.get("saved_at", ""),
@@ -378,11 +407,12 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
     @app.delete("/profiles/{profile_id}")
     async def delete_profile_endpoint(
         profile_id: str,
-        _: SecurityContext = Depends(require_api_context("can_save_profiles")),
+        ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
         ok = delete_profile(profile_id, profile_dir=app_state.profile_dir, store=app_state.profile_store)
         if not ok:
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
+        app_state.audit.log("profile_delete", detail=profile_id, role=ctx.role or "api", source="api")
         return {"deleted": profile_id}
 
 

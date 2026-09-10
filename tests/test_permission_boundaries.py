@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 import role_aware_dashboard_toolkit.dashboard as dashboard_module
+from role_aware_dashboard_toolkit._ui_state import apply_pending_replay
 from role_aware_dashboard_toolkit import ControlRegistry, InMemoryRunStore, append_checkpoint, build_run
 from role_aware_dashboard_toolkit.dashboard import DashboardConfig
 from role_aware_dashboard_toolkit.observability import ObservabilityConfig
@@ -538,6 +539,9 @@ def test_replay_preflights_every_control_permission_atomically(can_admin_control
     render_runbook_panel(st, config, ctx)
 
     if can_admin_controls:
+        assert st.session_state["mode"] == "safe"
+        assert config.audit.all_events() == []
+        apply_pending_replay(st, config, ctx)
         assert st.session_state["mode"] == "fast"
         assert st.session_state["restricted"] == "updated"
         assert [event["type"] for event in config.audit.all_events()] == ["checkpoint_replay"]
@@ -637,6 +641,9 @@ def test_replay_permission_preflight_ignores_inert_packet_entries():
 
     render_runbook_panel(st, config, ctx)
 
+    assert st.session_state["mode"] == "safe"
+    assert config.audit.all_events() == []
+    apply_pending_replay(st, config, ctx)
     assert st.session_state["mode"] == "fast"
     assert st.session_state["redacted"] == "initial"
     assert st.session_state["credential"] == "live-secret"

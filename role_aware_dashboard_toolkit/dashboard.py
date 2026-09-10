@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ._ui_state import retain_control_state
 from .audit import AuditLog
 from .controls import ControlRegistry
 from .dashboard_context import prepare_render_state
@@ -110,6 +111,7 @@ def _require_streamlit() -> Any:
 
 def render(config: DashboardConfig) -> SecurityContext:
     streamlit_runtime = _require_streamlit()
+    retain_control_state(config.registry, streamlit_runtime.session_state)
     plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": None})
     state = prepare_render_state(config, streamlit_runtime.session_state)
     sidebar = render_sidebar(streamlit_runtime, config)

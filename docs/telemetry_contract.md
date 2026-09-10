@@ -38,6 +38,17 @@ config = radt.ObservabilityConfig(
 The core summary remains dictionary-based. Install `role-aware-dashboard-toolkit[pandas]` only for
 dataframe-backed history views.
 
+## Checkpoint capture
+
+The dashboard stores a detached copy of the last successfully displayed,
+normalized sample. A native checkpoint copies that sample, including its original
+`ts`, rather than calling the telemetry hook again. The sample timestamp may
+precede the checkpoint timestamp and should be used to judge freshness.
+
+A sampling failure shows a warning and retains the last successful sample.
+It does not manufacture a fresh timestamp. A role without `can_view_metrics`
+does not sample telemetry or copy a prior role's sample into a checkpoint.
+
 ## Runtime failures
 
 `safe_call()` returns the configured fallback when a callback raises, but it
