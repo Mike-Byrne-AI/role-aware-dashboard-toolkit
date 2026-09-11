@@ -1,0 +1,74 @@
+# Development handoff
+
+This repository is the active library-development source. Its package, tests,
+examples, documentation and build configuration are self-contained. Use
+[CONTRIBUTING.md](../CONTRIBUTING.md) for the normal development loop.
+
+## Starting point
+
+The preserved `candidate` branch points to
+`35956fadb5d72ec044ba0fbaa00a5fe2cb450dfa`. That implementation includes the state,
+profile, API, telemetry and ledger repairs; appearance and section configuration;
+offline guides and starter; runtime diagnostics; and immediate profile-menu
+refresh. The `codex/development-handoff` branch adds contributor onboarding and
+the synthetic Studio Dispatch example with its behavior tests. It retains the
+existing history and does not replace the package with an older source export.
+
+## Work locally
+
+From this repository root on Windows:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -c "import role_aware_dashboard_toolkit as r; print(r.__file__)"
+.\.venv\Scripts\python.exe -m pytest tests/test_studio_dispatch_example.py -q
+```
+
+Create the environment only if it does not already exist. The printed package
+path must resolve inside this checkout. The local handoff environment may reuse
+already installed system packages; that is convenient development setup, not an
+isolated installation proof. Follow the release checklist for isolated builds.
+
+Run the full suite with `python -m pytest -q` and lint with
+`python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache`
+using the same environment. Installed package guidance is available through
+`python -m role_aware_dashboard_toolkit inspect` and `guide start`.
+
+## Examples and regression coverage
+
+[Studio Dispatch](../examples/studio_dispatch/README.md) demonstrates six control
+types, named profiles, Viewer permissions, freeze, navigation, metrics and a
+workload chart. Its data and stores are entirely synthetic and session-local.
+Tests live in `tests/test_studio_dispatch_example.py` and run in the normal suite.
+
+Existing core, API and UI regression tests retain the library fixes that came
+from consumer exercises. Private applications, source data, trial logs and
+historical orchestration records were not imported into this public tree. Further
+consumer examples should be transferred selectively with synthetic fixtures.
+
+## Release status
+
+Local development readiness does not establish a hosted or public release.
+Historical evidence for `35956fa` covers that earlier commit only. Source and
+artifact checks must be refreshed for whichever commit is ultimately released.
+
+The current CI workflow is manually dispatched and requires the exact approved
+commit. It does not currently run automatically on pushes or pull requests.
+Review that policy when normal contributor automation is desired; do not assume
+a pushed commit has been validated remotely.
+
+Before publication, follow the [release checklist](release_checklist.md) and
+[publication runbook](release_runbook.md): freeze the intended source, build and
+validate its artifacts, obtain actual hosted evidence, and verify the intended
+repository visibility and reporting configuration. Existing private historical
+validators require a reviewed update before they can certify a later commit.
+Do not relabel old receipts or weaken checks to make a new commit appear covered.
+
+## Transfer validation
+
+The full local suite passed 987 tests, including ten Studio Dispatch cases, on
+Python 3.11 and Streamlit 1.52.2. Ruff passed. Windows reported permission errors
+while cleaning temporary Git fixtures after the tests; the assertions passed.
+Those ignored test artifacts do not belong in release distributions. This local
+result does not replace the hosted and isolated-install release checks above.

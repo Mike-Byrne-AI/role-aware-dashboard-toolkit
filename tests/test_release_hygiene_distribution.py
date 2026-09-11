@@ -118,6 +118,9 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     sdist_members = _logical_members(built_release_artifacts["sdist"])
     assert "examples/dashboard_admin_controls_app.py" in sdist_members
     assert "examples/plugin_template.py" in sdist_members
+    assert {"examples/studio_dispatch/app.py", "examples/studio_dispatch/README.md",
+            "examples/studio_dispatch/.streamlit/config.toml", "AGENTS.md",
+            "docs/development_handoff.md"} <= sdist_members
     assert "docs/quickstart.md" in sdist_members
     assert "schemas/run.schema.json" in sdist_members
 
@@ -291,6 +294,7 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
     scripts = [
         sdist_root / "examples" / "dashboard_admin_controls_app.py",
         sdist_root / "examples" / "plugin_template.py",
+        sdist_root / "examples" / "studio_dispatch" / "app.py",
     ]
 
     for script in scripts:
@@ -324,5 +328,6 @@ def test_sdist_configuration_is_an_explicit_public_allowlist():
         "/examples/core_library.py",
         "/examples/dashboard_admin_controls_app.py",
         "/examples/plugin_template.py",
+        "/examples/studio_dispatch/app.py",
     }
     assert importlib.util.find_spec("role_aware_dashboard_toolkit") is not None

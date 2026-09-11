@@ -2,6 +2,9 @@
 
 Contributions should keep the dashboard library usable across applications.
 
+See the [development handoff](docs/development_handoff.md) for the active
+checkout and the Studio Dispatch example.
+
 ## Development setup
 
 Use Python 3.10 or later. From the repository root:

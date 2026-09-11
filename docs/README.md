@@ -36,6 +36,10 @@ Start with the path closest to what you are building.
 - [Packets](protocol/packets.md)
 - [Ledgers](protocol/ledger.md)
 
+## Development
+
+- [Development handoff](development_handoff.md) — current checkout, example and release status
+
 ## Release
 
 - [Distribution reference](distribution.md)

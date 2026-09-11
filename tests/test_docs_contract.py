@@ -16,6 +16,7 @@ LIVE_DOCS = frozenset(
         "docs/caseboard.md",
         "docs/dashboard_tools.md",
         "docs/decision_model.md",
+        "docs/development_handoff.md",
         "docs/distribution.md",
         "docs/governance.md",
         "docs/operator_memory.md",
@@ -43,12 +44,14 @@ LIVE_DOCS = frozenset(
 PUBLIC_ROOT_DOCS = frozenset(
     {
         "ARCHITECTURE_SCOPE.md",
+        "AGENTS.md",
         "CHANGELOG.md",
         "CODE_OF_CONDUCT.md",
         "CONTRIBUTING.md",
         "README.md",
         "SECURITY.md",
         "examples/README.md",
+        "examples/studio_dispatch/README.md",
     }
 )
 

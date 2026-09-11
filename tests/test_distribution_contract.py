@@ -100,6 +100,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/core_library.py",
         "/examples/dashboard_admin_controls_app.py",
         "/examples/plugin_template.py",
+        "/examples/studio_dispatch/app.py",
     }
     assert not any("semantic" in path.lower() for path in include)
     assert not any("builder" in path.lower() for path in include)

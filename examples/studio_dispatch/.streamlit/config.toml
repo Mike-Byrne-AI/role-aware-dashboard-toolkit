@@ -1,0 +1,18 @@
+[theme]
+base = "dark"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#1E293B"
+textColor = "#F1F5F9"
+primaryColor = "#5EEAD4"
+
+[theme.sidebar]
+backgroundColor = "#1E293B"
+secondaryBackgroundColor = "#334155"
+textColor = "#F1F5F9"
+
+[server]
+address = "127.0.0.1"
+headless = true
+
+[browser]
+gatherUsageStats = false

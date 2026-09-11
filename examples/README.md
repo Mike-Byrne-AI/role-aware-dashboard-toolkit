@@ -31,6 +31,13 @@ python -m streamlit run examples/dashboard_admin_controls_app.py
 
 ![Dashboard Admin Controls screenshot](../docs/assets/dashboard_admin_controls_app.png)
 
+## Studio Dispatch
+
+[Studio Dispatch](studio_dispatch/README.md) is a synthetic studio-planning
+dashboard with six control types, named profiles, Viewer permissions, freeze,
+Workload/Notes navigation, and a configurable chart. It includes a complete dark
+theme and behavior tests in the repository.
+
 ## Plugin template
 
 `plugin_template.py` returns a minimal `DashboardPlugin` with sidebar and panel
