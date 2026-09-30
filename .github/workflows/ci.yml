@@ -179,6 +179,7 @@ jobs:
                   os.chdir(tmpdir)
                   import role_aware_dashboard_toolkit as radt
                   from role_aware_dashboard_toolkit import dashboard as dashboard_module
+                  from role_aware_dashboard_toolkit.diagnostics import build_diagnostic, diagnostic_text
 
                   assert pathlib.Path(radt.__file__).resolve().is_relative_to(environment)
                   assert importlib.util.find_spec("streamlit") is None
@@ -199,7 +200,9 @@ jobs:
                       assert str(exc) == (
                           "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
                           'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
+                          " " + diagnostic_text("RADT-STREAMLIT")
                       )
+                      assert exc.diagnostic == build_diagnostic("RADT-STREAMLIT")
                   else:
                       raise AssertionError("core wheel render should require the workbench extra")
                   print(radt.__version__)

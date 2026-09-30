@@ -168,6 +168,51 @@ def _installed_smoke_script(workflow: str, lane: str) -> str:
     return textwrap.dedent(body)
 
 
+@pytest.mark.parametrize("problem", [None, "wrong_dependency", "missing_help", "wrong_diagnostic", "missing_diagnostic", "render_succeeds"])
+def test_actual_core_smoke_checks_missing_streamlit_diagnostic(monkeypatch, problem):
+    import role_aware_dashboard_toolkit as radt
+    from role_aware_dashboard_toolkit import dashboard
+
+    parsed = ast.parse(_installed_smoke_script(WORKFLOW_PATH.read_text(encoding="utf-8"), "core"))
+    imports = [node for node in ast.walk(parsed) if isinstance(node, ast.ImportFrom)]
+    render_check = next(
+        node for node in ast.walk(parsed)
+        if isinstance(node, ast.Try) and any(
+            isinstance(handler.type, ast.Name) and handler.type.id == "ModuleNotFoundError"
+            for handler in node.handlers
+        )
+    )
+    checks = compile(ast.Module(body=[*imports, render_check], type_ignores=[]), "workflow-core-diagnostic", "exec")
+    monkeypatch.setattr(dashboard, "st", None)
+    monkeypatch.setitem(sys.modules, "streamlit", None)
+    original_render = radt.render
+
+    def render(config):
+        if problem == "render_succeeds":
+            return None
+        try:
+            return original_render(config)
+        except ModuleNotFoundError as exc:
+            if problem == "wrong_dependency":
+                exc.name = "other_dependency"
+            elif problem == "missing_help":
+                exc.msg = exc.msg.split(" [RADT-STREAMLIT]", 1)[0]
+            elif problem == "wrong_diagnostic":
+                exc.diagnostic["operation"] = "unrelated_operation"
+            elif problem == "missing_diagnostic":
+                del exc.diagnostic
+            raise
+
+    monkeypatch.setattr(radt, "render", render)
+    namespace = {"radt": radt, "config": radt.DashboardConfig()}
+    if problem is None:
+        exec(checks, namespace)
+    else:
+        expected_error = AttributeError if problem == "missing_diagnostic" else AssertionError
+        with pytest.raises(expected_error):
+            exec(checks, namespace)
+
+
 @pytest.mark.parametrize("lane", ["core", "auth", "full", "windows-auth"])
 @pytest.mark.parametrize("source_on_path,venv_inside_checkout", [(False, False), (True, False), (False, True)])
 def test_actual_smoke_import_guard_preserves_external_install_and_rejects_checkout(monkeypatch, tmp_path, source_on_path, venv_inside_checkout, lane):
