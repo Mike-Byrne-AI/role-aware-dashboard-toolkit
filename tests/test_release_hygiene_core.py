@@ -102,6 +102,22 @@ def test_pytest_cacheprovider_is_disabled_for_workbench_runs():
     assert "--cov" not in addopts
 
 
+def test_lint_selection_is_explicit_across_ruff_default_changes():
+    lint = load_pyproject()["tool"]["ruff"]["lint"]
+    assert set(lint["select"]) == {"E4", "E7", "E9", "F"}
+
+
+def test_ci_and_contributor_commands_disable_bytecode_before_python_startup():
+    workflow = read_ci_workflow()
+    assert re.search(r'^env:\n  PYTHONDONTWRITEBYTECODE: "1"$', workflow, re.MULTILINE)
+    for relative_path in (
+        "CONTRIBUTING.md", "docs/development_handoff.md", "docs/release_checklist.md",
+    ):
+        document = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        setting = document.index('$env:PYTHONDONTWRITEBYTECODE = "1"')
+        assert setting < document.index("-m pytest")
+
+
 def test_pytest_uses_managed_workspace_basetemp_by_default():
     conftest = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
     checklist = (REPO_ROOT / "docs" / "release_checklist.md").read_text(encoding="utf-8")

@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
 concurrency:
   group: xl422-candidate-validation
   cancel-in-progress: false

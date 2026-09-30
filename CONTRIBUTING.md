@@ -10,6 +10,7 @@ checkout and the Studio Dispatch example.
 Use Python 3.10 or later. From the repository root:
 
 ```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
 python -m pip install -e ".[dev]"
 python -m pytest -q
 python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
@@ -18,6 +19,12 @@ python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cach
 Run focused tests while developing, then run the full checks before submitting
 changes. The [release checklist](docs/release_checklist.md) adds coverage, build,
 artifact, and installation verification for release candidates.
+
+Set `PYTHONDONTWRITEBYTECODE` before starting Python so pytest collection and
+child processes do not create bytecode in the source tree. The release checker
+rejects generated cache files. Ruff's selected `E4`, `E7`, `E9`, and `F` checks
+are explicit in `pyproject.toml`, so a new Ruff default does not change the
+repository's lint policy.
 
 ## Change scope
 

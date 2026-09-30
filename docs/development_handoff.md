@@ -19,6 +19,7 @@ existing history and does not replace the package with an older source export.
 From this repository root on Windows:
 
 ```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -c "import role_aware_dashboard_toolkit as r; print(r.__file__)"
@@ -29,6 +30,8 @@ Create the environment only if it does not already exist. The printed package
 path must resolve inside this checkout. The local handoff environment may reuse
 already installed system packages; that is convenient development setup, not an
 isolated installation proof. Follow the release checklist for isolated builds.
+The bytecode setting applies before test collection and is inherited by child
+processes, keeping generated cache files out of the source tree.
 
 Run the full suite with `python -m pytest -q` and lint with
 `python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache`

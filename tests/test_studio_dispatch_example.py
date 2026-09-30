@@ -40,8 +40,15 @@ def field(at, key):
     return next(w for w in candidates if w.key in (key, '_radt_read_only_control__' + key))
 
 
+def chart_elements(at):
+    # Streamlit renamed the chart element; both carry the same Arrow datasets.
+    return [*at.get('arrow_vega_lite_chart'), *at.get('vega_lite_chart')]
+
+
 def chart(at):
-    proto = at.get('arrow_vega_lite_chart')[0].proto
+    charts = chart_elements(at)
+    assert len(charts) == 1
+    proto = charts[0].proto
     rows = pa.ipc.open_stream(proto.datasets[0].data.data).read_all().to_pylist()
     return json.loads(proto.spec), rows
 
@@ -121,12 +128,12 @@ def test_workload_notes_navigation_preserves_values(app):
     app.number_input(key='weekly_hours').set_value(90).run()
     app.radio(key='studio_view').set_value('Notes').run()
     healthy(app)
-    assert not app.get('arrow_vega_lite_chart')
+    assert not chart_elements(app)
     assert 'Studio notes' in [x.value for x in app.subheader]
     assert any('Synthetic planning exercise' in x.value for x in app.info)
     app.radio(key='studio_view').set_value('Workload').run()
     healthy(app)
-    assert len(app.get('arrow_vega_lite_chart')) == 1
+    assert len(chart_elements(app)) == 1
     assert metrics(app)['Weekly capacity'] == '90 h'
 
 

@@ -156,11 +156,13 @@ def test_mixed_audit_cells_render_without_arrow_fallback_or_raw_record_mutation(
     assert len(app.dataframe) == 1
     display = app.dataframe[0].value
     table = arrow.Table.from_pandas(display, preserve_index=False)
-    assert arrow.types.is_string(table.schema.field("old").type)
-    assert arrow.types.is_string(table.schema.field("new").type)
+    # pandas 3 uses Arrow's large-string storage for the same text values.
+    for column in ("old", "new"):
+        assert table.schema.field(column).type in (arrow.string(), arrow.large_string())
     assert list(display["new"][:3]) == ["2", "False", "Urgent"]
     assert "'size': 2" in display["new"][3]
-    assert display["old"][4] is None
+    assert pandas.isna(display["old"][4])
+    assert table["old"][4].as_py() is None
     audit = app.session_state["audit"]
     events = audit.all_events()
     assert events == app.session_state["original_events"]

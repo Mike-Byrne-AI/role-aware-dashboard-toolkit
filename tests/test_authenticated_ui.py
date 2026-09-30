@@ -216,12 +216,30 @@ def test_stale_admin_freeze_callback_cannot_overwrite_newer_server_revision():
     assert len(events) == 2
 
 
-def test_viewer_forged_toggle_callback_cannot_change_shared_freeze():
+def test_viewer_forged_toggle_callback_cannot_change_shared_freeze(monkeypatch):
+    import streamlit as st
+
+    callbacks = []
+    original_toggle = st.toggle
+
+    def capture_toggle(*args, **kwargs):
+        if kwargs.get("key") == "_radt_shared_frozen":
+            callbacks.append(kwargs["on_change"])
+        return original_toggle(*args, **kwargs)
+
+    monkeypatch.setattr(st, "toggle", capture_toggle)
     host = _host(("Viewer",))
     app = _app(host)
     before = host.store.read_freeze()
     assert app.toggle(key="_radt_shared_frozen").disabled
-    _healthy(app.toggle(key="_radt_shared_frozen").set_value(False).run())
+    # Newer Streamlit blocks disabled interactions before dispatching callbacks.
+    # Invoke the actual registered callback with a forged submission so the
+    # toolkit's independent authorization guard is still exercised.
+    submission = {"_radt_shared_frozen": False, "_radt_freeze_revision": before.revision}
+    with monkeypatch.context() as callback_context:
+        callback_context.setattr(st, "session_state", submission)
+        callbacks[-1]()
+    assert submission["_radt_freeze_denied"] is True
     assert host.store.read_freeze() == before
     assert app.toggle(key="_radt_shared_frozen").value is True
     assert not any(event["type"] == "shared_freeze_changed" for event in host.audit.all_events())

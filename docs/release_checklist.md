@@ -24,12 +24,17 @@ it does not verify or claim PyPI ownership, reservation, or publishing rights.
 ## Source quality
 
 ```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
 py -3 -m pytest -q
 py -3 -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75
 py -3 -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
 py -3 tools/pre_release_check.py --json --require-clean
 py -3 -m pip check
 ```
+
+Set the bytecode environment variable before Python starts, including pytest
+collection and child processes. Hosted CI applies the same setting to all jobs.
+Ruff uses the explicit `E4`, `E7`, `E9`, and `F` selection in `pyproject.toml`.
 
 The clean-source gate includes tracked and untracked files so candidate
 artifacts can be tied to the checked-out commit. Every local check must pass,
