@@ -56,6 +56,22 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
             ),
             description="Profile persistence and auditable dashboard state changes.",
         ),
+        "authenticated-access": family_cls(
+            family_id="authenticated-access",
+            display_name="Authenticated access (module imports)",
+            symbols=(
+                "Identity", "AccessDenied", "AccessPolicy", "principal_id",
+                "AccessStore", "AccessStoreError", "FreezeConflict", "FreezeState",
+                "InMemoryAccessStore", "SQLiteAccessStore", "prepare_access",
+                "StreamlitIdentityResolver", "render_sign_in", "bind_audit_identity",
+                "can_mutate", "read_identity_key", "initialize_access", "ProvisioningError",
+            ),
+            description="Verified identities and server-owned grants from access and access_store; "
+            "prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC; "
+            "access_audit binds actors; security.can_mutate guards authenticated record writes; "
+            "access_cli provides trusted local provisioning. "
+            "Import from these modules; the root namespace stays unchanged.",
+        ),
         "runtime-and-observability": family_cls(
             family_id="runtime-and-observability",
             display_name="Runtime and observability",

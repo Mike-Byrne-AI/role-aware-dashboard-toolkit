@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import copy
 from typing import Any
 
-from ._ui_state import retain_control_state
+from ._ui_state import retain_control_state, restore_unauthorized_control_state
 from .appearance import validate_dashboard_appearance, validate_dashboard_colors
 from .audit import AuditLog
 from .controls import ControlRegistry
@@ -65,6 +66,8 @@ class DashboardConfig:
         sections: DashboardSections | None = None,
         card_background_color: str | None = None,
         group_background_colors: Mapping[str, str] | None = None,
+        auth_mode: str | None = None,
+        access: Any | None = None,
     ):
         self.title = title
         self.subtitle = subtitle
@@ -79,6 +82,16 @@ class DashboardConfig:
         self.layout = layout
         self.columns_per_row = max(1, columns_per_row)
         self.auth_hook = auth_hook
+        self.auth_mode = auth_mode if auth_mode is not None else ("authenticated" if access is not None else "host" if auth_hook else "demo")
+        if self.auth_mode not in {"authenticated", "demo", "host"}:
+            raise ValueError("auth_mode must be authenticated, demo, or host")
+        if access is not None and self.auth_mode != "authenticated":
+            raise ValueError("access requires authenticated mode")
+        if self.auth_mode == "authenticated" and auth_hook is not None:
+            raise ValueError("Choose access or the legacy auth_hook, not both")
+        if self.auth_mode == "host" and auth_hook is None:
+            raise ValueError("host mode requires auth_hook")
+        self.access = access
         self.sanitize_session_state = bool(sanitize_session_state)
         self.observability = observability
         self.plugins = plugins if plugins is not None else PluginRegistry()
@@ -121,13 +134,48 @@ def _require_streamlit() -> Any:
     return st
 
 
+def prepare_access(config: DashboardConfig) -> SecurityContext:
+    """Authenticate before a host loads protected data or creates session resources.
+
+    Use this at the beginning of an authenticated Streamlit application, before
+    widgets. Raises AccessDenied for a missing/invalid identity, role grant, or
+    access store. A principal change clears session state and reruns the script.
+    Catch AccessDenied to show the provider sign-in flow. ``render`` rechecks
+    access later; this helper does not authorize arbitrary host operations.
+    """
+    from .access import AccessDenied
+    from ._access_ui import prepare_authenticated_access
+
+    if config.auth_mode != "authenticated":
+        raise ValueError("prepare_access requires authenticated mode")
+    ctx = prepare_authenticated_access(_require_streamlit(), copy(config))
+    if ctx is None:
+        raise AccessDenied()
+    return ctx
+
+
 def render(config: DashboardConfig) -> SecurityContext:
     streamlit_runtime = _require_streamlit()
+    if config.auth_mode == "authenticated":
+        # Binding an actor must never mutate a config shared between sessions.
+        config = copy(config)
+    # Authenticate before toolkit/plugin data surfaces. Hosts call prepare_access
+    # before their own reads. Streamlit callbacks must also guard each mutation.
+    prepared_access = None
+    if config.auth_mode == "authenticated":
+        from ._access_ui import prepare_authenticated_access
+        prepared_access = prepare_authenticated_access(streamlit_runtime, config)
+        if prepared_access is None:
+            return SecurityContext(role="Unauthenticated", controls_writable=False)
     retain_control_state(config.registry, streamlit_runtime.session_state)
-    plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": None})
+    if prepared_access is not None:
+        restore_unauthorized_control_state(config.registry, streamlit_runtime.session_state, prepared_access)
+    plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": prepared_access})
     # Setup can register additional controls on every Streamlit script run.
     # Retain those values too before sidebar actions can trigger an early rerun.
     retain_control_state(config.registry, streamlit_runtime.session_state)
+    if prepared_access is not None:
+        restore_unauthorized_control_state(config.registry, streamlit_runtime.session_state, prepared_access)
     # Plugins may register groups during setup; validate overrides before widgets.
     try:
         validate_dashboard_appearance(config, st=streamlit_runtime)
@@ -164,7 +212,10 @@ def render(config: DashboardConfig) -> SecurityContext:
             render_groups(streamlit_runtime, state.groups, ctx, config)
 
         if section_visible(config, "observability") and config.observability and config.observability.enabled:
-            panel = ObservabilityPanel(config.observability, state.audit, streamlit_runtime.session_state)
+            panel = ObservabilityPanel(
+                config.observability, state.audit, streamlit_runtime.session_state,
+                can_read_audit=lambda: has_perm(ctx, "can_view_audit"),
+            )
             panel.render(streamlit_runtime)
 
     if section_visible(config, "runbook"):

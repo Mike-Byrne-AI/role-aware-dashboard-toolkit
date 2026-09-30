@@ -102,7 +102,9 @@ def test_examples_index_describes_only_the_retained_examples():
     text = _read("README.md")
     referenced_python_files = set(re.findall(r"\b[A-Za-z0-9_]+\.py\b", text))
 
-    assert referenced_python_files == RETAINED_EXAMPLES
+    assert referenced_python_files == RETAINED_EXAMPLES | {"app.py"}
+    assert "examples/operator_review/app.py" in text
+    assert "operator_review/README.md" in text
     assert "## Dependency-free library example" in text
     assert "python -m examples.core_library" in text
     assert "## Streamlit dashboard" in text

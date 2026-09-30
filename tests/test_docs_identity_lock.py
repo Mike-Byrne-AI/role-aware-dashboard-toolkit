@@ -65,4 +65,5 @@ def test_readme_primary_paths_use_only_retained_generic_examples():
     assert referenced_examples == {
         "examples.core_library",
         "examples/dashboard_admin_controls_app.py",
+        "examples/operator_review",
     }

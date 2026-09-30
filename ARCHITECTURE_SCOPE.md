@@ -27,6 +27,7 @@ authority beyond the policy supplied by the host application.
 Optional dependencies stay behind narrow boundaries:
 
 - `workbench` provides Streamlit rendering
+- `auth` adds Streamlit OIDC sign-in dependencies for explicit role grants
 - `api` provides FastAPI routes
 - `pandas` provides tabular history views
 - `full` installs all supported runtime extras

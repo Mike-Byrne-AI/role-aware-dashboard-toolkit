@@ -10,6 +10,14 @@ Role-Aware Dashboard Toolkit defines one Python distribution with a dependency-f
 - Docs: `docs/api_security.md`
 - Description: Optional FastAPI control, profile, role, and audit routes.
 
+## Role-Aware Dashboard Toolkit authenticated Streamlit UI
+
+- Artifact id: `auth`
+- Family: `ui`
+- Install target: `role-aware-dashboard-toolkit[auth]`
+- Docs: `role_aware_dashboard_toolkit/resources/guides/authentication.md`
+- Description: Optional OIDC login with server-owned role grants and shared freeze.
+
 ## Role-Aware Dashboard Toolkit core
 
 - Artifact id: `core`

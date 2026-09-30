@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,6 +19,10 @@ class SecurityContext:
     role: str = ""
     perms: dict[str, bool] = field(default_factory=dict)
     controls_writable: bool = True
+    authenticated: bool = False
+    user_id: str = ""
+    session_id: str = ""
+    _authorize: Callable[[str, bool], bool] | None = field(default=None, repr=False, compare=False)
 
 
 
@@ -41,10 +45,13 @@ def has_perm(ctx: SecurityContext | None, key: str, *, default: bool = False) ->
     if ctx is None:
         return bool(default)
     if ctx.perms is None:
-        return bool(default)
+        return False if ctx.authenticated else bool(default)
     if not isinstance(ctx.perms, Mapping):
         raise TypeError("SecurityContext.perms must be a mapping")
-    return bool(ctx.perms.get(key, default))
+    permitted = bool(ctx.perms.get(key, default))
+    if ctx.authenticated:
+        return permitted and ctx._authorize is not None and ctx._authorize(key, False)
+    return permitted
 
 
 
@@ -54,7 +61,20 @@ def can_write(ctx: SecurityContext | None, perm_key: str, *, default: bool = Fal
         return bool(default)
     if not bool(getattr(ctx, "controls_writable", True)):
         return False
+    if ctx.authenticated:
+        return (isinstance(ctx.perms, Mapping) and bool(ctx.perms.get(perm_key, default)) and ctx._authorize is not None
+                and ctx._authorize(perm_key, True))
     return has_perm(ctx, perm_key, default=default)
+
+
+def can_mutate(ctx: SecurityContext | None, perm_key: str, *, default: bool = False) -> bool:
+    """Authenticated record writes obey the shared freeze; legacy policy stays compatible.
+
+    Use can_write for controls in every mode. This helper brings existing record
+    surfaces under authenticated-mode freeze without changing legacy workflows.
+    """
+    check = can_write if ctx is not None and ctx.authenticated else has_perm
+    return check(ctx, perm_key, default=default)
 
 
 @dataclass
@@ -72,6 +92,7 @@ BUILTIN_ROLES: dict[str, RoleDef] = {
         description="Full access to controls, profiles, runs, decisions, governance, packet export, and audit.",
         perms={
             "can_edit_controls": True,
+            "can_manage_freeze": True,
             "can_view_audit": True,
             "can_manage_audit": True,
             "can_save_profiles": True,

@@ -10,8 +10,8 @@ from ..operator_memory import (
     build_operator_note,
     build_operator_summary,
 )
-from ..security import has_perm
-from .shared import _render_table
+from ..security import can_mutate, has_perm
+from .shared import _record_actor, _render_table
 
 
 def _render_operator_memory_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[str, Any]) -> None:
@@ -29,13 +29,13 @@ def _render_operator_memory_sidebar(st: Any, config: Any, ctx: Any, active_run: 
     st.text_input("Incident summary", key="_radt_incident_summary")
     st.text_input("Suspected cause", key="_radt_incident_cause")
 
-    can_comment = has_perm(ctx, "can_comment_runs", default=False)
-    if st.button("Add operator note", key="_radt_operator_note_btn", disabled=not can_comment) and can_comment:
+    can_comment = can_mutate(ctx, "can_comment_runs", default=False)
+    if st.button("Add operator note", key="_radt_operator_note_btn", disabled=not can_comment) and can_mutate(ctx, "can_comment_runs"):
         note = build_operator_note(
             str(st.session_state.get("_radt_operator_note_body", "")),
             run_id=str(active_run.get("run_id", "")),
             checkpoint_id=latest_checkpoint_id,
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             event_type=str(st.session_state.get("_radt_operator_note_type", "note")),
         )
@@ -44,13 +44,13 @@ def _render_operator_memory_sidebar(st: Any, config: Any, ctx: Any, active_run: 
         st.toast(f"Operator note saved: {note['note_id']}")
         st.rerun()
 
-    can_manage_runs = has_perm(ctx, "can_manage_runs", default=False)
-    if st.button("Open incident", key="_radt_operator_incident_btn", disabled=not can_manage_runs) and can_manage_runs:
+    can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
+    if st.button("Open incident", key="_radt_operator_incident_btn", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         incident = build_incident_record(
             str(active_run.get("run_id", "")),
             str(st.session_state.get("_radt_incident_title", "")),
             checkpoint_id=latest_checkpoint_id,
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             severity=str(st.session_state.get("_radt_incident_severity", "medium")),
             summary=str(st.session_state.get("_radt_incident_summary", "")),
@@ -136,21 +136,21 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
             decisions=decisions,
             incidents=incidents,
             handoff_to=str(st.session_state.get("_radt_handoff_to", "")),
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
             source_version=getattr(config, "version", ""),
         )
         with st.expander("Narrative handoff packet", expanded=False):
             st.json(narrative)
-            can_manage_runs = has_perm(ctx, "can_manage_runs", default=False)
+            can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
             if (
                 st.button(
                     "Save narrative handoff packet",
                     key=f"_radt_save_narrative_{run_id}",
                     disabled=not can_manage_runs,
                 )
-                and can_manage_runs
+                and can_mutate(ctx, "can_manage_runs")
             ):
                 memory_store.save_narrative(narrative)
                 config.audit.log("narrative_handoff_save", detail=narrative["narrative_id"], role=ctx.role, source="ui")

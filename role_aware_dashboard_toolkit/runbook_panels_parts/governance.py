@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from ..governance import governance_summary, summarize_governance
-from ..security import has_perm
+from ..security import can_mutate, has_perm
 from .review_models import build_governance_panel_preview
+from .shared import _record_actor
 
 
 def _render_governance_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]]) -> None:
@@ -23,7 +24,7 @@ def _render_governance_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str
     preview = build_governance_panel_preview(
         config,
         selected_case,
-        actor=str(st.session_state.get("_radt_user_id", "")),
+        actor=_record_actor(ctx, st.session_state),
         role=ctx.role,
     )
     if preview is None:
@@ -33,11 +34,11 @@ def _render_governance_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str
     existing = preview.get("existing")
 
     records = governance_store.list_records()
-    can_save = has_perm(ctx, "can_manage_governance", default=False)
+    can_save = can_mutate(ctx, "can_manage_governance", default=False)
     st.subheader(getattr(config, "governance_title", "Governance"))
     st.caption("Preview, validate, then explicitly save governance records. Rendering the panel does not persist state.")
     st.json(governance_summary(governance))
-    if can_save and st.button("Save governance snapshot", key=f"_radt_governance_save::{selected_case_id}"):
+    if can_save and st.button("Save governance snapshot", key=f"_radt_governance_save::{selected_case_id}") and can_mutate(ctx, "can_manage_governance"):
         governance_store.save(governance)
         records = governance_store.list_records()
         if hasattr(st, "toast"):

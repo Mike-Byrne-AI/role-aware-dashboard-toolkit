@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `43`
+- Documented module-only public symbols: `61`
 
 ## Usage recipes
 
@@ -65,6 +65,33 @@ Root exports: `5`; module-only symbols: `1`.
 - `PluginRegistry`
 
 Dashboard rendering and trusted plugin registration.
+
+## Authenticated access (module imports)
+
+Classification: `stable`
+
+Root exports: `0`; module-only symbols: `18`.
+
+- `Identity` (module-only)
+- `AccessDenied` (module-only)
+- `AccessPolicy` (module-only)
+- `principal_id` (module-only)
+- `AccessStore` (module-only)
+- `AccessStoreError` (module-only)
+- `FreezeConflict` (module-only)
+- `FreezeState` (module-only)
+- `InMemoryAccessStore` (module-only)
+- `SQLiteAccessStore` (module-only)
+- `prepare_access` (module-only)
+- `StreamlitIdentityResolver` (module-only)
+- `render_sign_in` (module-only)
+- `bind_audit_identity` (module-only)
+- `can_mutate` (module-only)
+- `read_identity_key` (module-only)
+- `initialize_access` (module-only)
+- `ProvisioningError` (module-only)
+
+Verified identities and server-owned grants from access and access_store; prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC; access_audit binds actors; security.can_mutate guards authenticated record writes; access_cli provides trusted local provisioning. Import from these modules; the root namespace stays unchanged.
 
 ## Controls and security
 

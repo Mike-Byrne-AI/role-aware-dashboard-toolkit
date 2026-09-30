@@ -77,7 +77,9 @@ Useful `DashboardConfig` collaborators include:
 - `observability` for telemetry sampling
 - `run_store` for run/checkpoint panels
 - explicit team, decision, memory, case, and governance stores
-- `auth_hook` for binding the displayed role to a trusted identity
+- `access` and `auth_mode="authenticated"` for verified identity, assigned roles,
+  and shared freeze
+- `auth_hook` for existing host-managed role integrations
 
 The optional record stores are module-level APIs; see
 [the public API reference](public_api.md).
@@ -106,10 +108,14 @@ custom_roles = {
 }
 ```
 
-Dashboard roles are authorization context, not authentication. A shared
-deployment must supply an `auth_hook` backed by trusted identity, and should be
-protected by authenticated TLS ingress. Do not authorize a user solely from the
-visible role selector.
+Demo mode permits self-selected roles and does not authenticate users. For a
+shared dashboard, start with `init shared-dashboard --auth` and follow the
+[authentication guide](../role_aware_dashboard_toolkit/resources/guides/authentication.md).
+Verified users can select only server-assigned roles, and protected writes
+recheck identity, grants and shared freeze. Call the module-level
+`dashboard.prepare_access(config)` before loading protected host data. Existing
+`auth_hook` integrations remain supported; deployment credentials, TLS, filesystem
+permissions and authorization of custom host operations remain host duties.
 
 ## Profiles
 

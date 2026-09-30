@@ -12,8 +12,8 @@ from ..caseboard import (
     reopen_case,
     summarize_caseboard,
 )
-from ..security import has_perm
-from .shared import _render_table
+from ..security import can_mutate, has_perm
+from .shared import _record_actor, _render_table
 
 
 def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]], selected_run: dict[str, Any]) -> None:
@@ -44,8 +44,8 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
     st.multiselect("Linked narratives", options=narrative_options, key="_radt_case_narrative_ids")
     st.text_area("Case finding / note", key="_radt_case_note_body", height=70)
 
-    can_manage_runs = has_perm(ctx, "can_manage_runs", default=False)
-    if st.button("Create case", key="_radt_case_create_btn", disabled=not can_manage_runs) and can_manage_runs:
+    can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
+    if st.button("Create case", key="_radt_case_create_btn", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         selected_incidents = [item for item in incidents if str(item.get("incident_id") or "") in set(st.session_state.get("_radt_case_incident_ids", []))]
         selected_narratives = [item for item in narratives if str(item.get("narrative_id") or "") in set(st.session_state.get("_radt_case_narrative_ids", []))]
         selected_notes = [item for item in notes if str(item.get("run_id") or "") in set(st.session_state.get("_radt_case_run_ids", []))][-3:]
@@ -54,7 +54,7 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             incidents=selected_incidents,
             narratives=selected_narratives,
             notes=selected_notes,
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
             priority=str(st.session_state.get("_radt_case_priority", "normal")),
@@ -66,13 +66,13 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             run_ids=list(st.session_state.get("_radt_case_run_ids", [])),
             incident_ids=list(st.session_state.get("_radt_case_incident_ids", [])),
             narrative_ids=list(st.session_state.get("_radt_case_narrative_ids", [])),
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
         )
         note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
         if note_body:
-            case = add_case_notes(case, [note_body], actor=str(st.session_state.get("_radt_user_id", "")), role=ctx.role, source="ui")
+            case = add_case_notes(case, [note_body], actor=_record_actor(ctx, st.session_state), role=ctx.role, source="ui")
         case_store.save(case)
         config.audit.log("case_create", detail=case["case_id"], role=ctx.role, source="ui")
         st.toast(f"Case created: {case['case_id']}")
@@ -94,11 +94,11 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
     with st.expander("Case record", expanded=False):
         st.json(selected_case)
 
-    if st.button("Reopen case", key=f"_radt_reopen_case_{selected_case_id}", disabled=not can_manage_runs) and can_manage_runs:
+    if st.button("Reopen case", key=f"_radt_reopen_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         updated = reopen_case(
             selected_case,
             reason="Reopened from caseboard UI.",
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
         )
@@ -107,11 +107,11 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         st.toast(f"Case reopened: {updated['case_id']}")
         st.rerun()
 
-    if st.button("Close case", key=f"_radt_close_case_{selected_case_id}", disabled=not can_manage_runs) and can_manage_runs:
+    if st.button("Close case", key=f"_radt_close_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         updated = close_case(
             selected_case,
             reason="Closed from caseboard UI.",
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
         )
@@ -121,12 +121,12 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         st.rerun()
 
     note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
-    can_comment = bool(note_body) and has_perm(ctx, "can_comment_runs", default=False)
-    if st.button("Append finding to selected case", key=f"_radt_case_append_note_{selected_case_id}", disabled=not can_comment) and can_comment:
+    can_comment = bool(note_body) and can_mutate(ctx, "can_comment_runs", default=False)
+    if st.button("Append finding to selected case", key=f"_radt_case_append_note_{selected_case_id}", disabled=not can_comment) and note_body and can_mutate(ctx, "can_comment_runs"):
         updated = add_case_notes(
             selected_case,
             [note_body],
-            actor=str(st.session_state.get("_radt_user_id", "")),
+            actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             source="ui",
         )

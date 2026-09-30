@@ -26,3 +26,5 @@ venv/
 /pre_release_report.json
 /release_candidate_evidence.json
 .env
+.streamlit/secrets.toml
+access.sqlite3*

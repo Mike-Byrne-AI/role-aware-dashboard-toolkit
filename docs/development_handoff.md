@@ -37,6 +37,14 @@ using the same environment. Installed package guidance is available through
 
 ## Examples and regression coverage
 
+[Operator Review Lab](../examples/operator_review/README.md) demonstrates the
+complete baseline, candidate, outcome comparison, human review and evidence
+export workflow. Its metrics are deterministic simulations and its stores are
+session-local. A separate report renderer converts validated run packets to
+standalone read-only HTML. Tests cover the workflow, permission/freeze boundaries,
+and imported report validation and escaping. Independent adopter feedback remains
+to be collected; automated checks do not establish usefulness or development speed.
+
 [Studio Dispatch](../examples/studio_dispatch/README.md) demonstrates six control
 types, named profiles, Viewer permissions, freeze, navigation, metrics and a
 workload chart. Its data and stores are entirely synthetic and session-local.
@@ -46,6 +54,49 @@ Existing core, API and UI regression tests retain the library fixes that came
 from consumer exercises. Private applications, source data, trial logs and
 historical orchestration records were not imported into this public tree. Further
 consumer examples should be transferred selectively with synthetic fixtures.
+
+## Authenticated access work
+
+The optional access layer adds provider-neutral OIDC, explicit server-owned role
+grants, a SQLite shared freeze and pseudonymous event attribution. See the
+[installed authentication guide](../role_aware_dashboard_toolkit/resources/guides/authentication.md)
+and generate a host app with `init shared-dashboard --auth`. No provider
+credentials or account grants belong in this checkout. Existing demo behavior
+is retained and labeled; the optional HTTP API has its own access policy.
+
+Source tests cover role spoofing, expiry/revocation, account changes, concurrent
+freeze updates and denied native writes. Actual provider configuration and
+deployment ACL/TLS verification remain host acceptance work. These changes do
+not extend earlier release evidence.
+
+### Local acceptance, 2026-09-30
+
+[verified] The working tree passed the full suite: 1,416 tests passed and one
+POSIX-permission test was skipped on Windows (Python 3.11, Streamlit 1.52.2).
+Ruff and the local pre-release configuration checks passed. The installed-wheel
+smoke test additionally checked authentication imports without optional hosts,
+the authenticated starter files, and its offline guide. Windows emitted cleanup
+warnings for temporary Git fixture files; test assertions completed successfully.
+
+[verified] A separate local test provider completed signed OIDC login through
+isolated Edge browser sessions. All 12 acceptance assertions passed, covering
+unassigned-account denial, assigned-role selection, removal of authority in
+Viewer mode, shared freeze, stale revision rejection, live revocation, logout
+recovery and downgraded administrator actions. Only invented accounts and
+synthetic data were used; provider state and evidence stay outside this source
+tree. This does not certify an external identity provider configuration.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -o addopts='-ra -p no:cacheprovider' -q
+.\.venv\Scripts\python.exe -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
+.\.venv\Scripts\python.exe -B tools/pre_release_check.py --json
+.\.venv\Scripts\python.exe -m pytest tests/test_release_hygiene_distribution.py::test_wheel_installed_core_imports_without_optional_dependencies -q
+```
+
+This is local feature acceptance, not publication or hosted deployment evidence.
+Provider credentials, explicit real-account grants, TLS and storage ACLs must be
+configured and checked for each deployment. Start with the authenticated starter
+and its guide; no real identities or credentials were provisioned during testing.
 
 ## Release status
 

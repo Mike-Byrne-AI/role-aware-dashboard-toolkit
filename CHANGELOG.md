@@ -24,6 +24,22 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
   Arrow conversion fallbacks.
 - Profile menus refresh immediately after saving or deleting, preserving
   surrounding widgets and avoiding an additional script rerun.
+- Optional outcome comparisons with metric units and recorded sample times,
+  keeping existing comparison results unchanged unless requested.
+- Read-only profile restore previews explain current, saved and effective
+  values, sanitation and permission restrictions before loading.
+- A synthetic Operator Review Lab connects baseline profiles, candidate
+  checkpoints, human review and portable read-only evidence reports.
+- HTTP API guidance makes per-instance state and callback boundaries explicit.
+- Optional authenticated access verifies OIDC identities, enforces server-owned
+  role grants and a durable administrator-controlled freeze, and attributes
+  native writes to opaque actors. Explicit local provisioning and `init --auth`
+  provide a starter without automatically enrolling users or storing passwords.
+  Existing demo and host-hook integrations remain available.
+- Observability rechecks audit-read permission after telemetry sampling; the
+  authenticated starter retains its verified session-start audit event.
+- Decision and handoff views respect control-read permission without altering
+  the stored evidence.
 
 The core package has no required third-party dependencies. Public release
 remains subject to the metadata, security-intake, and validation gates in the

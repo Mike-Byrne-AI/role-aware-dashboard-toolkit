@@ -131,7 +131,7 @@ def build_dashboard_config(resources: dict) -> radt.DashboardConfig:
     ))
     return radt.DashboardConfig(
         title=APP_TITLE, subtitle="A clear view of this week's work.", icon="◈",
-        registry=build_controls(), custom_roles=build_roles(),
+        registry=build_controls(), custom_roles=build_roles(), auth_mode="demo",
         audit=resources["audit"], profile_store=resources["profiles"],
         run_store=resources["runs"], plugins=plugins,
         layout="columns", columns_per_row=2,
@@ -140,7 +140,7 @@ def build_dashboard_config(resources: dict) -> radt.DashboardConfig:
         sections=radt.DashboardSections(
             audit_writer=False, plugin_details=False, runbook=False,
         ),
-        # For shared use, supply auth_hook that returns a role from trusted identity.
+        # For shared use, see `guide authentication` and `init --auth`.
         # To show runs/checkpoints, change runbook=False to runbook=True above.
     )
 

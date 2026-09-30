@@ -19,6 +19,27 @@ telemetry evidence subject to the current visibility permissions. Sensitive
 controls are excluded. The run keeps its starting profile identifier and updates
 its active profile identifier at checkpoint/end.
 
+Native checkpoint and run comparisons show recorded outcome measurements next
+to control changes when `can_view_metrics` is granted. They retain sample times
+and host-supplied units. Change means right minus left; missing, invalid or
+incompatible measurements have no numeric delta. These observations do not prove
+that a control change caused an outcome. Run comparisons use each run's final
+checkpoint without substituting an older sample when telemetry is absent.
+
+For a custom comparison, opt in explicitly; existing calls keep their original
+result shape:
+
+```python
+comparison = radt.compare_checkpoints(left, right, include_telemetry=True)
+observations = comparison["telemetry_comparison"]
+# observations: left_sample_ts, right_sample_ts, metrics
+# Each metric: from, to, from_unit, to_unit, delta, status
+```
+
+Telemetry hooks can supply `{"metrics": {"latency": 120}, "units": {"latency": "ms"}}`.
+Unknown units are shown as unspecified; the toolkit does not convert units.
+Direct callers own authorization for the records they compare.
+
 Replay restores registered non-sensitive values. Native replay is staged after
 widgets and applied before widgets on the next render; current role, writable
 state and every affected permission are rechecked. A denied replay applies

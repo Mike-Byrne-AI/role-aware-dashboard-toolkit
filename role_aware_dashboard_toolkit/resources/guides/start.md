@@ -23,6 +23,10 @@ python -m streamlit run app.py
 AGENTS.md. For existing projects, read `example starter` and adapt the relevant
 files under the host's instructions.
 
+For shared use, choose `init my-dashboard --auth` and read `guide authentication`
+for provider configuration and explicit role provisioning. Plain `init` is the
+local role-selection demo, with no protection against choosing Admin.
+
 The starter requires Streamlit >=1.44 for independent sidebar theme colors.
 If needed, install `streamlit>=1.44` into the same environment. The toolkit core
 itself has no mandatory runtime dependencies; the optional renderer needs

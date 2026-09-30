@@ -99,7 +99,7 @@ def test_ci_checkouts_do_not_persist_credentials():
 def test_ci_smokes_each_supported_optional_extra_without_product_adapters():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    for extra_name in ("workbench", "api", "pandas", "full"):
+    for extra_name in ("workbench", "auth", "api", "pandas", "full"):
         assert (
             f'pip install "${{wheel}}[{extra_name}]"'
             in workflow
@@ -144,26 +144,41 @@ def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
 def test_installed_smokes_keep_environments_outside_the_checkout():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     venv_targets = re.findall(r"python -m venv ([^\n]+)", workflow)
-    assert len(venv_targets) == 7
-    assert all(target.startswith('"$RUNNER_TEMP/') or target == "$venv" for target in venv_targets)
+    assert len(venv_targets) == 9
+    assert all(target.startswith('"$RUNNER_TEMP/') or target in {"$venv", "$authVenv"} for target in venv_targets)
     assert '$venv = Join-Path $env:RUNNER_TEMP ".wheel-smoke-win"' in workflow
-    assert workflow.count(" -I ") == 7
-    assert workflow.count("assert environment.is_relative_to(") == 7
-    assert workflow.count(".resolve().is_relative_to(environment)") == 7
+    assert '$authVenv = Join-Path $env:RUNNER_TEMP ".wheel-auth-smoke-win"' in workflow
+    assert workflow.count(" -I ") == 9
+    assert workflow.count("assert environment.is_relative_to(") == 9
+    assert workflow.count(".resolve().is_relative_to(environment)") == 9
     assert "sys.path[:] =" not in workflow
     assert "sys.path=[" not in workflow
     assert '--no-build-isolation' not in workflow
     assert '"$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip install --use-pep517 "$sdist"' in workflow
 
 
+def _installed_smoke_script(workflow: str, lane: str) -> str:
+    if lane == "windows-auth":
+        job = workflow.split("      - name: Auth wheel install smoke (Windows)\n", 1)[1]
+        body = re.search(r"\$authSmoke = @'\n(.*?)^          '@$", job, flags=re.MULTILINE | re.DOTALL).group(1)
+    else:
+        marker = "      - name: Wheel install smoke\n" if lane == "core" else f'          python -m venv "$RUNNER_TEMP/.wheel-{lane}-smoke"\n'
+        job = workflow.split(marker, 1)[1]
+        body = re.search(r"-I - <<'PY'\n(.*?)^          PY$", job, flags=re.MULTILINE | re.DOTALL).group(1)
+    return textwrap.dedent(body)
+
+
+@pytest.mark.parametrize("lane", ["core", "auth", "full", "windows-auth"])
 @pytest.mark.parametrize("source_on_path,venv_inside_checkout", [(False, False), (True, False), (False, True)])
-def test_actual_smoke_import_guard_preserves_external_install_and_rejects_checkout(monkeypatch, tmp_path, source_on_path, venv_inside_checkout):
+def test_actual_smoke_import_guard_preserves_external_install_and_rejects_checkout(monkeypatch, tmp_path, source_on_path, venv_inside_checkout, lane):
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    job = workflow.split("      - name: Wheel install smoke\n", 1)[1].split("      - name: Wheel optional-extra smokes", 1)[0]
-    body = re.search(r"-I - <<'PY'\n(.*?)^          PY$", job, flags=re.MULTILINE | re.DOTALL).group(1)
-    parsed = ast.parse(textwrap.dedent(body))
-    first_with = next(index for index, statement in enumerate(parsed.body) if isinstance(statement, ast.With))
-    prefix = compile(ast.Module(body=parsed.body[:first_with], type_ignores=[]), "workflow-import-guard", "exec")
+    parsed = ast.parse(_installed_smoke_script(workflow, lane))
+    import_boundary = next(
+        index for index, statement in enumerate(parsed.body)
+        if isinstance(statement, ast.With)
+        or isinstance(statement, ast.Import) and any(alias.name == "role_aware_dashboard_toolkit" for alias in statement.names)
+    )
+    prefix = compile(ast.Module(body=parsed.body[:import_boundary], type_ignores=[]), "workflow-import-guard", "exec")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     runner_temp = tmp_path / "runner"
@@ -183,3 +198,71 @@ def test_actual_smoke_import_guard_preserves_external_install_and_rejects_checko
         else:
             exec(prefix, {})
         assert sys.path == paths
+
+
+@pytest.mark.parametrize("lane", ["auth", "full", "windows-auth"])
+def test_auth_smokes_check_runtime_and_resources_from_installed_wheel(lane):
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    script = _installed_smoke_script(workflow, lane)
+    compile(script, f"workflow-{lane}", "exec")
+    for required in (
+        "import authlib", "import streamlit", "streamlit.login", "streamlit.logout",
+        "from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore, SQLiteAccessStore",
+        "from role_aware_dashboard_toolkit.access_cli import initialize_access",
+        "from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver",
+        "assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)",
+    ):
+        assert required in script
+    if lane == "windows-auth":
+        step = workflow.split("      - name: Auth wheel install smoke (Windows)\n", 1)[1]
+        for command in (
+            "python -m venv $authVenv", '& $authPython -m pip install "$($wheels[0].FullName)[auth]"',
+            "& $authPython -m pip check", "$authSmoke | & $authPython -I -",
+        ):
+            assert command + "\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in step
+        assert '$wheels.Count -ne 1' in step
+    else:
+        assert f'"$RUNNER_TEMP/.wheel-{lane}-smoke/bin/python" -m pip check' in workflow
+
+
+@pytest.mark.parametrize("lane", ["auth", "full", "windows-auth"])
+@pytest.mark.parametrize("problem", [None, "missing_file", "extra_file", "demo_mode", "bad_python", "missing_guide"])
+def test_actual_auth_smoke_rejects_incomplete_or_invalid_installed_resources(lane, problem):
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    body = ast.parse(_installed_smoke_script(workflow, lane)).body
+    if lane == "windows-auth":
+        body = next(statement for statement in body if isinstance(statement, ast.With)).body[0].body
+    first_check = next(
+        index for index, statement in enumerate(body)
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "starter" for target in statement.targets)
+    )
+    checks = compile(ast.Module(body=body[first_check:], type_ignores=[]), "workflow-auth-resources", "exec")
+    starter = dict.fromkeys(["app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"], "")
+    starter["app.py"] = 'auth_mode="authenticated"\n'
+    guide = "Use access_cli grant to provision explicitly."
+    if problem == "missing_file":
+        del starter[".gitignore"]
+    elif problem == "extra_file":
+        starter["secrets.toml"] = ""
+    elif problem == "demo_mode":
+        starter["app.py"] = 'auth_mode="demo"\n'
+    elif problem == "bad_python":
+        starter["app.py"] += "if\n"
+    elif problem == "missing_guide":
+        guide = ""
+
+    def read_starter(*, authenticated):
+        assert authenticated is True
+        return starter
+
+    def read_guide(topic):
+        assert topic == "authentication"
+        return {"content": guide}
+
+    namespace = {"read_starter": read_starter, "read_guide": read_guide}
+    if problem is None:
+        exec(checks, namespace)
+    else:
+        with pytest.raises(SyntaxError if problem == "bad_python" else AssertionError):
+            exec(checks, namespace)

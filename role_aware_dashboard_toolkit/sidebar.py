@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ._ui_state import apply_pending_replay
+from ._profile_preview import InvalidProfilePreviewValues, build_profile_restore_preview
+from ._ui_state import apply_pending_replay, remember_authorized_control_values
 from .profile_store import FileProfileStore
 from .diagnostics import build_diagnostic, diagnostic_text
 from .audit import _get_writer_shutdown_error, _get_writer_startup_error
@@ -16,9 +17,9 @@ from .sections import section_visible
 from .security import (
     SecurityContext,
     can_write,
+    can_mutate,
     get_role,
     get_role_names,
-    has_perm,
     make_security_context,
 )
 from .store_diagnostics import StorePathSecurityError, safe_store_write_path
@@ -68,13 +69,22 @@ def _resolve_authenticated_role(
 def render_sidebar(st: Any, config: Any) -> SidebarResult:
     audit = config.audit
     all_roles = get_role_names(config.custom_roles)
-    plugin_errors: list[PluginErrorRecord] = []
 
-    # Preserve writer configuration when its form is hidden or an earlier run
-    # action reruns the sidebar before that form can render.
+    # Preserve writer configuration when an earlier action reruns the sidebar.
     for key in ("_radt_audit_writer", "_radt_audit_path"):
         if key in st.session_state:
             st.session_state[key] = st.session_state[key]
+
+    if getattr(config, "auth_mode", "demo") == "authenticated":
+        from ._access_ui import render_authenticated_sidebar
+        with st.sidebar:
+            st.header(f"{config.icon} {config.title}".strip())
+            ctx = render_authenticated_sidebar(st, config)
+            if ctx is None:
+                return SidebarResult(
+                    make_security_context(_AUTH_FAILURE_ROLE, {}, controls_writable=False), [],
+                )
+            return _render_authorized_sidebar(st, config, ctx, all_roles)
 
     with st.sidebar:
         st.header(f"{config.icon} {config.title}".strip())
@@ -105,6 +115,7 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
             new_role = forced_role
             st.caption(f"Role locked by auth: {new_role}")
         else:
+            st.caption("Demo access: roles are self-selected; no user identity is verified.")
             new_role = st.selectbox(
                 "Role",
                 options=all_roles,
@@ -133,25 +144,25 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
         perms = dict(role_def.perms) if role_def else {}
         ctx = make_security_context(new_role, perms, controls_writable=writable)
 
-        apply_pending_replay(st, config, ctx)
-        if section_visible(config, "profiles"):
-            _render_profiles(st, config, ctx, all_roles)
-        render_runbook_sidebar(st, config, ctx)
-        _render_audit_writer_controls(st, config, ctx)
+        return _render_authorized_sidebar(st, config, ctx, all_roles)
 
-        if section_visible(config, "plugin_sidebar"):
-            plugin_errors.extend(
-                config.plugins.render_sidebar(
-                    {"st": st, "config": config, "ctx": ctx},
-                    initialize_plugins=False,
-                )
-            )
-        if section_visible(config, "plugin_details") and config.plugins.describe():
-            with st.expander("Plugins", expanded=False):
-                st.json(config.plugins.describe())
-        for error in plugin_errors:
-            st.warning(f"Plugin sidebar error: {error}")
 
+def _render_authorized_sidebar(st: Any, config: Any, ctx: SecurityContext, all_roles: list[str]) -> SidebarResult:
+    apply_pending_replay(st, config, ctx)
+    if section_visible(config, "profiles"):
+        _render_profiles(st, config, ctx, all_roles)
+    render_runbook_sidebar(st, config, ctx)
+    _render_audit_writer_controls(st, config, ctx)
+    plugin_errors = []
+    if section_visible(config, "plugin_sidebar"):
+        plugin_errors.extend(config.plugins.render_sidebar(
+            {"st": st, "config": config, "ctx": ctx}, initialize_plugins=False,
+        ))
+    if section_visible(config, "plugin_details") and config.plugins.describe():
+        with st.expander("Plugins", expanded=False):
+            st.json(config.plugins.describe())
+    for error in plugin_errors:
+        st.warning(f"Plugin sidebar error: {error}")
     return SidebarResult(ctx=ctx, plugin_errors=plugin_errors)
 
 
@@ -230,6 +241,34 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
                 source = str(loaded.get("source") or "")
                 if source:
                     st.caption(f"Source: {redact_text_local_paths(source, repo_root=str(config.profile_dir))}")
+                _render_profile_preview(st, config, ctx, loaded)
+
+
+def _render_profile_preview(
+    st: Any, config: Any, ctx: SecurityContext, profile: dict[str, Any],
+) -> None:
+    try:
+        preview = build_profile_restore_preview(profile, config.registry, st.session_state, ctx)
+    except InvalidProfilePreviewValues:
+        st.warning("Profile preview is unavailable: saved values are invalid.")
+        return
+    with st.expander("Preview profile changes", expanded=False):
+        if preview.blocked_reasons:
+            st.warning("Load is blocked; no values will change. " + " ".join(preview.blocked_reasons))
+        if preview.values_visible:
+            st.caption("Effective values show the proposed result after correction. Load rechecks permissions.")
+            if preview.rows:
+                st.dataframe(preview.rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No registered controls to restore.")
+        else:
+            st.caption("Values require permission to view controls and load profiles.")
+        if preview.corrected_count:
+            st.caption(f"{preview.corrected_count} value(s) would be corrected to match the current controls.")
+        if preview.unknown_count:
+            st.caption(f"{preview.unknown_count} unknown field(s) omitted; their values are hidden.")
+        if preview.sensitive_omitted_count:
+            st.caption(f"{preview.sensitive_omitted_count} sensitive saved field(s) omitted; saved values will not be restored.")
 
 
 def _render_profile_actions(
@@ -239,7 +278,7 @@ def _render_profile_actions(
     reg = config.registry
     audit = config.audit
     profiles_changed = False
-    can_save_profiles = has_perm(ctx, "can_save_profiles")
+    can_save_profiles = can_mutate(ctx, "can_save_profiles")
     can_load_profiles = can_write(ctx, "can_load_profiles")
     c_save, c_load = st.columns(2)
     with c_save:
@@ -248,7 +287,7 @@ def _render_profile_actions(
             key="_radt_profile_save",
             disabled=not can_save_profiles,
         )
-        if save_requested and can_save_profiles:
+        if save_requested and can_mutate(ctx, "can_save_profiles"):
             name = str(st.session_state.get("_radt_profile_name", "")).strip()
             if name:
                 parent_profile_id = selected_profile if selected_profile != "(none)" else ""
@@ -280,7 +319,7 @@ def _render_profile_actions(
             key="_radt_profile_load",
             disabled=not can_load_profiles,
         )
-        if load_requested and can_load_profiles:
+        if load_requested and can_write(ctx, "can_load_profiles"):
             choice = st.session_state.get("_radt_profile_choice", "(none)")
             if choice and choice != "(none)":
                 staged_state = dict(st.session_state)
@@ -301,6 +340,10 @@ def _render_profile_actions(
                         return profiles_changed
                     for ctrl in reg.all():
                         st.session_state[ctrl.key] = staged_state[ctrl.key]
+                    if getattr(ctx, "authenticated", False):
+                        remember_authorized_control_values(
+                            st.session_state, {ctrl.key: staged_state[ctrl.key] for ctrl in reg.all()},
+                        )
                     st.session_state["_radt_active_profile_id"] = str(result.get("profile_id") or choice)
                     audit.log_profile_load(choice, role=ctx.role)
                     loaded_keys = set(result.get("values", {}).keys())
@@ -325,7 +368,7 @@ def _render_profile_actions(
         key="_radt_profile_delete",
         disabled=not can_save_profiles,
     )
-    if delete_requested and can_save_profiles:
+    if delete_requested and can_mutate(ctx, "can_save_profiles"):
         choice = st.session_state.get("_radt_profile_choice", "(none)")
         if choice and choice != "(none)":
             if _profile_store_call(delete_profile, choice, profile_dir=config.profile_dir, store=profile_store):
@@ -342,7 +385,7 @@ def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) ->
     audit = config.audit
     audit_root = Path(getattr(config, "audit_dir", "audit_logs"))
     default_audit_path = (audit_root / "audit.jsonl").as_posix()
-    can_manage_writer = has_perm(ctx, "can_manage_audit")
+    can_manage_writer = can_mutate(ctx, "can_manage_audit")
 
     writer_on = bool(st.session_state.get("_radt_audit_writer", False))
     audit_path = str(st.session_state.get("_radt_audit_path", default_audit_path))
@@ -364,7 +407,7 @@ def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) ->
     lifecycle_error: dict[str, str] = {}
     startup_error: dict[str, str] = {}
     try:
-        if can_manage_writer:
+        if can_mutate(ctx, "can_manage_audit"):
             if writer_on and audit_path.strip():
                 try:
                     safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)

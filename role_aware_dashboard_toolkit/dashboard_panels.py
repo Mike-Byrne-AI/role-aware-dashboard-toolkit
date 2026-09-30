@@ -4,11 +4,12 @@ from contextlib import nullcontext
 from typing import Any
 
 from ._optional_pandas import load_optional_pandas
+from ._ui_state import last_authorized_control_value, remember_authorized_control_values
 from .appearance import group_background_color, styled_group_container
 from .audit import audit_event_view
 from .controls import ControlDef, _looks_like_int
 from .diagnostics import diagnostic_text
-from .security import SecurityContext, can_write, has_perm
+from .security import SecurityContext, can_write, can_mutate
 
 pd = None
 PANDAS_AVAILABLE: bool | None = None
@@ -37,7 +38,7 @@ def render_audit_panel(
     audit: Any,
     ctx: SecurityContext | None = None,
 ) -> None:
-    can_clear = has_perm(ctx, "can_manage_audit")
+    can_clear = can_mutate(ctx, "can_manage_audit")
     st.divider()
     with st.expander("Audit Log", expanded=False):
         events = audit.recent(100)
@@ -48,7 +49,7 @@ def render_audit_panel(
                 key="_radt_audit_clear",
                 disabled=not can_clear,
             )
-            if clear_requested and can_clear:
+            if clear_requested and can_mutate(ctx, "can_manage_audit"):
                 audit.clear()
                 st.rerun()
             return
@@ -67,7 +68,7 @@ def render_audit_panel(
                 key="_radt_audit_clear_btn",
                 disabled=not can_clear,
             )
-            if clear_requested and can_clear:
+            if clear_requested and can_mutate(ctx, "can_manage_audit"):
                 audit.clear()
                 st.rerun()
 
@@ -122,7 +123,11 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
     read_only_widget_key = f"{_READ_ONLY_CONTROL_KEY_PREFIX}{ctrl.key}"
     st.session_state.pop(read_only_widget_key, None)
     if not editable:
-        if ctrl.key in previous_values:
+        if getattr(ctx, "authenticated", False):
+            current_value = last_authorized_control_value(st.session_state, ctrl.key, ctrl.default)
+            old_value = current_value
+            previous_values[ctrl.key] = current_value
+        elif ctrl.key in previous_values:
             current_value = previous_values[ctrl.key]
             old_value = current_value
         else:
@@ -210,7 +215,18 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
     if not editable:
         return
 
+    # The authority may change while a widget is rendered (other session,
+    # expiry, or grant revocation). Do not run a callback on stale permission.
+    if new_value != old_value and not can_write(ctx, ctrl.permission):
+        previous_values[ctrl.key] = old_value
+        # Widgets already exist; restore before their next creation, without
+        # invoking the application callback or recording a successful write.
+        st.session_state.setdefault("_radt_denied_control_restore", {})[ctrl.key] = old_value
+        st.rerun()
+
     previous_values[ctrl.key] = new_value
+    if getattr(ctx, "authenticated", False):
+        remember_authorized_control_values(st.session_state, {ctrl.key: new_value})
     if new_value != old_value:
         config.registry.mark_user_set(ctrl.key, st.session_state)
         audit.log_control_change(

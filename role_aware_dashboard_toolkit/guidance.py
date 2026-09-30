@@ -18,6 +18,7 @@ _GUIDE_TITLES = {
     "sections": "Choose panels and menus",
     "plugins": "Add custom panels and sidebar callbacks",
     "permissions": "Roles, permissions and frozen controls",
+    "authentication": "Verified sign-in, role grants and shared freeze",
     "profiles": "Save and load profiles",
     "runs": "Runs, checkpoints and replay",
     "telemetry": "Sample and capture telemetry",
@@ -47,25 +48,33 @@ def read_guide(topic: str) -> dict[str, str]:
     return {"topic": topic, "title": _GUIDE_TITLES[topic], "content": content}
 
 
-def read_starter() -> dict[str, str]:
+def read_starter(*, authenticated: bool = False) -> dict[str, str]:
     """Read the starter's fixed project files without writing or executing them."""
-    root = resources.files(__package__).joinpath("resources", "starter")
+    root = resources.files(__package__).joinpath(
+        "resources", "authenticated_starter" if authenticated else "starter")
+    files = {**_STARTER_FILES, **({".gitignore": "gitignore"} if authenticated else {})}
     return {destination: root.joinpath(source).read_text(encoding="utf-8")
-            for destination, source in _STARTER_FILES.items()}
+            for destination, source in files.items()}
 
 
 def inspect_capabilities() -> dict[str, Any]:
     """Describe installed APIs; dependency metadata is not a compatibility test."""
     from .appearance import build_streamlit_theme_toml
+    from .access import AccessPolicy, SQLiteAccessStore
     from .controls import ControlDef, ControlRegistry, VALID_KINDS
-    from .dashboard import DashboardConfig
+    from .dashboard import DashboardConfig, prepare_access
     from .diagnostics import list_diagnostics
     from .plugins import DashboardPlugin, PluginRegistry
     from .public_api import public_api_manifest
     from .sections import DashboardSections
+    from .streamlit_auth import StreamlitIdentityResolver
 
     symbols = {
         "DashboardConfig": DashboardConfig,
+        "AccessPolicy": AccessPolicy,
+        "SQLiteAccessStore.create": SQLiteAccessStore.create,
+        "prepare_access": prepare_access,
+        "StreamlitIdentityResolver": StreamlitIdentityResolver,
         "DashboardSections": DashboardSections,
         "ControlDef": ControlDef,
         "ControlRegistry.register": ControlRegistry.register,
@@ -76,7 +85,7 @@ def inspect_capabilities() -> dict[str, Any]:
         "build_streamlit_theme_toml": build_streamlit_theme_toml,
     }
     dependencies = {}
-    for name in ("streamlit", "pandas", "fastapi", "pydantic", "uvicorn"):
+    for name in ("streamlit", "authlib", "pandas", "fastapi", "pydantic", "uvicorn"):
         try:
             version = metadata.version(name)
         except metadata.PackageNotFoundError:
@@ -95,11 +104,16 @@ def inspect_capabilities() -> dict[str, Any]:
             "note": "Documented API requirements, not certification of the installed runtime.",
         },
         "section_defaults": asdict(DashboardSections()),
+        "authentication_requirements": {
+            "streamlit": "Streamlit >=1.52.2 with its auth extra (Authlib >=1.3.2)",
+            "provider": "Host-configured OIDC provider and explicit server-side role provisioning",
+            "guide": "python -m role_aware_dashboard_toolkit guide authentication",
+        },
         "signatures": {name: str(signature(value)) for name, value in symbols.items()},
         "optional_dependencies": dependencies,
         "dependency_note": "Distribution metadata only; optional hosts were not imported or tested for compatibility.",
         "guide_topics": list_guide_topics(),
-        "examples": ["starter"],
+        "examples": ["starter", "authenticated"],
     }
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
 from .profiles import profile_diff
@@ -13,10 +14,18 @@ def diff_mapping(old_values: dict[str, Any], new_values: dict[str, Any]) -> dict
 
 
 
-def compare_checkpoints(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def compare_checkpoints(
+    left: dict[str, Any], right: dict[str, Any], *, include_telemetry: bool = False,
+) -> dict[str, Any]:
+    """Compare controls and approval; optionally include observed metric changes.
+
+    Telemetry deltas are right minus left, without unit conversion, preferred
+    direction, or any inference that changed controls caused changed outcomes.
+    Direct callers own authorization to view the supplied checkpoint evidence.
+    """
     left_controls = dict(left.get("controls") or {})
     right_controls = dict(right.get("controls") or {})
-    return {
+    comparison = {
         "left_checkpoint_id": left.get("checkpoint_id", ""),
         "right_checkpoint_id": right.get("checkpoint_id", ""),
         "approval_transition": {
@@ -25,15 +34,25 @@ def compare_checkpoints(left: dict[str, Any], right: dict[str, Any]) -> dict[str
         },
         "control_diff": diff_mapping(left_controls, right_controls),
     }
+    if include_telemetry:
+        comparison["telemetry_comparison"] = _compare_telemetry(left, right)
+    return comparison
 
 
 
-def compare_runs(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def compare_runs(
+    left: dict[str, Any], right: dict[str, Any], *, include_telemetry: bool = False,
+) -> dict[str, Any]:
+    """Compare runs, optionally using telemetry from each final checkpoint.
+
+    An empty final checkpoint is not replaced by an older sample. Sample
+    timestamps and checkpoint IDs identify which observations were compared.
+    """
     left_summary = run_summary(left)
     right_summary = run_summary(right)
     left_controls = dict(left.get("latest_controls") or left.get("initial_controls") or {})
     right_controls = dict(right.get("latest_controls") or right.get("initial_controls") or {})
-    return {
+    comparison = {
         "left_run": left_summary,
         "right_run": right_summary,
         "field_diff": {
@@ -43,6 +62,106 @@ def compare_runs(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         },
         "control_diff": diff_mapping(left_controls, right_controls),
     }
+    if include_telemetry:
+        left_checkpoint = _final_checkpoint(left)
+        right_checkpoint = _final_checkpoint(right)
+        comparison["telemetry_comparison"] = {
+            "left_checkpoint_id": left_checkpoint.get("checkpoint_id", ""),
+            "right_checkpoint_id": right_checkpoint.get("checkpoint_id", ""),
+            **_compare_telemetry(left_checkpoint, right_checkpoint),
+        }
+    return comparison
+
+
+def _final_checkpoint(run: Mapping[str, Any]) -> dict[str, Any]:
+    checkpoints = run.get("checkpoints")
+    return _mapping(checkpoints[-1]) if isinstance(checkpoints, (list, tuple)) and checkpoints else {}
+
+
+def _compare_telemetry(left: Mapping[str, Any], right: Mapping[str, Any]) -> dict[str, Any]:
+    left_sample = _mapping(left.get("telemetry_slice"))
+    right_sample = _mapping(right.get("telemetry_slice"))
+    left_metrics = _metric_values(left_sample)
+    right_metrics = _metric_values(right_sample)
+    left_units = _mapping(left_sample.get("units"))
+    right_units = _mapping(right_sample.get("units"))
+    rows = {}
+    for name in sorted(left_metrics.keys() | right_metrics.keys()):
+        old = left_metrics.get(name)
+        new = right_metrics.get(name)
+        old_unit = _unit(left_units.get(name))
+        new_unit = _unit(right_units.get(name))
+        delta = None
+        if name not in left_metrics:
+            status = "missing_left"
+        elif name not in right_metrics:
+            status = "missing_right"
+        elif old is None or new is None:
+            status = "invalid_value"
+        elif old_unit != new_unit:
+            status = "unit_mismatch"
+        else:
+            delta = new - old
+            status = "comparable"
+            if not isfinite(delta):
+                status = "non_finite_delta"
+                delta = None
+        rows[name] = {
+            "from": old, "to": new,
+            "from_unit": old_unit, "to_unit": new_unit,
+            "delta": delta, "status": status,
+        }
+    return {
+        "left_sample_ts": _sample_timestamp(left_sample),
+        "right_sample_ts": _sample_timestamp(right_sample),
+        "metrics": rows,
+    }
+
+
+def _metric_values(sample: dict[str, Any]) -> dict[str, float | None]:
+    # Normalized metrics are already named, including any retained leaf aliases.
+    # Never re-normalize them: that can overwrite a same-named independent value.
+    if "metrics" in sample:
+        payload = _mapping(sample["metrics"])
+    else:
+        metadata = {"schema_version", "ts", "units", "labels", "source", "service", "health"}
+        payload = {key: value for key, value in sample.items() if key not in metadata}
+    values: dict[str, float | None] = {}
+
+    def visit(value: Any, name: str) -> None:
+        if isinstance(value, Mapping) and value:
+            for key, child in value.items():
+                visit(child, f"{name}.{key}" if name else str(key))
+            return
+        if isinstance(value, (list, tuple)) and value:
+            for child in value:
+                visit(child, name)
+            return
+        numeric = None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                candidate = float(value)
+            except OverflowError:
+                candidate = float("nan")
+            if isfinite(candidate):
+                numeric = candidate
+        previous = values.get(name)
+        values[name] = max(numeric, previous) if numeric is not None and previous is not None else (
+            numeric if numeric is not None else previous
+        )
+
+    for key, value in payload.items():
+        visit(value, str(key))
+    return values
+
+
+def _unit(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _sample_timestamp(sample: Mapping[str, Any]) -> str:
+    value = sample.get("ts")
+    return value if isinstance(value, str) else ""
 
 
 def compare_dashboard_snapshots(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:

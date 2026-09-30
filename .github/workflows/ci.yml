@@ -236,6 +236,40 @@ jobs:
           assert streamlit.__name__ == "streamlit"
           PY
           )
+          python -m venv "$RUNNER_TEMP/.wheel-auth-smoke"
+          "$RUNNER_TEMP/.wheel-auth-smoke/bin/python" -m pip install "${wheel}[auth]"
+          "$RUNNER_TEMP/.wheel-auth-smoke/bin/python" -m pip check
+          (
+            cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
+            "$RUNNER_TEMP/.wheel-auth-smoke/bin/python" -I - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
+
+          import role_aware_dashboard_toolkit
+          import authlib
+          import streamlit
+          from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore, SQLiteAccessStore
+          from role_aware_dashboard_toolkit.access_cli import initialize_access
+          from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
+          from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
+
+          assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
+          assert authlib.__name__ == "authlib"
+          assert all(callable(api) for api in (streamlit.login, streamlit.logout, AccessPolicy, InMemoryAccessStore, SQLiteAccessStore, initialize_access, StreamlitIdentityResolver))
+          starter = read_starter(authenticated=True)
+          assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
+          assert 'auth_mode="authenticated"' in starter["app.py"]
+          compile(starter["app.py"], "authenticated-starter/app.py", "exec")
+          assert "access_cli grant" in read_guide("authentication")["content"]
+          PY
+          )
           python -m venv "$RUNNER_TEMP/.wheel-api-smoke"
           "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -m pip install "${wheel}[api]"
           "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -m pip check
@@ -305,17 +339,28 @@ jobs:
           assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
 
           import role_aware_dashboard_toolkit
+          import authlib
           import fastapi
           import pandas
           import pydantic
           import streamlit
           import uvicorn
+          from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore, SQLiteAccessStore
+          from role_aware_dashboard_toolkit.access_cli import initialize_access
+          from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
+          from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
 
           assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert all(
               module.__name__
-              for module in (fastapi, pandas, pydantic, streamlit, uvicorn)
+              for module in (authlib, fastapi, pandas, pydantic, streamlit, uvicorn)
           )
+          assert all(callable(api) for api in (streamlit.login, streamlit.logout, AccessPolicy, InMemoryAccessStore, SQLiteAccessStore, initialize_access, StreamlitIdentityResolver))
+          starter = read_starter(authenticated=True)
+          assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
+          assert 'auth_mode="authenticated"' in starter["app.py"]
+          compile(starter["app.py"], "authenticated-starter/app.py", "exec")
+          assert "access_cli grant" in read_guide("authentication")["content"]
           PY
           )
       - name: Sdist install smoke
@@ -627,4 +672,54 @@ jobs:
                   os.chdir(previous_directory)
           "@
           $smoke | & $venvPython -I -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Auth wheel install smoke (Windows)
+        shell: powershell
+        run: |
+          $authVenv = Join-Path $env:RUNNER_TEMP ".wheel-auth-smoke-win"
+          python -m venv $authVenv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $authPython = Join-Path $authVenv "Scripts\python.exe"
+          $wheels = @(Get-ChildItem -LiteralPath dist -Filter "role_aware_dashboard_toolkit-*.whl" -File)
+          if ($wheels.Count -ne 1) { throw "Expected exactly one built wheel." }
+          & $authPython -m pip install "$($wheels[0].FullName)[auth]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $authPython -m pip check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $authSmoke = @'
+          import os
+          import pathlib
+          import sys
+          import tempfile
+
+          repo = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          runner_temp = pathlib.Path(os.environ["RUNNER_TEMP"]).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          assert environment.is_relative_to(runner_temp)
+          assert not environment.is_relative_to(repo)
+          assert all(not pathlib.Path(value or ".").resolve().is_relative_to(repo) for value in sys.path)
+          previous_directory = pathlib.Path.cwd()
+          with tempfile.TemporaryDirectory(dir=runner_temp) as tmpdir:
+              try:
+                  os.chdir(tmpdir)
+                  import role_aware_dashboard_toolkit
+                  import authlib
+                  import streamlit
+                  from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore, SQLiteAccessStore
+                  from role_aware_dashboard_toolkit.access_cli import initialize_access
+                  from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
+                  from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
+
+                  assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
+                  assert authlib.__name__ == "authlib"
+                  assert all(callable(api) for api in (streamlit.login, streamlit.logout, AccessPolicy, InMemoryAccessStore, SQLiteAccessStore, initialize_access, StreamlitIdentityResolver))
+                  starter = read_starter(authenticated=True)
+                  assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
+                  assert 'auth_mode="authenticated"' in starter["app.py"]
+                  compile(starter["app.py"], "authenticated-starter/app.py", "exec")
+                  assert "access_cli grant" in read_guide("authentication")["content"]
+              finally:
+                  os.chdir(previous_directory)
+          '@
+          $authSmoke | & $authPython -I -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

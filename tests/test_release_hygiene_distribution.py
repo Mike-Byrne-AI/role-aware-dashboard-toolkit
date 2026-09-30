@@ -248,12 +248,22 @@ import pathlib
 import sys
 
 import role_aware_dashboard_toolkit as radt
+from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore
+from role_aware_dashboard_toolkit.access_cli import initialize_access
+from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
+from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
 
 assert "wheel_site" in str(pathlib.Path(radt.__file__).resolve())
 assert importlib.util.find_spec("streamlit") is None
 assert importlib.util.find_spec("pandas") is None
 assert importlib.util.find_spec("fastapi") is None
 assert "streamlit" not in sys.modules
+assert "authlib" not in sys.modules
+assert all(callable(api) for api in (AccessPolicy, InMemoryAccessStore, initialize_access, StreamlitIdentityResolver))
+starter = read_starter(authenticated=True)
+assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
+assert 'auth_mode="authenticated"' in starter["app.py"]
+assert "access_cli grant" in read_guide("authentication")["content"]
 config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
 run = radt.build_run({"temperature": 0.2}, actor="wheel-smoke")
 packet = radt.build_run_packet(run)
@@ -329,5 +339,8 @@ def test_sdist_configuration_is_an_explicit_public_allowlist():
         "/examples/dashboard_admin_controls_app.py",
         "/examples/plugin_template.py",
         "/examples/studio_dispatch/app.py",
+        "/examples/operator_review/app.py",
+        "/examples/operator_review/workflow.py",
+        "/examples/operator_review/report.py",
     }
     assert importlib.util.find_spec("role_aware_dashboard_toolkit") is not None

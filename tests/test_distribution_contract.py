@@ -16,7 +16,7 @@ from role_aware_dashboard_toolkit.distribution import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PUBLIC_EXTRAS = {"workbench", "api", "pandas", "full"}
+PUBLIC_EXTRAS = {"workbench", "auth", "api", "pandas", "full"}
 ARCHIVE_EXCLUDES = {
     "/role_aware_dashboard_toolkit/_archive_review",
     "/role_aware_dashboard_toolkit/_archive_review/**",
@@ -64,6 +64,7 @@ def test_pyproject_declares_only_public_runtime_extras_and_dev_tooling():
     assert set(extras) == {*PUBLIC_EXTRAS, "dev"}
     assert set(extras["full"]) == {
         *extras["workbench"],
+        *extras["auth"],
         *extras["api"],
         *extras["pandas"],
     }
@@ -101,6 +102,9 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/dashboard_admin_controls_app.py",
         "/examples/plugin_template.py",
         "/examples/studio_dispatch/app.py",
+        "/examples/operator_review/app.py",
+        "/examples/operator_review/workflow.py",
+        "/examples/operator_review/report.py",
     }
     assert not any("semantic" in path.lower() for path in include)
     assert not any("builder" in path.lower() for path in include)

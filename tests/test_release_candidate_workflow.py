@@ -290,6 +290,10 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "twine upload" not in runbook
     assert "--no-build-isolation" not in runbook
     assert "A pre-publication smoke must use local artifacts" in runbook
+    assert "`workbench`, `auth`, `api`, and `pandas` independently" in checklist
+    assert "on Linux and Windows" in checklist
+    assert "`auth` wheel on Linux and Windows" in runbook
+    assert "authentication checks in the `full` smoke too" in runbook
 
     checklist = _read("docs/release_checklist.md")
     assert "pre_release_check.py --json --require-clean" in checklist

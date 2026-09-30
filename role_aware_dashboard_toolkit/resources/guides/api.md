@@ -14,6 +14,13 @@ app = radt.create_app(
     registry, profile_store=radt.InMemoryProfileStore(), api_role="Viewer")
 ```
 
+Each `create_app()` owns separate in-memory control values. Sharing a registry
+shares definitions only. API updates and profile activation do not invoke
+control callbacks or a dashboard's `on_change`, and do not update Streamlit
+session state. Shared stores do not synchronize live controls. A host must
+explicitly integrate shared state or external actions and enforce authorization
+there; this API is not an automatic remote-control connection to a dashboard.
+
 Save the example as `api_app.py` under the host's instructions and run an
 installed Uvicorn with `--host 127.0.0.1`. Protected routes require the server's
 `ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY` and the matching `X-API-Key` request header.

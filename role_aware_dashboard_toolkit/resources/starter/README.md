@@ -28,8 +28,9 @@ starter does not assume that a toolkit PyPI release already exists.
 6. To enable runs and checkpoints, change `runbook=False` to `runbook=True`
    in `build_dashboard_config()`, save the file and rerun.
 
-The role selector demonstrates authorization rules. Connect an `auth_hook` to
-trusted identity before sharing an application that needs access control.
+The role selector is an explicit local demo and permits choosing Admin. For
+shared access control, use `init NEW-DIRECTORY --auth` and read
+`python -m role_aware_dashboard_toolkit guide authentication`.
 Profiles, audit and runs use in-memory stores kept through reruns in the same
 session. A new browser session or server restart starts fresh. The application
 does not automatically write these records to disk.

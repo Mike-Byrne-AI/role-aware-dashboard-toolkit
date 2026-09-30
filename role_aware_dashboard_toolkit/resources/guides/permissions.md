@@ -1,8 +1,10 @@
 # Preserve authority while customizing
 
-The dashboard's role selector is a local demonstration of authorization.
-It is not authentication. Shared apps should resolve trusted identity through
-`DashboardConfig(auth_hook=...)`; the hook returns a recognized role name.
+In demo mode the role selector is a local demonstration of authorization.
+Shared apps should use `init my-dashboard --auth` and `guide authentication`:
+verified identity receives server-owned role grants and can select only assigned
+roles. Shared freeze is checked again at protected writes. The legacy
+`DashboardConfig(auth_hook=...)` remains available for host-managed identity.
 Auth failure locks the context instead of falling back to Admin.
 
 ```python

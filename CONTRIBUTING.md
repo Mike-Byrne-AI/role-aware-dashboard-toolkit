@@ -25,8 +25,9 @@ artifact, and installation verification for release candidates.
 - Preserve documented public APIs unless a reviewed change explicitly updates
   the contract and its migration guidance.
 - Add focused regression tests when behavior changes.
-- Keep authentication, deployment policy, and application-specific integrations
-  in the host application.
+- Keep identity-provider configuration, credentials, deployment policy, and
+  application-specific integrations in the host application. The optional access
+  layer supplies verification adapters, role grants and shared freeze enforcement.
 - Update documentation and generated references when their contracts change.
 
 ## Before submission

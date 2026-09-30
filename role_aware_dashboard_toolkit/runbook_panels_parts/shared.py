@@ -31,6 +31,29 @@ def _selected_profile_id(session_state: dict[str, Any]) -> str:
     return ""
 
 
+def _record_actor(ctx: Any, session_state: Any) -> str:
+    """Use the authenticated principal instead of mutable session metadata."""
+    if getattr(ctx, "authenticated", False):
+        return str(ctx.user_id)
+    return str(session_state.get("_radt_user_id", ""))
+
+
+def _record_session(ctx: Any, session_state: Any) -> str:
+    if getattr(ctx, "authenticated", False):
+        return str(ctx.session_id)
+    return str(session_state.get("_radt_session_id", ""))
+
+
+def _record_summary_view(record: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    """Filter native saved-control summaries at display time, without editing evidence."""
+    view = deepcopy(record)
+    if not has_perm(ctx, "can_view_metrics", default=False):
+        summary = view.get("summary")
+        if isinstance(summary, dict):
+            summary.pop("latest_controls", None)
+    return view
+
+
 def _current_approval_state(ctx: Any, *, can_approve: bool) -> str:
     if can_approve:
         return "approved"
@@ -57,6 +80,9 @@ __all__ = [
     "_current_approval_state",
     "_latest_telemetry",
     "_parse_tags",
+    "_record_actor",
+    "_record_session",
+    "_record_summary_view",
     "_render_table",
     "_selected_profile_id",
     "pd",

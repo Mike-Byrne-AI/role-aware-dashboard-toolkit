@@ -29,8 +29,9 @@ appropriate to the affected users.
 
 ## Deployment responsibilities
 
-Dashboard roles are authorization context, not authentication. Shared
-deployments must bind roles to trusted identities and provide appropriate
+Demo dashboard roles do not authenticate users. The optional authenticated mode
+binds verified OIDC identity to explicit server-owned grants and shared freeze.
+Shared deployments must configure the provider and grants, and provide appropriate
 network, transport, and storage security. Plugins execute as trusted code in
 the host process. See [API security](docs/api_security.md) and
 [architecture scope](ARCHITECTURE_SCOPE.md) for these boundaries.

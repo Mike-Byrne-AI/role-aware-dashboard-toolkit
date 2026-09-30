@@ -52,6 +52,7 @@ PUBLIC_ROOT_DOCS = frozenset(
         "SECURITY.md",
         "examples/README.md",
         "examples/studio_dispatch/README.md",
+        "examples/operator_review/README.md",
     }
 )
 

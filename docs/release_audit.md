@@ -2,8 +2,8 @@
 
 - Version: `0.1.0`
 - Distribution strategy: `single-package-optional-extras`
-- Artifacts: `api`, `core`, `full`, `pandas`, `workbench`
-- Public API families: `app-shell`, `controls-and-security`, `installed-guidance`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`
+- Artifacts: `api`, `auth`, `core`, `full`, `pandas`, `workbench`
+- Public API families: `app-shell`, `authenticated-access`, `controls-and-security`, `installed-guidance`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`
 - Root exports: `59` / `60`
 - Stable root exports: `59`
 - Undocumented root exports: `0`
@@ -14,6 +14,11 @@
 
 - Artifact id: `api`
 - Install target: `role-aware-dashboard-toolkit[api]`
+
+### Role-Aware Dashboard Toolkit authenticated Streamlit UI
+
+- Artifact id: `auth`
+- Install target: `role-aware-dashboard-toolkit[auth]`
 
 ### Role-Aware Dashboard Toolkit core
 

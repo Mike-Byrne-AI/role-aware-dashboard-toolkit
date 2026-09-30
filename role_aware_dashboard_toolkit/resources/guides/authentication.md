@@ -1,0 +1,181 @@
+# Verified sign-in, assigned roles and shared freeze
+
+For a shared dashboard, create the authenticated starter:
+
+```powershell
+python -m role_aware_dashboard_toolkit init shared-dashboard --auth --dry-run
+python -m role_aware_dashboard_toolkit init shared-dashboard --auth
+Set-Location shared-dashboard
+```
+
+`example authenticated --format json` reads its files without writing. Plain
+`init` preserves the local demonstration starter with explicit `auth_mode="demo"`;
+its role selector is not access control. The older `auth_hook` remains a trusted
+host integration hook; it does not provide the persistent grants in this guide.
+
+## Configure the host
+
+Use the environment containing the toolkit. Install authentication dependencies:
+
+```powershell
+python -m pip install "streamlit[auth]>=1.52.2"
+```
+
+Register an OIDC application with your identity provider and obtain its exact
+issuer, client ID, client secret and discovery URL. Register the exact callback
+URL, such as `http://localhost:8501/oauth2callback` for local testing; use HTTPS
+for a shared deployment. Streamlit and Authlib handle token signature, state and
+nonce verification. This adapter consumes only their verified `st.user` result;
+it is not a parser or verifier for arbitrary tokens or browser-supplied claims.
+
+Create an application-specific protected directory outside every repository.
+On Windows, restrict its NTFS permissions to the app service account and trusted
+operators before writing credentials; Python chmod does not establish Windows
+ACL privacy. For a local single-user example, create a new directory and grant
+only the current account and SYSTEM (review service-account needs before using
+the same command on a shared host):
+
+```powershell
+$accessDirectory = Join-Path $env:LOCALAPPDATA "RoleAwareDashboard\shared-dashboard"
+New-Item -ItemType Directory -Path $accessDirectory
+$operatorAccount = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $accessDirectory /inheritance:r /grant:r "${operatorAccount}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"
+```
+
+On POSIX, use a directory with mode 0700. Provisioning and key-loading helpers
+reject broad POSIX permissions and links/reparse points in ancestor paths.
+Direct SQLite store use checks the database file; the host must also protect its
+directory and ancestors. Windows directory permissions remain
+the operator's responsibility. Files, journals and backups need the same access
+restriction; SQLite is for a single application on a local disk, not network
+storage or a distributed deployment.
+
+Create the key and empty database once:
+
+```powershell
+python -m role_aware_dashboard_toolkit.access_cli init --directory $accessDirectory
+```
+
+This generates a random 32-byte `identity.key` and `access.sqlite3`. Existing
+files are refused. New stores are frozen and have no grants. A failed init may
+leave partial files: inspect the protected directory instead of deleting or
+resetting an existing store. Do not put this command in dashboard startup.
+
+Use a protected editor or your secret manager to put the provider configuration
+in `secrets.toml` inside that directory. This is a placeholder shape, not real
+credentials; use a separate strong random cookie secret:
+
+```toml
+[auth]
+redirect_uri = "http://localhost:8501/oauth2callback"
+cookie_secret = "REPLACE_WITH_A_SEPARATE_RANDOM_SECRET"
+client_id = "YOUR_REGISTERED_CLIENT_ID"
+client_secret = "YOUR_PROVIDER_CLIENT_SECRET"
+server_metadata_url = "https://YOUR_PROVIDER/.well-known/openid-configuration"
+client_kwargs = { scope = "openid" }
+```
+
+The minimal `openid` scope avoids requesting names/email unless your provider
+requires additional claims. Do not expose access or ID tokens. Configure the
+non-secret host environment (use your actual issuer and client ID):
+
+```powershell
+$env:RADT_ACCESS_DIRECTORY = $accessDirectory
+$env:RADT_OIDC_ISSUER = "https://YOUR_PROVIDER"
+$env:RADT_OIDC_AUDIENCE = "YOUR_REGISTERED_CLIENT_ID"
+```
+
+## Provision explicitly
+
+Obtain the intended account's stable OIDC `sub` from an authenticated provider
+administrative workflow; do not substitute an email address, display name, URL
+parameter or a subject claimed by an unverified requester. Confirm the issuer
+and client context, because pairwise subjects can differ between applications.
+
+Provision the first administrator from a trusted local terminal:
+
+```powershell
+python -m role_aware_dashboard_toolkit.access_cli grant --directory $accessDirectory --issuer $env:RADT_OIDC_ISSUER --role Admin
+```
+
+The utility privately prompts for the verified subject. It never prints that
+subject or accepts it as a command-line argument. If no-echo input is unavailable,
+it fails instead of using visible input. The application never enrolls the first
+visitor and unknown users remain denied. Repeat for a second account with
+`--role Viewer`. Repeating `--role` grants a choice among exactly those roles:
+
+```powershell
+python -m role_aware_dashboard_toolkit.access_cli grant --directory $accessDirectory --issuer $env:RADT_OIDC_ISSUER --role Operator --role Viewer
+python -m role_aware_dashboard_toolkit.access_cli revoke --directory $accessDirectory --issuer $env:RADT_OIDC_ISSUER
+```
+
+`grant` replaces the account's complete assignment set; `revoke` removes all its
+roles. Both can use `--principal` with an existing opaque principal ID instead
+of prompting for a subject. These are trusted operator commands, never web
+endpoints. Built-in roles are supported here; custom-role provisioning can use
+the store API with an explicit allowed-role list.
+
+## Launch and enforce boundaries
+
+```powershell
+python -m streamlit run app.py --secrets.files "$accessDirectory\secrets.toml"
+```
+
+The starter calls `prepare_access(config)` before loading account-specific state
+or protected data, then renders assigned-role selection and shared freeze.
+Account changes clear session state before host resources are rebuilt. Admin
+has `can_manage_freeze`; other roles cannot change the shared switch. Freeze
+blocks protected mutations, including Admin mutations, while its administrator
+can still unfreeze. UI state, imported profiles and role-name inputs do not
+override server grants or freeze. Stale freeze submissions require a refresh.
+
+Use `has_perm(ctx, permission)` immediately before private reads and
+`can_write(ctx, permission)` immediately before mutations. These re-resolve the
+current identity, assignments and freeze; do not cache their results. Host
+callbacks, external services and custom plugins must enforce their own actual
+action boundary. This does not cancel work already in flight or make a check
+and an unrelated external write one atomic transaction. It does not secure the
+optional HTTP API automatically; configure that API's own trusted identity.
+
+The resolver checks exact issuer and audience, stable subject, token `exp`,
+`iat`, optional `nbf`, and optional `auth_time`. Its default maximum token age is
+one hour; expiry is the earliest applicable deadline. To require recent actual
+authentication, request OIDC `max_age` and set `require_auth_time=True`.
+Provider-specific support must be verified; issuance time alone does not prove
+recent credential entry.
+
+Streamlit's cookie can outlive token expiry; the adapter denies expired claims
+on each check. Logging out ends the current Streamlit session and removes its
+cookie, but other existing sessions remain. Server-side grant revocation denies
+their next checked action. Provider-side account/session revocation is not
+polled here; add that host integration when required.
+
+## Data handling and acceptance checks
+
+The database stores keyed opaque principal IDs, role names, and current freeze
+revision/actor. The HMAC key is separate; neither raw subject, email, password
+nor token is written to this database. Opaque IDs are still linkable personal data,
+not anonymization. Protect the database, key and backups, retain them only as
+needed, and keep them out of profiles and exports. Key rotation changes every
+principal ID and requires reprovisioning. Backup restoration can restore revoked
+grants and old freeze state; review both before reopening access. The current
+freeze row is not a complete administrative audit history.
+
+Streamlit itself retains provider claims in its signed browser identity cookie
+and session memory. Signing prevents undetected modification; it is not
+encryption. Review which claims the provider returns, request minimal scopes,
+and do not expose tokens. The database minimization above does not remove the
+identity provider's or Streamlit's own data handling.
+
+Test two separately authenticated accounts and the actual provider redirect:
+Admin can unfreeze; Viewer cannot self-promote, edit controls or unfreeze; a
+profile cannot grant a role; an unassigned account receives no protected data.
+Grant only Viewer to the already-open Admin account and verify its next protected
+action is denied. Revoke all roles and verify access is denied. Switch accounts
+and confirm old account state is gone. Change freeze in one session and verify
+the other cannot submit a stale unfreeze. Confirm expired identities are denied.
+Synthetic tests prove library behavior, not your provider or deployment setup.
+
+Primary references: [Streamlit authentication](https://docs.streamlit.io/develop/concepts/connections/authentication),
+[Streamlit secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management),
+and [OIDC ID-token claims](https://openid.net/specs/openid-connect-core-1_0.html#IDToken).

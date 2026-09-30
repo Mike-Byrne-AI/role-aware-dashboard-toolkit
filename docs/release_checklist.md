@@ -98,8 +98,11 @@ From temporary directories outside the repository:
 - install the built core wheel and import `role_aware_dashboard_toolkit`
 - construct `ControlRegistry`, `DashboardConfig`, a run, and a packet without
   optional dependencies present
-- install and smoke `workbench`, `api`, and `pandas` independently
-- install `full`
+- install and smoke `workbench`, `auth`, `api`, and `pandas` independently
+- install `full` and check every optional dependency, including Authlib
+- on Linux and Windows, smoke the isolated `auth` wheel installation: check
+  dependency consistency, Streamlit login/logout and access/resolver imports,
+  the authenticated starter files and application syntax, and its offline guide
 - install the source distribution with build isolation enabled
 - run `python -m examples.core_library` from source
 - launch `examples/dashboard_admin_controls_app.py` as the visual smoke
@@ -107,6 +110,10 @@ From temporary directories outside the repository:
 Keep every install environment outside the checkout. Use isolated Python and
 verify the imported package comes from the installed environment; do not
 remove that environment from the import search path.
+
+Authentication install smokes do not contact an identity provider or provision
+accounts. Actual provider configuration and deployment acceptance remain host
+responsibilities described in the authentication guide.
 
 ## CI and artifacts
 

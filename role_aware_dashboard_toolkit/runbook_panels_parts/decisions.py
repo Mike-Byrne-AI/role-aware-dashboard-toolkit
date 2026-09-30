@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from ..decisions import decision_summary
-from ..security import has_perm
+from ..security import can_mutate, has_perm
 from .review_models import build_decision_panel_preview
-from .shared import _render_table
+from .shared import _record_actor, _record_summary_view, _render_table
 
 
 def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], checkpoint: dict[str, Any]) -> None:
@@ -17,7 +17,7 @@ def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], 
         config,
         run,
         checkpoint,
-        actor=str(st.session_state.get("_radt_user_id", "")),
+        actor=_record_actor(ctx, st.session_state),
         role=ctx.role,
     )
     if preview is None:
@@ -27,11 +27,11 @@ def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], 
     checkpoint_id = str(preview["checkpoint_id"])
     decision = dict(preview["decision"])
 
-    can_save = has_perm(ctx, "can_manage_decisions", default=False)
+    can_save = can_mutate(ctx, "can_manage_decisions", default=False)
     st.subheader(getattr(config, "decision_title", "Decision Layer"))
     st.caption("Preview, validate, then explicitly save decision records. Rendering the panel does not persist state.")
     st.json(decision_summary(decision))
-    if can_save and st.button("Save decision snapshot", key=f"_radt_decision_save::{run_id}::{checkpoint_id}"):
+    if can_save and st.button("Save decision snapshot", key=f"_radt_decision_save::{run_id}::{checkpoint_id}") and can_mutate(ctx, "can_manage_decisions"):
         decision_store.save(decision)
         if hasattr(st, "toast"):
             st.toast("Saved decision snapshot.")
@@ -40,7 +40,7 @@ def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], 
         st.json(decision.get("blockers", []))
 
     with st.expander("Decision Case", expanded=False):
-        st.json(decision)
+        st.json(_record_summary_view(decision, ctx))
 
     if decision.get("history"):
         rows = [

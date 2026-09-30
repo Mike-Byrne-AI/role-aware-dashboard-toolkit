@@ -19,6 +19,14 @@ Loading merges known non-sensitive fields, retains unspecified live values, and
 sanitizes stale/out-of-range values. Unknown controls are ignored. Sensitive
 values remain live and are not restored. Profile `role` is descriptive metadata.
 Selecting a profile previews it; only a successful load records it as active.
+Expand **Preview profile changes** to compare current, saved and effective
+values before loading. The preview shows corrections, missing fields retained
+from live state, omitted unknown/sensitive fields, and freeze or permission
+blocks. Effective values are proposed values; a blocked load applies nothing.
+Viewing values requires both metrics-view and profile-load permission. Sensitive
+values and values from removed controls are hidden. Previewing does not change
+live state, run callbacks, save records or add audit events. Load rereads the
+profile and checks current permissions before applying it.
 
 `InMemoryProfileStore` is session-local when retained by the host.
 `FileProfileStore(profile_dir)` enables durable local JSON only when the host

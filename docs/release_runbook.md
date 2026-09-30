@@ -39,10 +39,14 @@ archive and reject any unexpected artifact.
 
 A pre-publication smoke must use local artifacts, not a public-index install
 of this project. Create fresh environments in temporary directories outside
-the repository. Install and check the core wheel, each of `workbench`, `api`,
-`pandas`, and `full`, and the source distribution. Keep source-distribution
-build isolation enabled. Use isolated Python and verify imports resolve to
-the installed environment rather than the source checkout.
+the repository. Install and check the core wheel, each of `workbench`, `auth`,
+`api`, `pandas`, and `full`, and the source distribution. Check the independent
+`auth` wheel on Linux and Windows, including Streamlit/Authlib, access and
+resolver imports, and authenticated starter/guide resources; include those
+authentication checks in the `full` smoke too. These installation checks do not
+establish an external identity provider or deployment configuration. Keep
+source-distribution build isolation enabled. Use isolated Python and verify
+imports resolve to the installed environment rather than the source checkout.
 
 ## Verify source did not move
 

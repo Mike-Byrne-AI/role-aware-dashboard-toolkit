@@ -34,6 +34,7 @@ Homepage = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit#readme
 
 [project.optional-dependencies]
 workbench = ["streamlit>=1.30.0"]
+auth = ["streamlit[auth]>=1.52.2"]
 pandas = ["pandas>=2.0.0"]
 api = [
     "fastapi>=0.110.0",
@@ -42,6 +43,7 @@ api = [
 ]
 full = [
     "streamlit>=1.30.0",
+    "streamlit[auth]>=1.52.2",
     "pandas>=2.0.0",
     "fastapi>=0.110.0",
     "pydantic>=2.0.0",
@@ -99,6 +101,10 @@ include = [
     "/examples/studio_dispatch/app.py",
     "/examples/studio_dispatch/.streamlit/config.toml",
     "/examples/studio_dispatch/README.md",
+    "/examples/operator_review/app.py",
+    "/examples/operator_review/workflow.py",
+    "/examples/operator_review/report.py",
+    "/examples/operator_review/README.md",
     "/docs/README.md",
     "/docs/api_security.md",
     "/docs/assets/dashboard_admin_controls_app.png",

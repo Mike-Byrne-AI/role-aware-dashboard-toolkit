@@ -3,10 +3,12 @@
 Role-Aware Dashboard Toolkit's optional FastAPI surface is secure by default. Protected routes require `ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY` and the request must send the same value in the `X-API-Key` header.
 Dashboard setup and first-run control flows are documented in `docs/dashboard_tools.md`; this page focuses on API trust boundaries and permissions.
 
-Selectable dashboard roles are workflow context, not authentication. For shared
-dashboard deployments, configure `DashboardConfig(auth_hook=...)` to bind roles
-to trusted identities and keep the dashboard behind trusted ingress
-authentication and TLS. Never authorize actions from the role selector alone.
+Demo dashboard roles are self-selected workflow context. Shared dashboards can
+use the [authenticated starter](../role_aware_dashboard_toolkit/resources/guides/authentication.md)
+with verified OIDC identity, server-owned grants and shared freeze. The existing
+`auth_hook` remains a host-managed integration. Use TLS and restrict storage
+access. **Dashboard OIDC and freeze do not secure this separate FastAPI surface**;
+configure its API-key and role policy independently.
 
 Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
@@ -44,6 +46,19 @@ Plugin loading is a separate trust boundary from API auth. Dashboard plugins are
 in-process trusted code, not sandboxed extensions. When using entry-point
 discovery, prefer explicit allowlists (`trusted_entry_points=[...]`) and avoid
 loading unreviewed third-party plugins into production dashboards.
+
+## Application state and callbacks
+
+Each `create_app()` instance owns its own in-memory control values. Sharing a
+`ControlRegistry` shares definitions, not live values. API updates and profile
+activation update that API instance's state and audit records; they do not call
+control callbacks, the dashboard's `on_change`, or a running Streamlit session.
+The API is therefore not an automatic remote-control connection to a dashboard.
+
+A host that needs shared UI/API state or external actions must supply its own
+integration and enforce authorization at the action boundary. Shared profile or
+audit stores do not synchronize live controls. The toolkit does not provide a
+shared-state adapter or cross-process coordination.
 
 ## Profile identifiers and audit provenance
 

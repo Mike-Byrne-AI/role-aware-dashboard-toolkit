@@ -55,6 +55,8 @@ def _parser() -> tuple[_Parser, dict[str, argparse.ArgumentParser]]:
     commands["example"].add_argument("--file", dest="filename")
     commands["init"].add_argument("destination", nargs="?")
     commands["init"].add_argument("--dry-run", action="store_true")
+    commands["init"].add_argument("--auth", action="store_true",
+                                 help="Create the authenticated starter, recommended for shared use.")
     return parser, commands
 
 
@@ -100,14 +102,15 @@ def _new_destination(destination: str) -> Path:
     return path.resolve(strict=False)
 
 
-def initialize_project(destination: str, *, dry_run: bool = False) -> dict[str, Any]:
+def initialize_project(destination: str, *, dry_run: bool = False,
+                       authenticated: bool = False) -> dict[str, Any]:
     """Create only a new directory; report partial output honestly on I/O failure.
 
     Existing files, directories and links are never merged or overwritten.
     Importing this module never calls this function or writes project files.
     """
     path = _new_destination(destination)
-    contents = read_starter()
+    contents = read_starter(authenticated=authenticated)
     result = {"destination": str(path), "dry_run": bool(dry_run), "files": list(contents),
               "created_files": [], "run_command": _RUN_COMMAND}
     if dry_run:
@@ -149,20 +152,20 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "inspect":
         return inspect_capabilities()
     if args.command == "example":
-        if args.name != "starter":
-            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter.",
+        if args.name not in {"starter", "authenticated"}:
+            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter, authenticated.",
                                 next_step=f"{_COMMAND} example starter")
-        files = read_starter()
+        files = read_starter(authenticated=args.name == "authenticated")
         if args.filename:
             if args.filename not in files:
                 raise _CommandError("UNKNOWN_EXAMPLE_FILE", "Choose one of: " + ", ".join(files),
                                     next_step=f"{_COMMAND} example starter")
-            return {"name": "starter", "file": args.filename, "content": files[args.filename]}
-        return {"name": "starter", "files": files}
+            return {"name": args.name, "file": args.filename, "content": files[args.filename]}
+        return {"name": args.name, "files": files}
     if args.command == "init":
         if not args.destination:
             raise _CommandError("USAGE_ERROR", "init requires a destination.", next_step=f"{_COMMAND} init --help")
-        return initialize_project(args.destination, dry_run=args.dry_run)
+        return initialize_project(args.destination, dry_run=args.dry_run, authenticated=args.auth)
     raise _CommandError("USAGE_ERROR", "Choose guide, inspect, example or init.")
 
 

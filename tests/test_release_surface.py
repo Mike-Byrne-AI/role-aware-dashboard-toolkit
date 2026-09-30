@@ -14,6 +14,7 @@ from role_aware_dashboard_toolkit.release_audit import (
 EXPECTED_FAMILIES = {
     "app-shell",
     "controls-and-security",
+    "authenticated-access",
     "operator-records",
     "optional-api",
     "packets",
@@ -24,7 +25,7 @@ EXPECTED_FAMILIES = {
     "runtime-and-observability",
     "validation-and-protocol",
 }
-EXPECTED_ARTIFACTS = {"core", "workbench", "api", "pandas", "full"}
+EXPECTED_ARTIFACTS = {"core", "workbench", "auth", "api", "pandas", "full"}
 
 
 def test_distribution_strategy_is_explicit_and_product_neutral():

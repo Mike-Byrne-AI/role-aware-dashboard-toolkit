@@ -1,15 +1,25 @@
 # Role-Aware Dashboard Toolkit
 
-Role-Aware Dashboard Toolkit is a Python library for operator dashboards. It provides typed controls, role policy, profiles, audit history,
-plugins, observability, run checkpoints, replay previews, and neutral JSON
-packets without imposing an application framework on the rest of your system.
+Role-Aware Dashboard Toolkit is a Python toolkit for building AI operator
+dashboards with consistent permissions, saved configurations and traceable runs.
+
+Use it to give people controls for an AI application: adjust settings, restore
+named configurations, inspect what changed, and review recorded runs. Define
+your controls and role policy once, then reuse the supplied dashboard workflows
+for profiles, audit history, checkpoints, comparisons and replay previews.
 
 The core package has no required third-party dependencies. Streamlit, FastAPI,
 and pandas support are isolated behind optional extras.
 
 ## Why Role-Aware Dashboard Toolkit
 
-Operator interfaces often need the same hard parts:
+The toolkit is useful when several operator workflows need to follow the same
+rules. Its supplied UI and API check permissions before applying a whole profile;
+a denied restore leaves controls unchanged. Sensitive controls are omitted from
+saved profiles and masked in audit history. Deferred UI replay checks current
+permissions again before applying recorded settings.
+
+The reusable building blocks include:
 
 - validated control definitions and predictable state defaults
 - explicit role and write-permission checks
@@ -19,9 +29,19 @@ Operator interfaces often need the same hard parts:
 - inspectable runs, checkpoints, comparisons, ledgers, and replay previews
 - a stable packet envelope for exporting application evidence
 
-Role-Aware Dashboard Toolkit keeps those concerns reusable and local-first. It does not execute
-hidden actions, authenticate users on your behalf, or replace your deployment
-security boundary.
+The installed package also includes a capability report, offline guides, a
+starter and diagnostics that help a coding assistant discover the available
+APIs. These provide reusable implementation and technical guidance; they do not
+add model reasoning or connect external services automatically.
+
+Your application supplies the data, calculations, model calls and actions behind
+the controls. Images and charts use the renderer's existing capabilities. A
+simple card with a few sliders may need only Streamlit; this toolkit is intended
+for applications that also need the shared control and review workflows above.
+
+There is no established development-time speedup claim. The value to evaluate
+is how much repeated implementation and verification these workflows remove
+from your own applications.
 
 ## Project links
 
@@ -60,6 +80,7 @@ Only after a separate PyPI release, choose the optional capability you need:
 
 ```bash
 python -m pip install "role-aware-dashboard-toolkit[workbench]"  # Streamlit rendering
+python -m pip install "role-aware-dashboard-toolkit[auth]"       # OIDC login and role grants
 python -m pip install "role-aware-dashboard-toolkit[api]"        # FastAPI routes
 python -m pip install "role-aware-dashboard-toolkit[pandas]"     # Tabular history views
 python -m pip install "role-aware-dashboard-toolkit[full]"       # All supported runtime extras
@@ -139,6 +160,18 @@ For a complete dashboard with custom roles and a plugin panel:
 python -m streamlit run examples/dashboard_admin_controls_app.py
 ```
 
+To try a complete operator review, run [Operator Review Lab](examples/operator_review/README.md)
+from the repository root:
+
+```powershell
+python -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
+```
+
+Save a baseline, adjust synthetic AI settings, compare recorded outcomes, record
+a human decision and export a standalone readable report. The example uses
+deterministic teaching formulas and session-local stores; it makes no model
+calls or performance claims.
+
 The dependency-free library example exercises controls, profiles, runs, and
 packet export:
 
@@ -167,8 +200,13 @@ See:
 
 ## Design boundaries
 
-- Dashboard roles are authorization context, not user authentication.
+- Default/demo roles are self-selected workflow context. For shared dashboards,
+  use `init my-dashboard --auth` and the [authentication guide](role_aware_dashboard_toolkit/resources/guides/authentication.md).
+  Authenticated mode binds verified identity to server-owned grants, permits only
+  assigned role choices, and checks the shared freeze before protected writes.
 - Plugins run in-process and must be treated as trusted code.
+- Custom callbacks and direct use of core state helpers require the host to
+  enforce authorization; the supplied UI/API checks do not cover arbitrary code.
 - Replay helpers build previews from recorded state; they do not perform
   external mutations.
 - File-backed stores are intended for trusted local or mounted storage, not

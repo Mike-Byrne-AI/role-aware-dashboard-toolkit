@@ -32,17 +32,24 @@ class ObservabilityConfig:
 
 
 class ObservabilityPanel:
-    """Optional observability surface for Role-Aware Dashboard Toolkit dashboards."""
+    """Optional observability surface for Role-Aware Dashboard Toolkit dashboards.
+
+    ``can_read_audit`` checks live authority after sampling, immediately before
+    audit reads. Omitting it preserves standalone callers' trusted audit access.
+    """
 
     def __init__(
         self,
         config: ObservabilityConfig,
         audit: AuditLog,
         session_state: dict[str, Any],
+        *,
+        can_read_audit: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config
         self.audit = audit
         self.session_state = session_state
+        self._can_read_audit = can_read_audit
 
     @property
     def _history_key(self) -> str:
@@ -99,7 +106,12 @@ class ObservabilityPanel:
                     "no new sample was collected on this render."
                 )
 
-            snapshot = build_observability_snapshot(history, self.audit)
+            # Sampling may invoke host code and outlive a role grant. Recheck
+            # here so metrics never grant access to audit values or counts.
+            audit = self.audit
+            if self._can_read_audit is not None and not self._can_read_audit():
+                audit = None
+            snapshot = build_observability_snapshot(history, audit)
 
             latest_metrics = snapshot.get("latest", {})
             if latest_metrics:
@@ -151,7 +163,7 @@ def coerce_telemetry_sample(payload: Any) -> dict[str, Any]:
         source = "app"
         service = ""
         health = {}
-    return {
+    sample = {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "ts": ts,
         "metrics": metrics,
@@ -160,6 +172,13 @@ def coerce_telemetry_sample(payload: Any) -> dict[str, Any]:
         "service": service,
         "health": health,
     }
+    if isinstance(payload, dict) and isinstance(payload.get("units"), dict):
+        sample["units"] = {
+            str(name): unit.strip()
+            for name, unit in payload["units"].items()
+            if isinstance(unit, str) and unit.strip() and str(name) in metrics
+        }
+    return sample
 
 
 def history_as_dataframe(history: list[dict[str, Any]]):

@@ -19,11 +19,13 @@ from .runbook_panels_parts.shared import (
     _current_approval_state,
     _latest_telemetry,
     _parse_tags,
+    _record_actor,
+    _record_session,
     _render_table,
     _selected_profile_id,
 )
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
-from .security import has_perm
+from .security import can_mutate, can_write, has_perm
 from .sections import section_visible
 
 
@@ -41,8 +43,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
         st.session_state["_radt_active_run_id"] = ""
         active_run_id = ""
 
-    can_manage = has_perm(ctx, "can_manage_runs", default=False)
-    can_approve = has_perm(ctx, "can_approve_changes", default=False)
+    can_manage = can_mutate(ctx, "can_manage_runs", default=False)
 
     st.text_input("Run notes", key="_radt_run_notes")
     st.text_input("Run tags", key="_radt_run_tags", help="Comma-separated tags for the current or next run.")
@@ -52,10 +53,10 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
 
     if active_run is None:
         st.caption("No active run.")
-        if st.button("Start run", key="_radt_run_start", disabled=not can_manage) and can_manage:
+        if st.button("Start run", key="_radt_run_start", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
             started = build_run(
                 config.registry.persistable_snapshot(st.session_state),
-                actor=str(st.session_state.get("_radt_user_id", "")),
+                actor=_record_actor(ctx, st.session_state),
                 role=ctx.role,
                 source_profile_id=_selected_profile_id(st.session_state),
                 active_profile_id=_selected_profile_id(st.session_state),
@@ -63,7 +64,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 tags=_parse_tags(st.session_state.get("_radt_run_tags", "")),
                 app_name=config.title,
                 app_version=getattr(config, "version", ""),
-                session_id=str(st.session_state.get("_radt_session_id", "")),
+                session_id=_record_session(ctx, st.session_state),
                 source="ui",
             )
             store.save(started)
@@ -79,14 +80,14 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Checkpoint", key="_radt_run_checkpoint", disabled=not can_manage) and can_manage:
+        if st.button("Checkpoint", key="_radt_run_checkpoint", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
             updated = append_checkpoint(
                 active_run,
                 config.registry.persistable_snapshot(st.session_state),
                 label=str(st.session_state.get("_radt_checkpoint_label", "") or "") or f"Checkpoint {summary['checkpoint_count'] + 1}",
                 reason=str(st.session_state.get("_radt_checkpoint_reason", "") or ""),
-                approval_state=_current_approval_state(ctx, can_approve=can_approve),
-                actor=str(st.session_state.get("_radt_user_id", "")),
+                approval_state=_current_approval_state(ctx, can_approve=can_mutate(ctx, "can_approve_changes")),
+                actor=_record_actor(ctx, st.session_state),
                 role=ctx.role,
                 source="ui",
                 audit_events=(
@@ -107,7 +108,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
             st.toast(f"Saved checkpoint: {checkpoint_id}")
             st.rerun()
     with c2:
-        if st.button("End run", key="_radt_run_end", disabled=not can_manage) and can_manage:
+        if st.button("End run", key="_radt_run_end", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
             finished = end_run(
                 active_run,
                 outcome=str(st.session_state.get("_radt_run_outcome", "")),
@@ -202,9 +203,7 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                     st.json(build_checkpoint_packet(selected_checkpoint, run_id=selected_run.get("run_id", ""), source_version=getattr(config, "version", "")))
 
             can_replay = has_perm(ctx, "can_replay_runs", default=False)
-            can_apply_replay = can_replay and bool(
-                getattr(ctx, "controls_writable", True)
-            )
+            can_apply_replay = can_write(ctx, "can_replay_runs")
             replay_packet = (
                 build_replay_packet_from_checkpoint(selected_checkpoint)
                 if can_export_packets or can_replay
@@ -217,7 +216,7 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 "Replay checkpoint into live controls",
                 key="_radt_checkpoint_replay_btn",
                 disabled=not can_apply_replay,
-            ) and can_apply_replay:
+            ) and can_write(ctx, "can_replay_runs"):
                 if stage_replay(config, st.session_state, ctx, replay_packet) is not None:
                     # The control widgets already exist. Apply before widgets on
                     # the next render, rechecking the current role and freeze.
@@ -233,7 +232,9 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 right_id = st.selectbox("Right checkpoint", options=ids, index=len(ids) - 1, key="_radt_compare_checkpoint_right")
                 left = next(cp for cp in checkpoints if cp.get("checkpoint_id") == left_id)
                 right = next(cp for cp in checkpoints if cp.get("checkpoint_id") == right_id)
-                st.json(compare_checkpoints(left, right))
+                comparison = compare_checkpoints(left, right, include_telemetry=True)
+                st.json({key: value for key, value in comparison.items() if key != "telemetry_comparison"})
+                _render_telemetry_comparison(st, comparison["telemetry_comparison"])
 
         if has_perm(ctx, "can_view_metrics", default=False) and len(runs) >= 2:
             st.subheader("Run Compare")
@@ -242,7 +243,10 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
             right_run_id = st.selectbox("Right run", options=options, index=min(1, len(options) - 1), key="_radt_compare_run_right")
             left_run = next(run for run in runs if run.get("run_id") == left_run_id)
             right_run = next(run for run in runs if run.get("run_id") == right_run_id)
-            st.json(compare_runs(left_run, right_run))
+            comparison = compare_runs(left_run, right_run, include_telemetry=True)
+            st.json({key: value for key, value in comparison.items() if key != "telemetry_comparison"})
+            st.caption("Run measurements come from each run's final checkpoint.")
+            _render_telemetry_comparison(st, comparison["telemetry_comparison"])
 
         if section_visible(config, "team_ops"):
             _render_team_ops_panel(st, config, ctx, selected_run)
@@ -257,6 +261,32 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
 
 
 
+
+
+def _render_telemetry_comparison(st: Any, comparison: dict[str, Any]) -> None:
+    st.subheader("Observed Outcomes")
+    st.caption(
+        f"Left sample: {comparison['left_sample_ts'] or 'timestamp not recorded'} | "
+        f"Right sample: {comparison['right_sample_ts'] or 'timestamp not recorded'}"
+    )
+    st.caption(
+        "Change is right minus left. These observations do not establish that "
+        "a control change caused an outcome. Sample times may precede checkpoint times."
+    )
+    rows = [
+        {
+            "Metric": name, "Left": row["from"], "Right": row["to"],
+            "Left unit": row["from_unit"] or "unspecified",
+            "Right unit": row["to_unit"] or "unspecified",
+            "Change": row["delta"],
+            "Status": row["status"].replace("_", " "),
+        }
+        for name, row in comparison["metrics"].items()
+    ]
+    if rows:
+        _render_table(st, rows)
+    else:
+        st.caption("No recorded measurements in either selected checkpoint.")
 
 
 __all__ = ["render_runbook_panel", "render_runbook_sidebar"]

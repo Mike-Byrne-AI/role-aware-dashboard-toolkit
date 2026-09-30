@@ -8,6 +8,7 @@ Start with the path closest to what you are building.
 - [Installed assistant guidance](../role_aware_dashboard_toolkit/resources/guides/start.md) — offline handbook and starter commands
 - [Quickstart](quickstart.md) — dependency-free library walkthrough
 - [Dashboard tools](dashboard_tools.md) — controls, roles, profiles, and audit
+- [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze and private provisioning
 - [Examples](../examples/README.md) — runnable core and Streamlit examples
 - [What Role-Aware Dashboard Toolkit is and is not](what_role_aware_dashboard_toolkit_is_and_is_not.md) — scope
 
