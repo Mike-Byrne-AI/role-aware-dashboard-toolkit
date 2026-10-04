@@ -5,17 +5,24 @@ and audit history. It uses the installed Role-Aware Dashboard Toolkit package.
 
 ## Run
 
-The starter needs Streamlit 1.44 or newer for its sidebar theme. If the rendering
-dependency is missing, install it in the environment that contains the toolkit:
+Install the toolkit's `workbench` extra in the environment that will run this
+dashboard. It applies the supported Streamlit and server dependency requirements.
+From this application directory, replace the example path below with the absolute
+path to your reviewed toolkit source checkout:
 
 ```powershell
-python -m pip install "streamlit>=1.44"
+python -m pip install "C:\path\to\role-aware-dashboard-toolkit[workbench]"
+python -m pip check
 python -m streamlit run app.py
 ```
 
+Alternatively, pass the absolute filename of your reviewed local toolkit wheel
+with `[workbench]` appended to the same `pip install` command. Both forms apply
+the extra's dependency requirements when the core toolkit is already installed.
+
 Run from this directory so Streamlit reads `.streamlit/config.toml`. The server
-binds to loopback. The core toolkit can be installed from a local wheel; this
-starter does not assume that a toolkit PyPI release already exists.
+binds to loopback. This starter does not assume that a toolkit PyPI release
+already exists.
 
 ## Try it
 

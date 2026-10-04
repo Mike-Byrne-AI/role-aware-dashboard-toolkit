@@ -3,6 +3,11 @@
 Role-Aware Dashboard Toolkit's optional FastAPI surface is secure by default. Protected routes require `ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY` and the request must send the same value in the `X-API-Key` header.
 Dashboard setup and first-run control flows are documented in `docs/dashboard_tools.md`; this page focuses on API trust boundaries and permissions.
 
+API keys must contain only ASCII characters. When a key is configured, non-ASCII
+request keys receive the same generic HTTP 401 as an incorrect key. A nonempty
+non-ASCII configured key also denies protected requests until corrected; it
+never enables anonymous access. Valid ASCII keys retain constant-time comparison.
+
 Demo dashboard roles are self-selected workflow context. Shared dashboards can
 use the [authenticated starter](../role_aware_dashboard_toolkit/resources/guides/authentication.md)
 with verified OIDC identity, server-owned grants and shared freeze. The existing
@@ -13,7 +18,11 @@ configure its API-key and role policy independently.
 Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
 `<redacted-secret>` and mark the control as `sensitive: true`. Profile endpoints
-omit sensitive values. Role-Aware Dashboard Toolkit profiles
+omit sensitive values. Reads of existing profiles expose only currently registered
+public controls, and honor historical sensitivity flags. A control containing
+nested secret-named fields is omitted as a whole, before any text coercion.
+API activation leaves those omitted controls at their current values; the
+stored profile is not rewritten. Role-Aware Dashboard Toolkit profiles
 are not a credential store; use environment injection or a secret manager.
 
 `role_aware_dashboard_toolkit.api` is importable from a core install even when FastAPI and

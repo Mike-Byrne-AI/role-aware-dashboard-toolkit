@@ -5,6 +5,17 @@ def build_public_api_usage_recipe_lines() -> list[str]:
     return [
         "## Usage recipes",
         "",
+        "These recipes use a GitHub-source release. From your reviewed toolkit source",
+        "checkout, install the extra needed by your application in the same Python environment:",
+        "",
+        "```powershell",
+        'python -m pip install ".[workbench]"  # Dashboard rendering',
+        'python -m pip install ".[api]"        # Optional HTTP API',
+        "```",
+        "",
+        "From another directory, pass the absolute source path or reviewed local wheel",
+        "filename with `[workbench]` or `[api]` appended. No package-index release is assumed.",
+        "",
         "### Dashboard controls",
         "",
         "```python",
@@ -41,7 +52,7 @@ def build_public_api_usage_recipe_lines() -> list[str]:
         "app = radt.create_app(registry)",
         "```",
         "",
-        "Install `role-aware-dashboard-toolkit[api]` before constructing the FastAPI application.",
+        "Install the `api` extra as shown above before constructing the FastAPI application.",
         "",
     ]
 

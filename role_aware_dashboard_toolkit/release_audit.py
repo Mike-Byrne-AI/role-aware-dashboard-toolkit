@@ -6,6 +6,7 @@ from typing import Any
 
 from .distribution import (
     ROLE_AWARE_DASHBOARD_TOOLKIT_DISTRIBUTION_STRATEGY,
+    _SOURCE_INSTALL_GUIDANCE,
     list_distribution_artifacts,
 )
 from .public_api import list_public_api_families, public_api_manifest
@@ -43,6 +44,8 @@ def build_release_audit_markdown() -> str:
         f"- Undocumented root exports: `{api['undocumented_export_count']}`",
         "",
         "## Artifact summary",
+        "",
+        *_SOURCE_INSTALL_GUIDANCE,
         "",
     ]
     for artifact in manifest["artifacts"]:
@@ -192,6 +195,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
 _PUBLIC_SDIST_MEMBERS = frozenset(
     {
         ".github/workflows/ci.yml",
+        ".github/workflows/contributor-ci.yml",
         ".gitignore",
         "ARCHITECTURE_SCOPE.md",
         "CHANGELOG.md",
@@ -241,6 +245,11 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "examples/operator_review/workflow.py",
         "examples/operator_review/report.py",
         "examples/operator_review/README.md",
+        "examples/section_access/app.py",
+        "examples/section_access/demo.py",
+        "examples/section_access/policy.py",
+        "examples/section_access/provision.py",
+        "examples/section_access/README.md",
         "pyproject.toml",
         "schemas/case.schema.json",
         "schemas/checkpoint.schema.json",

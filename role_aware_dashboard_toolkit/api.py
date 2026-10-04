@@ -2,7 +2,9 @@
 # Optional REST API for Role-Aware Dashboard Toolkit dashboards.
 #
 # Exposes profile CRUD, control reads, and role info over HTTP with API-key
-# authentication.  Install with:  pip install role-aware-dashboard-toolkit[api]
+# authentication. From a reviewed toolkit source checkout, install the API extra:
+#     python -m pip install ".[api]"
+# Or install a reviewed local toolkit wheel with [api] appended to its filename.
 #
 # Usage:
 #     from role_aware_dashboard_toolkit.api import create_app
@@ -25,8 +27,11 @@ from .audit import AuditLog
 from .controls import ControlRegistry
 from .profile_store import BaseProfileStore
 from .profiles import (
+    _InvalidProfileError,
+    _require_profile_shape,
+    _restore_profile_data,
     save_profile,
-    load_profile,
+    load_profile_data,
     list_profiles,
     delete_profile,
 )
@@ -38,7 +43,7 @@ from .security import (
     RoleDef,
     BUILTIN_ROLES,
 )
-from .sensitive_values import REDACTED_SECRET
+from .sensitive_values import REDACTED_SECRET, is_sensitive_name
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -98,7 +103,10 @@ def _require_fastapi() -> None:
         raise _FASTAPI_IMPORT_ERROR
     raise ImportError(
         "FastAPI is required for the Role-Aware Dashboard Toolkit API module. "
-        "Install with: pip install role-aware-dashboard-toolkit[api]"
+        'From your reviewed toolkit source checkout, run: python -m pip install ".[api]". '
+        "Or install an absolute source path or reviewed local wheel filename "
+        "with [api] appended. No package-index release is assumed. "
+        "Help: python -m role_aware_dashboard_toolkit guide api"
     )
 
 
@@ -130,7 +138,10 @@ def _resolve_api_context(app_state: _AppState, x_api_key: str) -> SecurityContex
     expected = str(os.getenv(_API_KEY_ENV, "") or "")
     supplied = str(x_api_key or "")
     if expected:
-        if not hmac.compare_digest(supplied, expected):
+        # String compare_digest accepts ASCII only. Reject malformed headers
+        # and unsupported host keys without exposing either or enabling the
+        # anonymous fallback; supported keys retain constant-time comparison.
+        if not supplied.isascii() or not expected.isascii() or not hmac.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="Unauthorized")
         return _context_for_role(app_state.api_role or _DEFAULT_AUTHENTICATED_ROLE, app_state.custom_roles)
     if app_state.allow_anonymous:
@@ -323,6 +334,59 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
         return updated
 
 
+def _profile_response_values(
+    registry: ControlRegistry, values: dict[str, Any] | None, metadata: Any = None,
+) -> dict[str, Any]:
+    """Expose only known public values; never stringify a nested saved secret."""
+    historical_sensitive = {
+        item.get("key") for item in (metadata if isinstance(metadata, list) else [])
+        if isinstance(item, dict) and item.get("sensitive")
+        and isinstance(item.get("key"), str)
+    }
+    return {
+        key: value for key, value in (values or {}).items()
+        if (control := registry.get(key)) is not None
+        and not control.sensitive and key not in historical_sensitive
+        and not _contains_secret_fields(value)
+    }
+
+
+def _contains_secret_fields(value: Any) -> bool:
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if not isinstance(item, (dict, list, tuple)) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, dict):
+            if any(is_sensitive_name(key) for key in item):
+                return True
+            pending.extend(item.values())
+        else:
+            pending.extend(item)
+    return False
+
+
+def _load_api_profile(
+    profile_id: str, registry: ControlRegistry, session_state: dict[str, Any],
+    *, profile_dir: str, store: BaseProfileStore | None = None,
+) -> dict[str, Any] | None:
+    try:
+        data = load_profile_data(profile_id, profile_dir=profile_dir, store=store)
+        if data is None:
+            return None
+        _require_profile_shape(data)
+        # Project before restoration: coercing a mapping into a text control
+        # would otherwise discard the field names that identify nested secrets.
+        safe_data = {**data, "values": _profile_response_values(
+            registry, data.get("values"), data.get("control_meta"),
+        )}
+        return _restore_profile_data(safe_data, registry, session_state)
+    except _InvalidProfileError:
+        raise HTTPException(status_code=422, detail="Stored profile fields are invalid.") from None
+
+
 def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/profiles", response_model=list[str])
     async def get_profiles(_: SecurityContext = Depends(require_api_context("can_load_profiles"))):
@@ -330,7 +394,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
 
     @app.get("/profiles/{profile_id}", response_model=ProfileResponse)
     async def get_profile(profile_id: str, _: SecurityContext = Depends(require_api_context("can_load_profiles"))):
-        data = load_profile(
+        data = _load_api_profile(
             profile_id,
             app_state.registry,
             {},  # read-only: don't mutate app state
@@ -366,7 +430,9 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         return ProfileResponse(
             profile_id=profile_id,
             role=req.role,
-            values=app_state.registry.persistable_snapshot(app_state.state),
+            values=_profile_response_values(
+                app_state.registry, app_state.registry.persistable_snapshot(app_state.state),
+            ),
         )
 
     @app.post("/profiles/{profile_id}/activate", response_model=ProfileResponse)
@@ -375,7 +441,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
         staged_state = dict(app_state.state)
-        data = load_profile(
+        data = _load_api_profile(
             profile_id,
             app_state.registry,
             staged_state,
@@ -401,7 +467,9 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             profile_id=data.get("profile_id", profile_id),
             saved_at=data.get("saved_at", ""),
             role=data.get("role", ""),
-            values=app_state.registry.persistable_snapshot(app_state.state),
+            values=_profile_response_values(
+                app_state.registry, app_state.registry.persistable_snapshot(app_state.state),
+            ),
         )
 
     @app.delete("/profiles/{profile_id}")

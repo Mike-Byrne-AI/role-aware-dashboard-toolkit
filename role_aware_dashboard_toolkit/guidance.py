@@ -98,14 +98,14 @@ def inspect_capabilities() -> dict[str, Any]:
         "control_kinds": list(VALID_KINDS),
         "supported_layouts": ["stacked", "columns"],
         "appearance_requirements": {
-            "core_workbench": "Streamlit >=1.30",
+            "core_workbench": "Streamlit >=1.65.0",
             "group_fills": "Streamlit >=1.39 with st.container(key=...) and st.html()",
             "sidebar_theme": "Streamlit >=1.44",
             "note": "Documented API requirements, not certification of the installed runtime.",
         },
         "section_defaults": asdict(DashboardSections()),
         "authentication_requirements": {
-            "streamlit": "Streamlit >=1.52.2 with its auth extra (Authlib >=1.3.2)",
+            "streamlit": "Streamlit >=1.65.0 with the toolkit auth extra (Authlib >=1.6.11)",
             "provider": "Host-configured OIDC provider and explicit server-side role provisioning",
             "guide": "python -m role_aware_dashboard_toolkit guide authentication",
         },

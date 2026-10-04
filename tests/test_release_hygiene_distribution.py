@@ -118,6 +118,10 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     sdist_members = _logical_members(built_release_artifacts["sdist"])
     assert "examples/dashboard_admin_controls_app.py" in sdist_members
     assert "examples/plugin_template.py" in sdist_members
+    assert {
+        f"examples/section_access/{name}"
+        for name in ("app.py", "demo.py", "policy.py", "provision.py", "README.md")
+    } <= sdist_members
     assert {"examples/studio_dispatch/app.py", "examples/studio_dispatch/README.md",
             "examples/studio_dispatch/.streamlit/config.toml", "AGENTS.md",
             "docs/development_handoff.md"} <= sdist_members
@@ -305,6 +309,8 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         sdist_root / "examples" / "dashboard_admin_controls_app.py",
         sdist_root / "examples" / "plugin_template.py",
         sdist_root / "examples" / "studio_dispatch" / "app.py",
+        *(sdist_root / "examples" / "section_access" / name
+          for name in ("app.py", "demo.py", "policy.py", "provision.py")),
     ]
 
     for script in scripts:
@@ -342,5 +348,9 @@ def test_sdist_configuration_is_an_explicit_public_allowlist():
         "/examples/operator_review/app.py",
         "/examples/operator_review/workflow.py",
         "/examples/operator_review/report.py",
+        "/examples/section_access/app.py",
+        "/examples/section_access/demo.py",
+        "/examples/section_access/policy.py",
+        "/examples/section_access/provision.py",
     }
     assert importlib.util.find_spec("role_aware_dashboard_toolkit") is not None

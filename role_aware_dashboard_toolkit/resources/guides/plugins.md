@@ -18,8 +18,11 @@ config = radt.DashboardConfig(registry=registry, plugins=plugins)
 
 Use `render_sidebar=` for a custom menu. Give widgets stable host-owned keys.
 Check `has_perm` before displaying protected data; use `can_write` for actions
-that also require the writable switch. Setup receives `ctx=None`, so do not
-expose user data or make user-authorized changes from setup.
+that also require the writable switch. In authenticated mode, setup receives
+the prepared access context; other modes pass `ctx=None`. Setup runs once per
+registration and can be shared across sessions: never cache user data,
+identities or authorization decisions there. Keep user-specific reads and
+actions in callbacks that check the current render context at the boundary.
 
 `plugins.unregister("overview")` removes a registration and returns it;
 an unknown name raises `KeyError`. Future dispatches skip removed callbacks.

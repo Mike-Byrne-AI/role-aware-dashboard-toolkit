@@ -107,10 +107,11 @@ Local development readiness does not establish a hosted or public release.
 Historical evidence for `35956fa` covers that earlier commit only. Source and
 artifact checks must be refreshed for whichever commit is ultimately released.
 
-The current CI workflow is manually dispatched and requires the exact approved
-commit. It does not currently run automatically on pushes or pull requests.
-Review that policy when normal contributor automation is desired; do not assume
-a pushed commit has been validated remotely.
+Contributor validation in `.github/workflows/contributor-ci.yml` runs on pull
+requests and pushes to `main`. Its stable required check is `contributor-checks`.
+The release workflow in `.github/workflows/ci.yml` remains manually dispatched
+and requires the exact approved commit. Verify live branch protection and the
+actual checks for a commit; workflow configuration alone is not hosted evidence.
 
 Before publication, follow the [release checklist](release_checklist.md) and
 [publication runbook](release_runbook.md): freeze the intended source, build and

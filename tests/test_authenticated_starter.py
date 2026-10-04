@@ -12,7 +12,7 @@ import pytest
 
 from role_aware_dashboard_toolkit import cli
 from role_aware_dashboard_toolkit.access import AccessDenied, AccessPolicy, Identity, InMemoryAccessStore
-from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
+from role_aware_dashboard_toolkit.guidance import inspect_capabilities, read_guide, read_starter
 
 
 def test_authenticated_scaffold_matches_readonly_example_and_contains_no_secrets(tmp_path, capsys):
@@ -42,6 +42,28 @@ def test_authentication_guide_is_discoverable_offline(capsys):
     assert "access_cli grant" in content
     assert "application never enrolls the first" in content
     assert "Provider-side account/session revocation is not" in content
+
+
+def test_installed_auth_guidance_requires_current_host_and_session_acceptance():
+    guide = read_guide("authentication")["content"]
+    starter_readme = read_starter(authenticated=True)["README.md"]
+    requirements = inspect_capabilities()
+
+    assert "Streamlit >=1.65.0" in requirements["authentication_requirements"]["streamlit"]
+    assert "Authlib >=1.6.11" in requirements["authentication_requirements"]["streamlit"]
+    assert requirements["appearance_requirements"]["core_workbench"] == "Streamlit >=1.65.0"
+    for content in (guide, starter_readme):
+        assert "streamlit[auth]>=1.65.0" in content
+        assert "without system site packages" in content
+        assert "pip check" in content
+        assert "1.52.2" not in content
+    assert "pip-audit" in guide
+    assert "without the initiating browser session" in guide
+    assert "consumed authorization code" in guide
+    assert "durable protected history of grants" in guide
+    assert "post_logout_redirect_uri" in guide
+    assert "signed browser token cookie" in guide
+    assert "do not set Secure" in " ".join(guide.split())
 
 
 @pytest.fixture
