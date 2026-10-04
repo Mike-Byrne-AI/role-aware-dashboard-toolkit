@@ -10,7 +10,7 @@ from .audit import AuditLog
 from .controls import ControlRegistry
 from .dashboard_context import prepare_render_state
 from .diagnostics import attach_diagnostic, diagnostic_text
-from .dashboard_panels import render_audit_panel, render_groups
+from .dashboard_panels import _validate_control_widgets, render_audit_panel, render_groups
 from .observability import ObservabilityConfig, ObservabilityPanel
 from .run_store import BaseRunStore
 from .team_store import BaseTeamStore
@@ -127,7 +127,9 @@ def _require_streamlit() -> Any:
             raise
         raise attach_diagnostic(ModuleNotFoundError(
             "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-            'Install with: pip install "role-aware-dashboard-toolkit[workbench]"',
+            'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+            "From another directory, use the absolute source path or local wheel filename "
+            "with [workbench] appended. No package-index release is assumed.",
             name="streamlit",
         ), "RADT-STREAMLIT") from None
     st = streamlit_runtime
@@ -156,6 +158,8 @@ def prepare_access(config: DashboardConfig) -> SecurityContext:
 
 def render(config: DashboardConfig) -> SecurityContext:
     streamlit_runtime = _require_streamlit()
+    if section_visible(config, "controls"):
+        _validate_control_widgets(config.registry)
     if config.auth_mode == "authenticated":
         # Binding an actor must never mutate a config shared between sessions.
         config = copy(config)
@@ -171,6 +175,9 @@ def render(config: DashboardConfig) -> SecurityContext:
     if prepared_access is not None:
         restore_unauthorized_control_state(config.registry, streamlit_runtime.session_state, prepared_access)
     plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": prepared_access})
+    if section_visible(config, "controls"):
+        # Setup can register controls; validate those before native widgets too.
+        _validate_control_widgets(config.registry)
     # Setup can register additional controls on every Streamlit script run.
     # Retain those values too before sidebar actions can trigger an early rerun.
     retain_control_state(config.registry, streamlit_runtime.session_state)

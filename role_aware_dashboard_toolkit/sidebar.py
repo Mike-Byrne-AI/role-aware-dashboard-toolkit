@@ -11,7 +11,10 @@ from .diagnostics import build_diagnostic, diagnostic_text
 from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
-from .profiles import delete_profile, list_profiles, load_profile, load_profile_data, save_profile
+from .profiles import (
+    _InvalidProfileError, _require_profile_shape, delete_profile, list_profiles,
+    load_profile, load_profile_data, save_profile,
+)
 from .runbook_panels import render_runbook_sidebar
 from .sections import section_visible
 from .security import (
@@ -174,7 +177,7 @@ class _ProfileStorageFailure(Exception):
 def _profile_store_call(operation: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return operation(*args, **kwargs)
-    except (OSError, StorePathSecurityError) as exc:
+    except (OSError, StorePathSecurityError, _InvalidProfileError) as exc:
         raise _ProfileStorageFailure(type(exc).__name__) from None
 
 
@@ -206,13 +209,24 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
     if selected_profile not in profiles:
         selected_profile = "(none)"
         st.session_state["_radt_profile_choice"] = selected_profile
+    selected_profile_valid = True
+    if selected_profile != "(none)":
+        selected_data = _profile_store_call(
+            load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store,
+        )
+        if selected_data is not None:
+            try:
+                _require_profile_shape(selected_data)
+            except _InvalidProfileError:
+                selected_profile_valid = False
 
     # Keep inputs visually above the buttons, but create their widgets after a
     # successful write has refreshed membership. An early rerun would interrupt
     # host/plugin widgets later in the script and can discard their state.
     inputs = st.container()
     try:
-        if _render_profile_actions(st, config, ctx, profile_store, selected_profile):
+        if _render_profile_actions(st, config, ctx, profile_store, selected_profile,
+                                   selected_profile_valid=selected_profile_valid):
             profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
     finally:
         # A failed store operation or denied load must still render these keyed
@@ -232,6 +246,11 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
         if selected_profile and selected_profile != "(none)":
             loaded = _profile_store_call(load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
             if loaded:
+                try:
+                    _require_profile_shape(loaded)
+                except _InvalidProfileError:
+                    st.warning("Profile preview is unavailable: saved values are invalid.")
+                    return
                 parent = str(loaded.get("parent_profile_id") or "").strip()
                 if parent:
                     st.caption(f"Parent profile: {parent}")
@@ -273,6 +292,7 @@ def _render_profile_preview(
 
 def _render_profile_actions(
     st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str,
+    *, selected_profile_valid: bool = True,
 ) -> bool:
     """Process profile actions once; report a successful membership-changing write."""
     reg = config.registry
@@ -285,13 +305,15 @@ def _render_profile_actions(
         save_requested = st.button(
             "Save",
             key="_radt_profile_save",
-            disabled=not can_save_profiles,
+            disabled=not can_save_profiles or not selected_profile_valid,
         )
         if save_requested and can_mutate(ctx, "can_save_profiles"):
             name = str(st.session_state.get("_radt_profile_name", "")).strip()
             if name:
                 parent_profile_id = selected_profile if selected_profile != "(none)" else ""
                 parent_data = _profile_store_call(load_profile_data, parent_profile_id, profile_dir=config.profile_dir, store=profile_store) if parent_profile_id else None
+                if parent_data is not None:
+                    _profile_store_call(_require_profile_shape, parent_data)
                 _profile_store_call(
                     save_profile,
                     name,
@@ -317,7 +339,7 @@ def _render_profile_actions(
         load_requested = st.button(
             "Load",
             key="_radt_profile_load",
-            disabled=not can_load_profiles,
+            disabled=not can_load_profiles or not selected_profile_valid,
         )
         if load_requested and can_write(ctx, "can_load_profiles"):
             choice = st.session_state.get("_radt_profile_choice", "(none)")

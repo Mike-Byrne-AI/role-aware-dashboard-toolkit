@@ -223,6 +223,7 @@ def build_incident_timeline(
                     "checkpoint_id": str(incident.get("checkpoint_id") or ""),
                     "decision_id": str(incident.get("decision_id") or ""),
                     "incident_id": str(incident.get("incident_id") or ""),
+                    "incident_status": str(incident.get("status") or "open"),
                 },
                 actor=str(incident.get("actor") or ""),
                 role=str(incident.get("role") or ""),

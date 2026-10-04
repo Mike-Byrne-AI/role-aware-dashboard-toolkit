@@ -5,6 +5,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
 )
 
@@ -40,7 +41,7 @@ class FileGovernanceStore(_JsonRecordFileStoreMixin, BaseGovernanceStore):
         self.root_dir = root_dir
 
     def save(self, record: dict[str, Any]) -> str:
-        governance_id = str(record.get("governance_id") or "").strip() or "default"
+        governance_id = canonical_store_id(record.get("governance_id"))
         return self._save_record(record, governance_id)
 
     def load(self, governance_id: str) -> dict[str, Any] | None:
@@ -71,12 +72,12 @@ class InMemoryGovernanceStore(BaseGovernanceStore):
         self._records: dict[str, dict[str, Any]] = {}
 
     def save(self, record: dict[str, Any]) -> str:
-        governance_id = str(record.get("governance_id") or "").strip() or "default"
-        self._records[governance_id] = json_roundtrip_copy(record)
+        governance_id = canonical_store_id(record.get("governance_id"))
+        self._records[governance_id] = json_roundtrip_copy({**record, "governance_id": governance_id})
         return governance_id
 
     def load(self, governance_id: str) -> dict[str, Any] | None:
-        record = self._records.get(str(governance_id or ""))
+        record = self._records.get(canonical_store_id(governance_id))
         if record is None:
             return None
         return json_roundtrip_copy(record)

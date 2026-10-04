@@ -14,16 +14,20 @@ _ACCEPTED_CONTROL_VALUES = "_radt_accepted_control_values"
 
 
 def retain_control_state(registry: Any, session_state: Any) -> None:
-    """Detach registered values from widget cleanup before any early sidebar rerun.
+    """Detach control/profile inputs from cleanup before any early sidebar rerun.
 
     Streamlit deletes state for widgets omitted by a rerun. Explicit assignment
     before widget creation preserves values, including hidden and frozen controls.
+    Authentication clears a changed principal's state before this helper runs.
     """
     denied = session_state.pop("_radt_denied_control_restore", {})
     for key, value in denied.items():
         if key in registry:
             session_state[key] = value
-    for key in registry.keys():
+    # Native profile inputs also disappear when navigation hides their section.
+    # Keep only their current state; do not create a copy that could outlive auth
+    # cleanup. The sidebar rechecks retained selections against the current store.
+    for key in (*registry.keys(), "_radt_profile_choice", "_radt_profile_name"):
         if key in session_state:
             session_state[key] = session_state[key]
 

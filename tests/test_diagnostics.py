@@ -26,6 +26,7 @@ from role_aware_dashboard_toolkit.version import ROLE_AWARE_DASHBOARD_TOOLKIT_VE
 
 _CODES = {
     "RADT-CONTROL-DEFINITION": ("controls", "register_control"),
+    "RADT-CONTROL-RENDER": ("controls", "render_controls"),
     "RADT-APPEARANCE": ("appearance", "configure_appearance"),
     "RADT-SECTIONS": ("sections", "configure_sections"),
     "RADT-STREAMLIT": ("start", "render_dashboard"),
@@ -68,7 +69,7 @@ def test_catalog_and_each_diagnostic_are_detached():
     record = build_diagnostic("RADT-CONTROL-DEFINITION")
     record["effect"] = "mutated too"
     fresh = list_diagnostics()
-    assert len(fresh) == 11
+    assert len(fresh) == 12
     assert fresh[0]["message"] == "The control definition was rejected."
     assert fresh[0]["effect"] != record["effect"]
 
@@ -255,7 +256,7 @@ builtins.__import__ = guarded_import
 import role_aware_dashboard_toolkit
 from role_aware_dashboard_toolkit.diagnostics import list_diagnostics
 from role_aware_dashboard_toolkit.runtime import cleanup_runtime
-assert len(list_diagnostics()) == 11
+assert len(list_diagnostics()) == 12
 assert cleanup_runtime(run_gc=False, try_torch_cuda_empty_cache=False)["error_records"] == []
 assert not (optional & set(sys.modules))
 """

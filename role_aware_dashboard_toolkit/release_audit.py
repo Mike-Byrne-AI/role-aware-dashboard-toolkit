@@ -192,6 +192,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
 _PUBLIC_SDIST_MEMBERS = frozenset(
     {
         ".github/workflows/ci.yml",
+        ".github/workflows/contributor-ci.yml",
         ".gitignore",
         "ARCHITECTURE_SCOPE.md",
         "CHANGELOG.md",
@@ -241,6 +242,11 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "examples/operator_review/workflow.py",
         "examples/operator_review/report.py",
         "examples/operator_review/README.md",
+        "examples/section_access/app.py",
+        "examples/section_access/demo.py",
+        "examples/section_access/policy.py",
+        "examples/section_access/provision.py",
+        "examples/section_access/README.md",
         "pyproject.toml",
         "schemas/case.schema.json",
         "schemas/checkpoint.schema.json",

@@ -6,6 +6,7 @@ from typing import Any
 
 from .audit_store import redact_audit_event
 from .controls import ControlRegistry
+from .profiles import _InvalidProfileError, _require_profile_shape
 from .security import SecurityContext, can_write, has_perm
 
 
@@ -36,8 +37,9 @@ def build_profile_restore_preview(
     at action time; this preview is not an authorization token.
     """
     try:
+        _require_profile_shape(profile)
         raw_values = dict(profile.get("values") or {})
-    except (TypeError, ValueError):
+    except _InvalidProfileError:
         # Stored records are not necessarily schema-validated. Selection must
         # not expose their contents through conversion errors or crash the UI.
         raise InvalidProfilePreviewValues("Profile values are invalid.") from None

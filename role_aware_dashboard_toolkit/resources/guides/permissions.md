@@ -6,6 +6,8 @@ verified identity receives server-owned role grants and can select only assigned
 roles. Shared freeze is checked again at protected writes. The legacy
 `DashboardConfig(auth_hook=...)` remains available for host-managed identity.
 Auth failure locks the context instead of falling back to Admin.
+The reserved `Unauthenticated` role always denies permission checks, including
+when host code supplies `default=True` to a permission helper.
 
 ```python
 roles = {
@@ -38,7 +40,11 @@ if radt.can_write(context["ctx"], "can_request_review"):
 ```
 
 Hiding a section is presentation only. Plugin callbacks must enforce their own
-data/action boundaries using the current context; setup has no user context.
+data/action boundaries using the current context. In authenticated mode, setup
+receives the prepared access context; other modes pass `ctx=None` to setup.
+Setup runs once per registration and can be shared across sessions: never cache
+user data, identities or authorization decisions there. Use the current render
+context and check permissions again at each protected read or action.
 
 Verify allowed and denied roles, freeze on/off, auth-hook failure, and mixed
 profiles containing a restricted field. Confirm denied changes create no success

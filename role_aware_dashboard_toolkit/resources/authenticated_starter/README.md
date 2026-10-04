@@ -11,8 +11,12 @@ python -m role_aware_dashboard_toolkit guide authentication
 ```
 
 Follow its provider registration, protected directory, provisioning and launch
-steps. The host environment needs `streamlit[auth]>=1.52.2`; the toolkit can be
-installed from a local wheel and does not assume publication on a package index.
+steps. Install the toolkit's `auth` extra from its reviewed source checkout or a
+local wheel; it requires `streamlit[auth]>=1.65.0` and patched authentication and
+server dependencies. No package-index publication is assumed. First validate a
+separate environment without system site packages, run `python -m pip check`
+and a dependency audit, and verify callback/session rejection before changing
+an existing launcher. Keep the previous environment for rollback.
 
 The app requires `RADT_ACCESS_DIRECTORY`, `RADT_OIDC_ISSUER` and
 `RADT_OIDC_AUDIENCE` from trusted host configuration. `RADT_OIDC_PROVIDER` is
@@ -34,8 +38,12 @@ data-read or mutation boundary; do not cache an authorization result.
 Token expiry and a one-hour maximum issued-token age are enforced. If you also
 require recent credential entry, configure OIDC `max_age` and set
 `require_auth_time=True` in the resolver. Streamlit logout ends the current
-session but does not end other existing tabs; server-side revocation prevents
-their next protected action. Provider-side revocation needs a host integration.
+session, clears its identity/token cookies and attempts provider OIDC logout
+when supported. Register and test the exact post-logout callback with the
+provider. Other existing dashboard sessions may remain; server-side grant
+revocation prevents their next protected action. Provider-side revocation
+needs a host integration. Streamlit also retains ID/access tokens in a signed
+browser cookie; follow the guide's data-handling and HTTPS/cookie requirements.
 
 Before sharing, run the guide's two-account acceptance checks against the actual
 provider and deployment. A passing synthetic test does not prove provider setup.

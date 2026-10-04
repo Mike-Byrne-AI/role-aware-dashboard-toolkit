@@ -42,3 +42,9 @@ automatically.
 Verify missing-key rejection, Viewer write denial, authorized writes and
 `source="api"` audit provenance. Sensitive control reads are redacted;
 profiles omit sensitive values. A successful profile deletion is audited.
+
+Existing profile reads expose only registered public controls. Historical
+sensitivity flags and nested secret-named fields also exclude a saved control
+from API responses and activation, preserving its current live value. This
+projection does not rewrite the saved record. Core profile helpers remain
+host-controlled; this additional projection belongs to the HTTP boundary.

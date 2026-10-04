@@ -5,6 +5,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
 )
 
@@ -40,7 +41,7 @@ class FileCaseStore(_JsonRecordFileStoreMixin, BaseCaseStore):
         self.root_dir = root_dir
 
     def save(self, record: dict[str, Any]) -> str:
-        case_id = str(record.get("case_id") or "").strip() or "default"
+        case_id = canonical_store_id(record.get("case_id"))
         return self._save_record(record, case_id)
 
     def load(self, case_id: str) -> dict[str, Any] | None:
@@ -71,12 +72,12 @@ class InMemoryCaseStore(BaseCaseStore):
         self._cases: dict[str, dict[str, Any]] = {}
 
     def save(self, record: dict[str, Any]) -> str:
-        case_id = str(record.get("case_id") or "").strip() or "default"
-        self._cases[case_id] = json_roundtrip_copy(record)
+        case_id = canonical_store_id(record.get("case_id"))
+        self._cases[case_id] = json_roundtrip_copy({**record, "case_id": case_id})
         return case_id
 
     def load(self, case_id: str) -> dict[str, Any] | None:
-        record = self._cases.get(str(case_id or ""))
+        record = self._cases.get(canonical_store_id(case_id))
         if record is None:
             return None
         return json_roundtrip_copy(record)

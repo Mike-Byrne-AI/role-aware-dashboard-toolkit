@@ -78,8 +78,8 @@ def _changed(app):
     app.toggle(key="maintenance").set_value(True)
     app.text_input(key="message").set_value("Incident")
     app.color_picker(key="accent").set_value("#FF9900")
-    app.text_input(key="api_token").set_value("live-sensitive-value")
-    return _healthy(app.run())
+    app.text_input(key="_radt_sensitive_replacement__api_token").set_value("live-sensitive-value")
+    return _healthy(app.button(key="_radt_sensitive_submit__api_token").click().run())
 
 
 def _start(app):

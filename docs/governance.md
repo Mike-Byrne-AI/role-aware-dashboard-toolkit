@@ -10,6 +10,14 @@ Role-Aware Dashboard Toolkit governance records turn case state into explicit ad
 - blocked actions and allowed next actions
 - case-linked history over time
 
+Native incident statuses `open`, `monitoring`, and `mitigated` remain unresolved
+until explicitly marked `closed`, matching operator-memory summaries. They block
+case closure and remain subject to incident severity checks. Mitigation alone
+does not close an incident. Allowed next actions exclude every blocked action,
+including when an otherwise admissible case still has unresolved incidents or
+missing approvals. These records provide review guidance; hosts must enforce
+their actual action permissions.
+
 ## View and write model
 
 Governance is now preview-first.
