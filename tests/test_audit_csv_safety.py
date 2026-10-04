@@ -19,7 +19,8 @@ from tests.test_role_aware_dashboard_toolkit import FakeStreamlit
 def test_formula_like_strings_are_explicit_text_without_breaking_field_boundaries(value):
     exported = _spreadsheet_safe_audit_csv([{"new": value, "detail": "unchanged"}])
     rows = list(csv.DictReader(StringIO(exported)))
-    assert rows == [{"new": "'" + value, "detail": "unchanged"}]
+    assert rows == [{"new": "'" + value.replace("\x00", "\\x00"), "detail": "unchanged"}]
+    assert "\x00" not in exported
     assert exported.startswith('"new","detail"')
     assert exported.splitlines()[1].startswith('"\'')
 
@@ -31,7 +32,8 @@ def test_formula_headers_are_safe_and_numbers_keep_their_numeric_representation(
     ]
 
 
-def test_actual_operator_api_change_has_safe_csv_and_faithful_jsonl(monkeypatch):
+@pytest.mark.parametrize("value", ["=1+1", "\x00=1+1", "ordinary\x00text"])
+def test_actual_operator_api_change_has_safe_csv_and_faithful_jsonl(monkeypatch, value):
     TestClient = pytest.importorskip("fastapi.testclient").TestClient
     from role_aware_dashboard_toolkit.api import create_app
 
@@ -51,7 +53,7 @@ def test_actual_operator_api_change_has_safe_csv_and_faithful_jsonl(monkeypatch)
     client = TestClient(create_app(registry, audit=audit, api_role="Operator"))
     response = client.patch(
         "/controls", headers={"X-API-Key": "synthetic-csv-test-key"},
-        json={"values": {"operator_comment": "=1+1"}},
+        json={"values": {"operator_comment": value}},
     )
     assert response.status_code == 200
     before = audit.all_events()
@@ -59,10 +61,25 @@ def test_actual_operator_api_change_has_safe_csv_and_faithful_jsonl(monkeypatch)
     runtime = Downloads()
     render_audit_panel(runtime, audit, make_security_context("Viewer", {"can_view_audit": True}))
     rows = list(csv.DictReader(StringIO(runtime.downloads["Download audit.csv"])))
-    assert rows[0]["new"] == "'=1+1"
+    expected = value.replace("\x00", "\\x00")
+    if "=1+1" in value:
+        expected = "'" + expected
+    assert rows[0]["new"] == expected
+    assert "\x00" not in runtime.downloads["Download audit.csv"]
     assert audit.all_events() == before
-    assert audit.all_events()[0]["new"] == "=1+1"
+    assert audit.all_events()[0]["new"] == value
     assert runtime.downloads["Download audit.jsonl"] == original_jsonl
+
+
+def test_nul_headers_and_cells_are_visible_without_changing_source_events():
+    events = [{"\x00=header": "ordinary\x00text", "detail": "\x00\x00+1,\"quoted\"\nnext"}]
+    exported = _spreadsheet_safe_audit_csv(events)
+    assert "\x00" not in exported
+    assert list(csv.reader(StringIO(exported))) == [
+        ["'\\x00=header", "detail"],
+        ["ordinary\\x00text", "'\\x00\\x00+1,\"quoted\"\nnext"],
+    ]
+    assert events == [{"\x00=header": "ordinary\x00text", "detail": "\x00\x00+1,\"quoted\"\nnext"}]
 
 
 def test_csv_is_available_without_optional_pandas(monkeypatch):

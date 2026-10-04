@@ -43,7 +43,8 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
 - Sensitive controls keep stored values and choices out of client widgets;
   permitted edits use explicit blank replacement inputs for every control kind.
 - Spreadsheet-oriented audit CSV exports neutralize formula-like text while
-  JSONL exports retain the original audit evidence.
+  JSONL exports retain the original audit evidence. NUL characters are displayed
+  as visible escapes in CSV for compatibility with Python 3.10 readers/writers.
 - Record validation reports malformed field shapes consistently, and profile
   loading rejects invalid stored values before changing live controls.
 - Decision validation accepts structured blockers; run validation checks nested

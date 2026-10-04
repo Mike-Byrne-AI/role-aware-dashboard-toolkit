@@ -2,6 +2,12 @@
 
 Role-Aware Dashboard Toolkit defines one Python distribution with a dependency-free core and explicit optional extras.
 
+Install targets below identify package requirement metadata. This GitHub-source release
+uses a reviewed source checkout or local wheel; no package-index release is assumed.
+From the checkout, run `python -m pip install ".[api]"`, replacing `api` with the desired extra.
+From another directory, pass an absolute source path or reviewed local wheel filename
+with the extra appended, such as `[api]`. Omit the extra to install the core alone.
+
 ## Role-Aware Dashboard Toolkit API
 
 - Artifact id: `api`

@@ -58,9 +58,15 @@ assert api.FASTAPI_AVAILABLE is False
 try:
     api.create_app(None)
 except ImportError as exc:
-    assert "role-aware-dashboard-toolkit[api]" in str(exc)
+    message = str(exc)
+    assert 'python -m pip install ".[api]"' in message
+    assert "reviewed toolkit source checkout" in message
+    assert "absolute source path or reviewed local wheel filename" in message
+    assert "No package-index release is assumed" in message
+    assert "python -m role_aware_dashboard_toolkit guide api" in message
+    assert "pip install role-aware-dashboard-toolkit[api]" not in message
 else:
-    raise AssertionError("create_app should require role-aware-dashboard-toolkit[api] when FastAPI is missing")
+    raise AssertionError("create_app should require the API extra when FastAPI is missing")
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
