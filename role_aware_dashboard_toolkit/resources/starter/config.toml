@@ -1,6 +1,6 @@
 # Project theme: edit these values to change page, inputs, text and accent.
-# This starter's independent sidebar colors require Streamlit >=1.44.
-# Its Python group fills require keyed containers (Streamlit >=1.39).
+# The supported starter baseline is Streamlit >=1.65.0.
+# This theme uses independent sidebar colors; group fills use keyed containers.
 [theme]
 base = "light"
 backgroundColor = "#F3F6FA"

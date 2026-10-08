@@ -73,6 +73,46 @@ def test_pyproject_declares_only_public_runtime_extras_and_dev_tooling():
         assert forbidden not in rendered
 
 
+def test_host_extras_require_reviewed_dependency_floors_without_changing_core():
+    project = _load_pyproject()["project"]
+    extras = project["optional-dependencies"]
+    server_floors = {
+        "starlette>=1.3.1",
+        "anyio>=4.14.2",
+        "python-multipart>=0.0.31",
+        "h11>=0.16.0",
+        "urllib3>=2.8.0",
+    }
+    auth_floors = {
+        "streamlit[auth]>=1.65.0",
+        "Authlib>=1.6.11",
+        "cryptography>=50.0.0",
+        "joserfc>=1.7.4",
+        *server_floors,
+    }
+
+    assert project["dependencies"] == []
+    assert project["requires-python"] == ">=3.10"
+    assert {"streamlit>=1.65.0", *server_floors} <= set(extras["workbench"])
+    api_floors = {
+        "fastapi>=0.133.0",
+        "starlette>=1.3.1",
+        "anyio>=4.14.2",
+        "h11>=0.16.0",
+    }
+    assert api_floors <= set(extras["api"])
+    for extra in ("auth", "full", "dev"):
+        assert auth_floors <= set(extras[extra]), extra
+    assert set(extras["workbench"]) <= set(extras["dev"])
+    assert set(extras["auth"]) <= set(extras["dev"])
+    assert set(extras["api"]) <= set(extras["dev"])
+
+
+def test_release_checker_requires_metadata_25_compatible_twine():
+    extras = _load_pyproject()["project"]["optional-dependencies"]
+    assert "twine>=7.0.0" in extras["dev"]
+
+
 def test_wheel_and_sdist_explicitly_exclude_archive_review_material():
     pyproject = _load_pyproject()
     targets = pyproject["tool"]["hatch"]["build"]["targets"]
@@ -105,6 +145,10 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/operator_review/app.py",
         "/examples/operator_review/workflow.py",
         "/examples/operator_review/report.py",
+        "/examples/section_access/app.py",
+        "/examples/section_access/demo.py",
+        "/examples/section_access/policy.py",
+        "/examples/section_access/provision.py",
     }
     assert not any("semantic" in path.lower() for path in include)
     assert not any("builder" in path.lower() for path in include)

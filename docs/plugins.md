@@ -74,6 +74,35 @@ A later dashboard rerun or direct initialize/render call retries setup.
 Hosts that call `initialize()` explicitly can pass `initialize_plugins=False`
 to render methods so one explicit initialization owns that cycle.
 
+## Shared registries and setup
+
+Each registration owns its initialization state, even when the same plugin object
+appears in multiple registries. Concurrent sessions share one setup attempt and
+wait for that attempt to finish before invoking render hooks. A failed attempt
+returns the same sanitized diagnostic to its waiting callers; a later call can
+retry. Control-flow exits such as a Streamlit rerun also release waiting callers
+without marking the registration initialized. They still propagate to the caller
+that ran setup.
+
+Registry state changes are synchronized, but setup, render and metadata callbacks
+run outside the registry lock. Setup may register or remove plugins. Reentrant
+initialize/render calls made from setup skip registrations already being set up,
+including in another registry, to avoid circular waits. Such nested calls must
+not assume every plugin is initialized when they return. A setup callback must
+not wait for another thread to finish initializing that same registration.
+
+Unregistering releases callers waiting on that registration and excludes it from
+later dispatches. Already selected callbacks may finish; removing a registration
+does not cancel or roll back host work. Re-registering creates new initialization
+state, including when reusing the same plugin object. Old setup completion cannot
+initialize or dispatch the replacement. Hosts must coordinate old and new setup
+effects if those effects cannot overlap, and must protect shared resources used
+by concurrent render hooks. Keep plugin names stable while registered. Setup is
+shared across sessions: do not cache identities, user data or authorization
+decisions in it; inspect each render callback's current security context.
+
+## Discovery diagnostics
+
 Discovery failures are isolated per entry point. `PluginRegistry.discover()`
 skips broken plugins, emits a `RuntimeWarning`, and stores structured records in
 `PluginRegistry.discovery_errors()` for callers that want exact diagnostics.

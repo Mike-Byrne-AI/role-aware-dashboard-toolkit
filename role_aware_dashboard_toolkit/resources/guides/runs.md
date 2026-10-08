@@ -13,6 +13,14 @@ Use `radt.InMemoryRunStore()` for session-local experiments. Choose a file store
 explicitly when durable records are required. The starter already retains an
 in-memory run store; change its `runbook=False` flag to enable it.
 
+The native runbook warns when run history cannot be read completely, while
+continuing to show readable runs. An unreadable active run keeps its selection;
+its actions remain unavailable until storage recovers. A confirmed missing run
+clears the active selection. Preserve damaged records, check the store's
+`read_errors` and restore access or repair the record before retrying. Historical
+read diagnostics remain available even after a successful retry; they do not
+keep a recovered run disabled or make a current successful read appear to fail.
+
 Start a run, adjust controls, capture labeled checkpoints, compare them, and
 end the run with an outcome. A checkpoint contains detached control, audit and
 telemetry evidence subject to the current visibility permissions. Sensitive

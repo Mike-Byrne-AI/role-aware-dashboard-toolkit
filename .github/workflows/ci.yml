@@ -282,6 +282,7 @@ jobs:
           (
             cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
             "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -I - <<'PY'
+          import importlib.util
           import os
           import pathlib
           import sys
@@ -296,10 +297,13 @@ jobs:
           import fastapi
           import pydantic
           import uvicorn
-          from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE
+          from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE, create_app
 
           assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert FASTAPI_AVAILABLE is True
+          assert importlib.util.find_spec("streamlit") is None
+          app = create_app(role_aware_dashboard_toolkit.ControlRegistry())
+          assert {"/health", "/controls"} <= {route.path for route in app.routes}
           assert fastapi.__name__ == "fastapi"
           assert pydantic.__name__ == "pydantic"
           assert uvicorn.__name__ == "uvicorn"

@@ -4,6 +4,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
     sorted_store_ids,
 )
@@ -34,7 +35,7 @@ class FileRunStore(_JsonRecordFileStoreMixin, BaseRunStore):
         self.run_dir = run_dir
 
     def save(self, run: dict[str, Any]) -> str:
-        run_id = str(run.get("run_id") or "").strip() or "default"
+        run_id = canonical_store_id(run.get("run_id"))
         return self._save_record(run, run_id)
 
     def load(self, run_id: str) -> dict[str, Any] | None:
@@ -57,18 +58,18 @@ class InMemoryRunStore(BaseRunStore):
         self._runs: dict[str, dict[str, Any]] = {}
 
     def save(self, run: dict[str, Any]) -> str:
-        run_id = str(run.get("run_id") or "").strip() or "default"
-        self._runs[run_id] = json_roundtrip_copy(run)
+        run_id = canonical_store_id(run.get("run_id"))
+        self._runs[run_id] = json_roundtrip_copy({**run, "run_id": run_id})
         return run_id
 
     def load(self, run_id: str) -> dict[str, Any] | None:
-        data = self._runs.get(str(run_id))
+        data = self._runs.get(canonical_store_id(run_id))
         if data is None:
             return None
         return json_roundtrip_copy(data)
 
     def delete(self, run_id: str) -> bool:
-        return self._runs.pop(str(run_id), None) is not None
+        return self._runs.pop(canonical_store_id(run_id), None) is not None
 
     def list_ids(self) -> list[str]:
         return sorted_store_ids(self._runs.keys())

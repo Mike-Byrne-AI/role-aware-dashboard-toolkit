@@ -16,6 +16,10 @@ This layer is descriptive, not magical.
 Role-Aware Dashboard Toolkit can summarize temporal adjacency across records, but it should not claim that it has proven causation.
 The operator summary explicitly includes a disclaimer for that reason.
 
+Incident timeline events preserve the source incident status. Counts of open
+incidents include `open`, `monitoring`, and `mitigated`; only `closed` removes an
+incident from that count. Governance uses the same lifecycle for case closure.
+
 ## Stores
 
 Role-Aware Dashboard Toolkit ships:

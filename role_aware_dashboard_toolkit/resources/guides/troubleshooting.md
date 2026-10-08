@@ -14,8 +14,8 @@ Do not dump entire session state or secrets.
 |---|---|
 | Streamlit missing | Install the rendering dependency in this environment; read `guide start`. |
 | Invalid color or unknown group | Use six-digit hex and exact registered group names; read `guide appearance`. |
-| Group fill unsupported | Keyed containers require Streamlit >=1.39; upgrade or remove fill options. |
-| Sidebar theme ignored | Independent sidebar colors need >=1.44; run from the directory containing `.streamlit/config.toml`. |
+| Group fill unsupported | Use the supported Streamlit >=1.65.0 baseline with keyed containers; read `guide appearance`. |
+| Sidebar theme ignored | Use Streamlit >=1.65.0 and run from the directory containing `.streamlit/config.toml`. |
 | Field or action disabled | Check current role, field permission and Controls Writable; read `guide permissions`. |
 | Profile load denied | Check every restored field, not just `can_load_profiles`; read `guide profiles`. |
 | Profile storage failure | Preserve records; inspect access and read diagnostics before retrying. |

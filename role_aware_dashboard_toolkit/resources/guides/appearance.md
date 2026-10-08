@@ -33,9 +33,9 @@ Use six-digit `#RRGGBB` colors. Per-group entries override the shared fill.
 Names must match registered groups, including groups registered during plugin
 setup; hidden registered groups remain valid targets.
 
-Global theme options work with the toolkit's Streamlit >=1.30 baseline.
-Independent sidebar colors require >=1.44. Group fills require the documented
-keyed-container API introduced in >=1.39; unsupported runtimes fail clearly.
+The supported workbench baseline is Streamlit >=1.65.0. Global theme APIs were
+introduced in >=1.30, independent sidebar colors in >=1.44, and the documented
+keyed-container API for group fills in >=1.39; unsupported runtimes fail clearly.
 With no fill options, default rendering is preserved. Current runtime details
 are available through `inspect`.
 

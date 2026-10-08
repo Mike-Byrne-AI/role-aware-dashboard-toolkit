@@ -3,6 +3,21 @@
 The examples are intentionally small and use only the retained generic library
 surface.
 
+## A/B/C access and admin protection
+
+[A/B/C Access Lab](section_access/README.md) demonstrates four assigned roles:
+Admin sees A/B/C, AOnly sees A, AB sees A/B, and COnly sees C. Protected reads
+and the admin action recheck server-owned grants. The authenticated entry point
+requires OIDC and explicit provisioning; the separate simulation lets you try
+all roles with invented records:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run examples/section_access/demo.py --server.address 127.0.0.1
+```
+
+The simulation's account selector is deliberately open and must stay local.
+Use `app.py` and the linked setup instructions for actual authenticated access.
+
 ## Complete operator workflow
 
 [Operator Review Lab](operator_review/README.md) connects a saved baseline,

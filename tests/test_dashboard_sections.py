@@ -168,7 +168,8 @@ def test_each_section_hides_its_real_surface_and_restores_defaults(app, section)
 
 def test_hidden_controls_keep_values_and_do_not_grant_edit_permission(app):
     app.number_input(key="workers").set_value(24)
-    app.text_input(key="api_token").set_value("synthetic-live-token")
+    app.text_input(key="_radt_sensitive_replacement__api_token").set_value("synthetic-live-token")
+    app.button(key="_radt_sensitive_submit__api_token").click()
     _run(app)
     app.session_state["section_overrides"] = {"controls": False}
     _run(app)
@@ -181,7 +182,8 @@ def test_hidden_controls_keep_values_and_do_not_grant_edit_permission(app):
     assert app.session_state["workers"] == 24
     assert app.session_state["api_token"] == "synthetic-live-token"
     assert all(item.disabled for item in app.number_input if item.label == "Workers")
-    assert all(item.disabled for item in app.text_input if item.label == "API token")
+    assert not any(item.label == "Replace API token" for item in app.text_input)
+    assert any(item.value == "API token: Hidden" for item in app.caption)
 
 
 @pytest.mark.parametrize("denial", ["freeze", "auth"])

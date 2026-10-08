@@ -278,11 +278,16 @@ class LoginPage:
     def warning(self, message):
         self.calls.append(("warning", message))
 
+    def info(self, message):
+        self.calls.append(("info", message))
+
     def error(self, message):
         self.calls.append(("error", message))
 
-    def button(self, label, *, key):
+    def button(self, label, *, key, on_click=None):
         self.calls.append(("button", label, key))
+        if self.clicked and on_click is not None:
+            on_click()
         return self.clicked
 
     def login(self, provider):

@@ -436,7 +436,7 @@ def test_ci_and_release_checklist_enforce_publication_hygiene():
     checklist = (REPO_ROOT / "docs" / "release_checklist.md").read_text(encoding="utf-8")
     dev_deps = pyproject["project"]["optional-dependencies"]["dev"]
     ci_ruff = "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache"
-    local_ruff = "py -3 -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache"
+    local_ruff = "& $releasePython -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache"
     assert any(dep.startswith("twine>=") for dep in dev_deps)
     assert (
         "python tools/pre_release_check.py --json --require-clean "
@@ -485,14 +485,14 @@ def test_ci_and_release_checklist_enforce_publication_hygiene():
     ]:
         assert heading in checklist
     for command in [
-        "py -3 -m pytest -q",
-        "py -3 -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75",
+        "& $releasePython -m pytest -q",
+        "& $releasePython -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75",
         local_ruff,
-        "py -3 tools/pre_release_check.py --json",
-        "py -3 -m pip check",
-        "py -3 -m build",
+        "& $releasePython tools/pre_release_check.py --json",
+        "& $releasePython -m pip check",
+        "& $releasePython -m build",
         "Get-ChildItem -LiteralPath dist -File",
-        "py @twineArgs",
+        "& $releasePython @twineArgs",
     ]:
         assert command in checklist
     for policy in [
