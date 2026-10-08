@@ -157,7 +157,15 @@ acceptance; a large source-test count does not replace it.
 Name the person responsible for provider accounts, grants, incident response,
 backups and updates. Keep a protected record of grant/revocation changes; the
 current access database row and session-local audit are not a complete durable
-administrative history. Monitor availability and storage failures. Test updates
+administrative history. Keep the dashboard offline throughout backup restoration
+and grant reconciliation: an older backup can restore revoked grants and an
+unfrozen state. Before reopening access, reconcile every restored grant against
+that current protected record, enable freeze, and verify revoked accounts cannot
+read protected data. If the record is missing or incomplete, keep access closed
+until the intended grants can be established. Freeze blocks protected mutations;
+it does not block permitted reads and is not a maintenance access barrier.
+
+Monitor availability and storage failures. Test updates
 in a separate environment with the same sequence before switching the live
 service. Remove access explicitly when a teammate leaves.
 
@@ -171,4 +179,3 @@ Primary references: [Keycloak OIDC clients](https://www.keycloak.org/docs/latest
 [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy),
 [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https),
 and [Streamlit authentication](https://docs.streamlit.io/develop/concepts/connections/authentication).
-

@@ -174,7 +174,8 @@ or protected data, then renders assigned-role selection and shared freeze.
 Account changes clear session state before host resources are rebuilt. Admin
 has `can_manage_freeze`; other roles cannot change the shared switch. Freeze
 blocks protected mutations, including Admin mutations, while its administrator
-can still unfreeze. UI state, imported profiles and role-name inputs do not
+can still unfreeze. It does not block permitted reads and is not a maintenance
+access barrier. UI state, imported profiles and role-name inputs do not
 override server grants or freeze. Stale freeze submissions require a refresh.
 
 Use `has_perm(ctx, permission)` immediately before private reads and
@@ -248,8 +249,13 @@ nor token is written to this database. Opaque IDs are still linkable personal da
 not anonymization. Protect the database, key and backups, retain them only as
 needed, and keep them out of profiles and exports. Key rotation changes every
 principal ID and requires reprovisioning. Backup restoration can restore revoked
-grants and old freeze state; review both before reopening access. The current
-freeze row is not a complete administrative audit history.
+grants and old freeze state. Keep the dashboard offline throughout restoration
+and grant reconciliation. Before reopening access, reconcile every restored
+grant against the current protected record of grants and revocations, enable
+freeze, and verify revoked accounts cannot read protected data. If that record
+is missing or incomplete, keep access closed until the intended grants can be
+established. Freeze alone still permits reads. The current freeze row is not a
+complete administrative audit history.
 
 Streamlit itself retains provider claims in a signed browser identity cookie and
 session memory. Version 1.65.0 also stores returned ID/access tokens in a separate
