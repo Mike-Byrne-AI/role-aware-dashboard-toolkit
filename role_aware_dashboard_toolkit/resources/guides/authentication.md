@@ -197,6 +197,16 @@ Server-side grant revocation denies their next checked action.
 Provider-side account/session revocation is not
 polled here; add that host integration when required.
 
+The signed-out page shows a neutral sign-in prompt. If a provider session exists
+but dashboard access cannot be confirmed, recovery offers **Sign out**, then a
+fresh sign-in with an assigned account. The message does not guess whether the
+cause is expiry, changed grants, or unavailable access services. Contact the
+administrator if retrying does not restore access; signing in again cannot
+restore a revoked grant. Denial still clears protected session state and stops
+before host data is loaded.
+Recovery sign-out runs before the next access check, so restoring a grant while
+the denied page is open does not discard the user's sign-out click.
+
 ## Data handling and acceptance checks
 
 The database stores keyed opaque principal IDs, role names, and current freeze

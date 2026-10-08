@@ -1720,7 +1720,7 @@ class TestDashboardSmoke:
         )
         monkeypatch.setattr(
             sidebar_module,
-            "load_profile",
+            "_load_ui_profile",
             lambda *_args, **_kwargs: mutation_calls.append("load"),
         )
         monkeypatch.setattr(

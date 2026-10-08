@@ -123,7 +123,7 @@ def test_profile_merges_without_changing_role_or_sensitive_values(app, locked):
     assert _values(app) == {**before, "workers": 20}
     assert app.session_state["_radt_role"] == "Operator"
     assert not app.session_state["config"].custom_roles["Operator"].perms["can_manage_audit"]
-    assert any("existing values were retained" in item.value for item in app.info)
+    assert any("This preset updates only the settings it includes." in item.value for item in app.caption)
     assert app.session_state["_radt_active_profile_id"] == "partial"
     run_id = _start(app)
     run = app.session_state["config"].run_store.load(run_id)

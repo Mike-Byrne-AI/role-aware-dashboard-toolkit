@@ -7,6 +7,10 @@ from uuid import uuid4
 from .access import AccessDenied, AccessPolicy, FreezeConflict, FreezeState
 from .access_audit import bind_audit_identity
 from .security import SecurityContext, get_role, has_perm
+from .streamlit_auth import (
+    StreamlitIdentityResolver, _ACCESS_DENIAL_NOTICE, _SIGN_IN_PROMPT,
+    _streamlit_login_state,
+)
 
 _PRINCIPAL = "_radt_authenticated_principal"
 _SESSION = "_radt_authenticated_session"
@@ -23,7 +27,15 @@ def _read_freeze(policy: AccessPolicy) -> FreezeState:
     return state
 
 
-def _deny(st: Any) -> None:
+def _deny(st: Any, policy: AccessPolicy | None = None) -> None:
+    # Only the built-in resolver uses Streamlit's provider session directly.
+    # An unrelated custom resolver/configuration failure must retain an error,
+    # even when st.user happens to report that Streamlit itself is signed out.
+    signed_out = (
+        isinstance(policy, AccessPolicy)
+        and type(policy.identity_resolver) is StreamlitIdentityResolver
+        and _streamlit_login_state(st) is False
+    )
     # Authentication failure must not leave another account's data or queued
     # writes in session state. Provider cookies/claims are not stored here.
     for key in list(st.session_state):
@@ -31,13 +43,17 @@ def _deny(st: Any) -> None:
         # them on this rerun. These booleans cannot grant roles or data access.
         if key not in {"_radt_sign_in", "_radt_sign_out"}:
             del st.session_state[key]
-    st.error("Access denied. Sign in with an assigned account; otherwise ask the operator to configure access.")
+    st.session_state[_ACCESS_DENIAL_NOTICE] = "signed_out" if signed_out else "denied"
+    if signed_out:
+        st.info(_SIGN_IN_PROMPT)
+    else:
+        st.error("Dashboard access could not be confirmed.")
 
 
 def prepare_authenticated_access(st: Any, config: Any) -> SecurityContext | None:
     policy = config.access
     if not isinstance(policy, AccessPolicy):
-        _deny(st)
+        _deny(st, policy)
         return None
     try:
         principal = policy.identify()
@@ -47,7 +63,7 @@ def prepare_authenticated_access(st: Any, config: Any) -> SecurityContext | None
         freeze = _read_freeze(policy)
     except Exception:
         # Adapter failures are denied without exposing private exception data.
-        _deny(st)
+        _deny(st, policy)
         return None
 
     if st.session_state.get(_PRINCIPAL) != principal:
@@ -96,7 +112,7 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
         roles = policy.assigned_roles(ctx.user_id)
         freeze = _read_freeze(policy)
     except Exception:
-        _deny(st)
+        _deny(st, policy)
         return None
     st.caption("Authenticated access")
     if len(roles) == 1:
@@ -104,7 +120,7 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
     else:
         selected = st.selectbox("Assigned role", options=list(roles), key=_ROLE)
         if selected not in roles:
-            _deny(st)
+            _deny(st, policy)
             return None
         if selected != ctx.role:
             st.session_state.pop("_radt_pending_replay", None)
@@ -118,6 +134,11 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
         # Recheck identity, assigned role, management permission and revision at
         # click time. The toggle is not itself the authority to change state.
         try:
+            # Callbacks run before the next render. A single browser submission
+            # may also leave this role; discard its queued administrative action
+            # rather than applying the permission captured by the old widget.
+            if st.session_state.get(_ROLE) != ctx.role:
+                raise AccessDenied()
             desired = st.session_state.get(_FREEZE_WIDGET)
             if type(desired) is not bool:
                 raise AccessDenied()

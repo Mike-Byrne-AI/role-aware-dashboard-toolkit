@@ -15,9 +15,29 @@ These core helpers operate on dictionaries; a host using them directly owns
 authorization. The native dashboard profile menu enforces its action and
 per-control permissions.
 
+In the native menu, **Save** creates a new name immediately. Reusing an existing
+name first offers **Replace saved profile** and **Cancel replacement**; the
+stored profile changes only after confirmation. Changing the name, selection,
+settings or role cancels pending confirmation. Replacement rereads the target
+and checks current save permission and freeze state; a changed or unreadable
+target is not silently overwritten. These checks are not an atomic storage
+transaction across concurrent writers. Hosts needing that guarantee must
+provide it at their persistence boundary. **Profile name** is disabled when
+saving is unavailable. The core `save_profile` helper retains its existing
+overwrite behavior and does not present a confirmation UI.
+
 Loading merges known non-sensitive fields, retains unspecified live values, and
 sanitizes stale/out-of-range values. Unknown controls are ignored. Sensitive
 values remain live and are not restored. Profile `role` is descriptive metadata.
+Native loading and its preview also omit saved values marked sensitive by
+historical control metadata and entire values containing nested secret-named
+fields. Filtering happens before text conversion, so a structured legacy secret
+cannot become visible widget text. Excluded values retain their current live
+settings; the saved record is not rewritten. This browser-bound projection does
+not change the host-controlled core `load_profile` helper's restore semantics.
+Partial presets are supported: a successful load explains that omitted settings
+and current permissions stay unchanged, rather than treating missing fields as
+an error. Sensitive fields are omitted intentionally.
 Selecting a profile previews it; only a successful load records it as active.
 When navigation hides the profile menu with `DashboardSections(profiles=False)`,
 keep calling `radt.render(config)` on each page. The native menu retains its

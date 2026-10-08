@@ -78,6 +78,21 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
 - Optional-dependency recovery instructions support source and local-wheel
   installations without assuming a package-index release.
 - Windows release checks include long and Unicode store identifier regressions.
+- Authenticated freeze callbacks reject queued changes when the same submission
+  switches away from the callback's assigned role.
+- Runbook rendering tolerates records disappearing after listing, and deeply
+  nested audit lines produce diagnostics without hiding healthy neighboring events.
+- Native profile replacement requires confirmation tied to the current draft;
+  changed, unreadable or no-longer-authorized targets cannot reuse stale consent.
+  Read-only profile names are disabled, and partial loads explain retained settings.
+- Signed-out pages show a neutral sign-in prompt; denied or unavailable access
+  provides account recovery without disclosing identity details or weakening checks.
+- Native profile Load omits historical-sensitive values and values containing
+  nested secret fields, matching its preview while preserving stored evidence.
+- Failed run-history reads show a warning, retain active-run associations and
+  draft notes, and keep healthy neighboring records visible during recovery.
+- Shared plugin registries synchronize setup per registration; concurrent callers
+  share its result, with safe retry, removal and callback re-entry behavior.
 
 The core package has no required third-party dependencies. Public release
 remains subject to the metadata, security-intake, and validation gates in the

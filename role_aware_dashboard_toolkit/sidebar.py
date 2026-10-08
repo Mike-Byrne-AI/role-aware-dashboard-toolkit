@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,8 @@ from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import (
-    _InvalidProfileError, _require_profile_shape, delete_profile, list_profiles,
-    load_profile, load_profile_data, save_profile,
+    _InvalidProfileError, _load_ui_profile, _require_profile_shape, delete_profile, list_profiles,
+    load_profile_data, save_profile,
 )
 from .runbook_panels import render_runbook_sidebar
 from .sections import section_visible
@@ -35,6 +36,7 @@ class SidebarResult:
 
 
 _AUTH_FAILURE_ROLE = "Unauthenticated"
+_PROFILE_REPLACE_PENDING = "_radt_profile_replace_pending"
 
 
 def _resolve_authenticated_role(
@@ -226,7 +228,8 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
     inputs = st.container()
     try:
         if _render_profile_actions(st, config, ctx, profile_store, selected_profile,
-                                   selected_profile_valid=selected_profile_valid):
+                                   selected_profile_valid=selected_profile_valid,
+                                   known_profiles=profiles):
             profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
     finally:
         # A failed store operation or denied load must still render these keyed
@@ -240,7 +243,11 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
             selected_profile = st.selectbox(
                 "Load profile", options=profile_options, key="_radt_profile_choice"
             )
-            st.text_input("Profile name", value="my_profile", key="_radt_profile_name")
+            st.text_input(
+                "Profile name", value="my_profile", key="_radt_profile_name",
+                disabled=not can_mutate(ctx, "can_save_profiles"),
+                help="Name for saving the current settings. Replacing an existing profile requires confirmation.",
+            )
 
     with inputs:
         if selected_profile and selected_profile != "(none)":
@@ -290,9 +297,105 @@ def _render_profile_preview(
             st.caption(f"{preview.sensitive_omitted_count} sensitive saved field(s) omitted; saved values will not be restored.")
 
 
+def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
+                     name: str, selected_profile: str) -> bool:
+    parent_id = selected_profile if selected_profile != "(none)" else ""
+    parent = _profile_store_call(
+        load_profile_data, parent_id, profile_dir=config.profile_dir, store=store,
+    ) if parent_id else None
+    if parent is not None:
+        _profile_store_call(_require_profile_shape, parent)
+    if not can_mutate(ctx, "can_save_profiles"):
+        st.warning("Save denied. Your permission or the shared freeze changed.")
+        return False
+    _profile_store_call(
+        save_profile, name, config.registry, st.session_state, role=ctx.role,
+        profile_dir=config.profile_dir, store=store, parent_profile_id=parent_id,
+        parent_values=(parent or {}).get("values"), app_name=config.title,
+        app_version=getattr(config, "version", ""),
+        session_id=str(st.session_state.get("_radt_session_id", "")), source="ui",
+    )
+    config.audit.log_profile_save(name, role=ctx.role)
+    st.toast(f"Saved profile: {name}")
+    return True
+
+
+def _read_profile_save_target(config: Any, store: Any, name: str,
+                              known_profiles: list[str]) -> dict | None:
+    errors_before = len(getattr(store, "read_errors", ()))
+    saved = _profile_store_call(
+        load_profile_data, name, profile_dir=config.profile_dir, store=store,
+    )
+    if saved is None and (
+        name in known_profiles or len(getattr(store, "read_errors", ())) > errors_before
+    ):
+        # An unreadable/disappearing record is not permission to overwrite it.
+        raise _ProfileStorageFailure("UnreadableProfile")
+    if saved is not None:
+        _profile_store_call(_require_profile_shape, saved)
+    return saved
+
+
+def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
+                         selected_profile: str, selected_profile_valid: bool,
+                         known_profiles: list[str], *, save_column: Any) -> bool:
+    allowed = can_mutate(ctx, "can_save_profiles") and selected_profile_valid
+    name = str(st.session_state.get("_radt_profile_name", "")).strip()
+    intent = {
+        "name": name, "parent": selected_profile, "role": ctx.role,
+        "values": config.registry.persistable_snapshot(st.session_state),
+    }
+    pending = st.session_state.get(_PROFILE_REPLACE_PENDING)
+    if pending is not None and (not allowed or pending.get("intent") != intent):
+        st.session_state.pop(_PROFILE_REPLACE_PENDING, None)
+        pending = None
+        st.info("Replacement canceled because the settings, selection, or access changed. Choose Save to review it again.")
+    # A confirmation must come from an earlier render, not the Save submission.
+    was_pending = pending is not None
+    with save_column:
+        requested = st.button("Save", key="_radt_profile_save", disabled=not allowed)
+    if requested and allowed and can_mutate(ctx, "can_save_profiles"):
+        was_pending = False
+        if not name:
+            st.warning("Enter a profile name.")
+        else:
+            saved = _read_profile_save_target(config, store, name, known_profiles)
+            if saved is None:
+                return _save_ui_profile(st, config, ctx, store, name, selected_profile)
+            pending = {"intent": deepcopy(intent), "saved": deepcopy(saved)}
+            st.session_state[_PROFILE_REPLACE_PENDING] = pending
+    if pending is None:
+        return False
+    confirmation = st.empty()
+    with confirmation.container():
+        st.warning(f'A saved profile named "{name}" already exists. Replace it with the current settings, or cancel to keep the saved version.')
+        replace_requested = st.button("Replace saved profile", key="_radt_profile_replace_confirm")
+        cancel_requested = st.button("Cancel replacement", key="_radt_profile_replace_cancel")
+    if cancel_requested:
+        st.session_state.pop(_PROFILE_REPLACE_PENDING, None)
+        confirmation.empty()
+        st.info("Replacement canceled. The saved profile was kept.")
+        return False
+    if replace_requested and was_pending:
+        # Consume consent once, including on denial or an uncertain store write.
+        st.session_state.pop(_PROFILE_REPLACE_PENDING, None)
+        try:
+            if not can_mutate(ctx, "can_save_profiles"):
+                st.warning("Replacement denied. Your permission or the shared freeze changed.")
+                return False
+            saved = _read_profile_save_target(config, store, name, known_profiles)
+            if saved != pending["saved"]:
+                st.warning("The saved profile changed. Nothing was replaced; choose Save to review it again.")
+                return False
+            return _save_ui_profile(st, config, ctx, store, name, selected_profile)
+        finally:
+            confirmation.empty()
+    return False
+
+
 def _render_profile_actions(
     st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str,
-    *, selected_profile_valid: bool = True,
+    *, selected_profile_valid: bool = True, known_profiles: list[str] | None = None,
 ) -> bool:
     """Process profile actions once; report a successful membership-changing write."""
     reg = config.registry
@@ -301,39 +404,10 @@ def _render_profile_actions(
     can_save_profiles = can_mutate(ctx, "can_save_profiles")
     can_load_profiles = can_write(ctx, "can_load_profiles")
     c_save, c_load = st.columns(2)
-    with c_save:
-        save_requested = st.button(
-            "Save",
-            key="_radt_profile_save",
-            disabled=not can_save_profiles or not selected_profile_valid,
-        )
-        if save_requested and can_mutate(ctx, "can_save_profiles"):
-            name = str(st.session_state.get("_radt_profile_name", "")).strip()
-            if name:
-                parent_profile_id = selected_profile if selected_profile != "(none)" else ""
-                parent_data = _profile_store_call(load_profile_data, parent_profile_id, profile_dir=config.profile_dir, store=profile_store) if parent_profile_id else None
-                if parent_data is not None:
-                    _profile_store_call(_require_profile_shape, parent_data)
-                _profile_store_call(
-                    save_profile,
-                    name,
-                    reg,
-                    st.session_state,
-                    role=ctx.role,
-                    profile_dir=config.profile_dir,
-                    store=profile_store,
-                    parent_profile_id=parent_profile_id,
-                    parent_values=(parent_data or {}).get("values"),
-                    app_name=config.title,
-                    app_version=getattr(config, "version", ""),
-                    session_id=str(st.session_state.get("_radt_session_id", "")),
-                    source="ui",
-                )
-                audit.log_profile_save(name, role=ctx.role)
-                st.toast(f"Saved profile: {name}")
-                profiles_changed = True
-            else:
-                st.warning("Enter a profile name.")
+    profiles_changed = _render_profile_save(
+        st, config, ctx, profile_store, selected_profile, selected_profile_valid,
+        known_profiles or [], save_column=c_save,
+    )
 
     with c_load:
         load_requested = st.button(
@@ -341,49 +415,52 @@ def _render_profile_actions(
             key="_radt_profile_load",
             disabled=not can_load_profiles or not selected_profile_valid,
         )
-        if load_requested and can_write(ctx, "can_load_profiles"):
-            choice = st.session_state.get("_radt_profile_choice", "(none)")
-            if choice and choice != "(none)":
-                staged_state = dict(st.session_state)
-                result = _profile_store_call(load_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
-                if result:
-                    # A bulk restore must not bypass a control's permission,
-                    # including changes made by whole-registry sanitization.
-                    restored_keys = set(result.get("values", {}))
-                    denied = any(
-                        not can_write(ctx, ctrl.permission)
-                        for ctrl in reg.all()
-                        if (not ctrl.sensitive and ctrl.key in restored_keys)
-                        or ctrl.key not in st.session_state
-                        or staged_state[ctrl.key] != st.session_state[ctrl.key]
+    if load_requested and can_write(ctx, "can_load_profiles"):
+        choice = st.session_state.get("_radt_profile_choice", "(none)")
+        if choice and choice != "(none)":
+            staged_state = dict(st.session_state)
+            result = _profile_store_call(_load_ui_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
+            if result:
+                # A bulk restore must not bypass a control's permission,
+                # including changes made by whole-registry sanitization.
+                restored_keys = set(result.get("values", {}))
+                denied = any(
+                    not can_write(ctx, ctrl.permission)
+                    for ctrl in reg.all()
+                    if (not ctrl.sensitive and ctrl.key in restored_keys)
+                    or ctrl.key not in st.session_state
+                    or staged_state[ctrl.key] != st.session_state[ctrl.key]
+                )
+                if denied:
+                    st.warning("Profile requires permission to edit all restored controls. " + diagnostic_text("RADT-PERMISSION"))
+                    return profiles_changed
+                for ctrl in reg.all():
+                    st.session_state[ctrl.key] = staged_state[ctrl.key]
+                if getattr(ctx, "authenticated", False):
+                    remember_authorized_control_values(
+                        st.session_state, {ctrl.key: staged_state[ctrl.key] for ctrl in reg.all()},
                     )
-                    if denied:
-                        st.warning("Profile requires permission to edit all restored controls. " + diagnostic_text("RADT-PERMISSION"))
-                        return profiles_changed
-                    for ctrl in reg.all():
-                        st.session_state[ctrl.key] = staged_state[ctrl.key]
-                    if getattr(ctx, "authenticated", False):
-                        remember_authorized_control_values(
-                            st.session_state, {ctrl.key: staged_state[ctrl.key] for ctrl in reg.all()},
-                        )
-                    st.session_state["_radt_active_profile_id"] = str(result.get("profile_id") or choice)
-                    audit.log_profile_load(choice, role=ctx.role)
-                    loaded_keys = set(result.get("values", {}).keys())
-                    registry_keys = set(reg.keys())
-                    extra = loaded_keys - registry_keys
-                    missing = registry_keys - loaded_keys
-                    if extra:
-                        st.warning(f"Profile contains {len(extra)} unknown controls: {', '.join(sorted(extra)[:5])}")
-                    if missing:
-                        st.info(f"Profile is missing {len(missing)} controls; existing values were retained.")
-                    corrected = int(result.get("corrected_values", 0) or 0)
-                    if corrected > 0:
-                        st.info(f"Corrected {corrected} profile value(s) to match the current registry.")
-                    # Saved role is provenance only; loading values never changes
-                    # the current role, its permissions, or an auth-locked identity.
-                    st.toast(f"Loaded profile: {choice}")
-                else:
-                    st.warning(f"Profile '{choice}' not found.")
+                st.session_state["_radt_active_profile_id"] = str(result.get("profile_id") or choice)
+                audit.log_profile_load(choice, role=ctx.role)
+                loaded_keys = set(result.get("values", {}).keys())
+                registry_keys = set(reg.keys())
+                extra = loaded_keys - registry_keys
+                missing = {ctrl.key for ctrl in reg.all() if not ctrl.sensitive} - loaded_keys
+                if extra:
+                    st.warning(f"Profile contains {len(extra)} unknown controls: {', '.join(sorted(extra)[:5])}")
+                if missing:
+                    st.caption(
+                        "This preset updates only the settings it includes. "
+                        "Other settings and your permissions stay unchanged."
+                    )
+                corrected = int(result.get("corrected_values", 0) or 0)
+                if corrected > 0:
+                    st.info(f"Corrected {corrected} profile value(s) to match the current registry.")
+                # Saved role is provenance only; loading values never changes
+                # the current role, its permissions, or an auth-locked identity.
+                st.toast(f"Loaded profile: {choice}")
+            else:
+                st.warning(f"Profile '{choice}' not found.")
 
     delete_requested = st.button(
         "Delete",
