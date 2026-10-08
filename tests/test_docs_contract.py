@@ -130,6 +130,18 @@ def test_generated_reference_docs_are_exactly_in_sync():
     assert mismatches == []
 
 
+def test_generated_install_targets_explain_source_release_installation():
+    for render in (build_distribution_reference_markdown, build_release_audit_markdown):
+        text = render()
+        assert "Install targets below identify package requirement metadata" in text
+        assert "GitHub-source release" in text
+        assert "no package-index release is assumed" in text
+        assert 'python -m pip install ".[api]"' in text
+        assert "absolute source path or reviewed local wheel filename" in text
+        assert "Omit the extra to install the core alone" in text
+        assert "- Install target: `role-aware-dashboard-toolkit[api]`" in text
+
+
 def test_live_docs_are_valid_utf8_without_common_mojibake():
     bad: list[str] = []
     for path in sorted(LIVE_DOCS | PUBLIC_ROOT_DOCS):

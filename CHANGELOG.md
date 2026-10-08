@@ -58,7 +58,8 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
 - Sensitive controls keep stored values and choices out of client widgets;
   permitted edits use explicit blank replacement inputs for every control kind.
 - Spreadsheet-oriented audit CSV exports neutralize formula-like text while
-  JSONL exports retain the original audit evidence.
+  JSONL exports retain the original audit evidence. NUL characters are displayed
+  as visible escapes in CSV for compatibility with Python 3.10 readers/writers.
 - Record validation reports malformed field shapes consistently, and profile
   loading rejects invalid stored values before changing live controls.
 - Decision validation accepts structured blockers; run validation checks nested
@@ -87,6 +88,11 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
 - Slider definitions, sanitation and rendering share effective bounds; numeric
   widgets reject unsupported integer limits before rendering, and control keys
   cannot occupy the reserved `_radt_` state namespace.
+- Native profile selection and draft names survive pages that hide the profile
+  controls, while account changes still clear the previous user's session.
+- Optional-dependency recovery instructions support source and local-wheel
+  installations without assuming a package-index release.
+- Windows release checks include long and Unicode store identifier regressions.
 - Authenticated freeze callbacks reject queued changes when the same submission
   switches away from the callback's assigned role.
 - Runbook rendering tolerates records disappearing after listing, and deeply

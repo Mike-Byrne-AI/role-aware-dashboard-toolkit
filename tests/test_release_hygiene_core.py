@@ -328,7 +328,7 @@ def test_ci_proves_declared_python_matrix_and_clean_wheel_import():
         "Sdist install smoke",
         "windows-release-smoke",
         "Windows focused tests",
-        "python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py -q -p no:cacheprovider -o addopts=",
+        "python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py tests/test_review_identifier_regressions.py tests/test_store_identifier_contract.py -q -p no:cacheprovider -o addopts=",
         "Wheel install smoke (Windows)",
         "Auth wheel install smoke (Windows)",
         'python -m venv "$RUNNER_TEMP/.wheel-smoke"',
@@ -473,7 +473,7 @@ def test_ci_and_release_checklist_enforce_publication_hygiene():
         assert marker in packaging_job
     windows_job = workflow.split("  windows-release-smoke:", 1)[1]
     assert "Windows focused tests" in windows_job
-    assert "python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py -q -p no:cacheprovider -o addopts=" in windows_job
+    assert "python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py tests/test_review_identifier_regressions.py tests/test_store_identifier_contract.py -q -p no:cacheprovider -o addopts=" in windows_job
     assert "Windows focused tests" not in packaging_job
     for heading in [
         "## Public metadata",
@@ -684,7 +684,9 @@ except ModuleNotFoundError as exc:
     assert exc.name == "streamlit"
     assert str(exc).startswith(
         "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-        'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
+        'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+        "From another directory, use the absolute source path or local wheel filename "
+        "with [workbench] appended. No package-index release is assumed."
     )
     assert exc.diagnostic["code"] == "RADT-STREAMLIT"
     assert exc.diagnostic["guide_command"] in str(exc)

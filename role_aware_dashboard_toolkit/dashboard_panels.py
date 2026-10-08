@@ -155,8 +155,9 @@ def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
     """Build a spreadsheet-oriented view without changing the audit evidence.
 
     Quoting protects field boundaries; an apostrophe makes formula-like text
-    explicit text on initial import. CSV consumers differ, so JSONL remains
-    the lossless format and downstream re-export needs its own policy.
+    explicit text on initial import. NULs become visible backslash escapes for
+    CSV-reader compatibility. JSONL remains the lossless format and downstream
+    re-export needs its own policy.
     """
     def cell(value: Any) -> Any:
         if not isinstance(value, str):
@@ -164,9 +165,12 @@ def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
         probe = unicodedata.normalize("NFKC", value)
         while probe and (probe[0].isspace() or unicodedata.category(probe[0]) in {"Cc", "Cf"}):
             probe = probe[1:]
+        # Python 3.10's CSV reader rejects NULs even inside quoted fields.
+        # Inspect the original prefix first, preserving formula protection.
+        display = value.replace("\x00", "\\x00")
         if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
-            return "'" + value
-        return value
+            return "'" + display
+        return display
 
     fields = list(dict.fromkeys(key for event in events for key in event))
     output = StringIO(newline="")

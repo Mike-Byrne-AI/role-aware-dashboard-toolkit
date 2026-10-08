@@ -2,7 +2,9 @@
 # Optional REST API for Role-Aware Dashboard Toolkit dashboards.
 #
 # Exposes profile CRUD, control reads, and role info over HTTP with API-key
-# authentication.  Install with:  pip install role-aware-dashboard-toolkit[api]
+# authentication. From a reviewed toolkit source checkout, install the API extra:
+#     python -m pip install ".[api]"
+# Or install a reviewed local toolkit wheel with [api] appended to its filename.
 #
 # Usage:
 #     from role_aware_dashboard_toolkit.api import create_app
@@ -102,7 +104,10 @@ def _require_fastapi() -> None:
         raise _FASTAPI_IMPORT_ERROR
     raise ImportError(
         "FastAPI is required for the Role-Aware Dashboard Toolkit API module. "
-        "Install with: pip install role-aware-dashboard-toolkit[api]"
+        'From your reviewed toolkit source checkout, run: python -m pip install ".[api]". '
+        "Or install an absolute source path or reviewed local wheel filename "
+        "with [api] appended. No package-index release is assumed. "
+        "Help: python -m role_aware_dashboard_toolkit guide api"
     )
 
 

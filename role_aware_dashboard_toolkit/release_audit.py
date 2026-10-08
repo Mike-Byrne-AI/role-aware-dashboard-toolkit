@@ -6,6 +6,7 @@ from typing import Any
 
 from .distribution import (
     ROLE_AWARE_DASHBOARD_TOOLKIT_DISTRIBUTION_STRATEGY,
+    _SOURCE_INSTALL_GUIDANCE,
     list_distribution_artifacts,
 )
 from .public_api import list_public_api_families, public_api_manifest
@@ -43,6 +44,8 @@ def build_release_audit_markdown() -> str:
         f"- Undocumented root exports: `{api['undocumented_export_count']}`",
         "",
         "## Artifact summary",
+        "",
+        *_SOURCE_INSTALL_GUIDANCE,
         "",
     ]
     for artifact in manifest["artifacts"]:

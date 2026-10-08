@@ -389,7 +389,12 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "digests against the release candidate evidence" in runbook
     assert "$releaseCommit = (git rev-parse HEAD).Trim()" in runbook
     assert "git status --porcelain" in runbook
-    assert "Push the prepared local candidate commit to remote `main` only." in runbook
+    staging = " ".join(runbook.split())
+    assert "Push the reviewed candidate branch and open a pull request targeting `main`." in staging
+    assert "Require the protected-branch checks and an up-to-date branch before an authorized merge." in staging
+    assert "check out the final remote `main` commit in a clean release checkout" in staging
+    assert "repeat the local source checks, artifact build, audits, and install smokes" in staging
+    assert "Pull-request-head evidence does not certify a different merge commit." in staging
     assert "public without changing `main` or adding a metadata commit" in runbook
     assert "No PyPI name ownership, reservation, or publishing authority is claimed." in runbook
     assert "live_validation_required" in runbook

@@ -215,6 +215,20 @@ def test_installed_smokes_keep_environments_outside_the_checkout():
     assert '"$RUNNER_TEMP/.sdist-smoke/bin/python" -m pip install --use-pep517 "$sdist"' in workflow
 
 
+def test_windows_focused_lane_runs_identifier_regressions():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("  windows-release-smoke:\n", 1)[1]
+    step = job.split("      - name: Windows focused tests\n", 1)[1].split("      - name:", 1)[0]
+    command = re.search(r"^        run: (.+)$", step, flags=re.MULTILINE).group(1)
+    assert command.startswith("python -m pytest ")
+    required_tests = {
+        "tests/test_path_redaction.py", "tests/test_permission_boundaries.py",
+        "tests/test_review_identifier_regressions.py", "tests/test_store_identifier_contract.py",
+    }
+    assert required_tests <= set(command.split())
+    assert all((REPO_ROOT / path).is_file() for path in required_tests)
+
+
 def _installed_smoke_script(workflow: str, lane: str) -> str:
     if lane == "windows-auth":
         job = workflow.split("      - name: Auth wheel install smoke (Windows)\n", 1)[1]

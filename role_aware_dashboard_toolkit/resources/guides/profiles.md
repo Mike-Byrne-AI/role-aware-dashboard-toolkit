@@ -49,6 +49,14 @@ Partial presets are supported: a successful load explains that omitted settings
 and current permissions stay unchanged, rather than treating missing fields as
 an error. Sensitive fields are omitted intentionally.
 Selecting a profile previews it; only a successful load records it as active.
+When navigation hides the profile menu with `DashboardSections(profiles=False)`,
+keep calling `radt.render(config)` on each page. The native menu retains its
+selection and unsaved profile name across those reruns without host access to
+private session keys. If the selected profile is removed while hidden, reopening
+the menu selects `(none)` and retains the draft name and live controls. Current
+permissions and freeze still govern actions. An authenticated principal change
+clears this state with the rest of the session.
+
 Expand **Preview profile changes** to compare current, saved and effective
 values before loading. The preview shows corrections, missing fields retained
 from live state, omitted unknown/sensitive fields, and freeze or permission

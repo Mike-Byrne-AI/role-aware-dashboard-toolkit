@@ -186,7 +186,9 @@ The audit CSV download is a spreadsheet-oriented view: fields are quoted and
 formula-like text is prefixed with an apostrophe, including formula prefixes
 after whitespace or Unicode formatting characters. This changes only the CSV
 view; stored audit events and the JSONL download retain their original values.
-Use JSONL for faithful machine-readable evidence. Spreadsheet applications and
+NUL characters are displayed as literal `\x00` text so CSV readers, including
+Python 3.10's reader, can import the download. Use JSONL for faithful
+machine-readable evidence. Spreadsheet applications and
 subsequent CSV re-exports can remove text protection, so downstream exports must
 apply their own spreadsheet policy.
 

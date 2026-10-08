@@ -55,4 +55,3 @@ def test_unreadable_save_target_is_preserved_and_failure_is_sanitized(tmp_path, 
     assert app.number_input(key="workers").value == 18
     assert app.text_input(key="_radt_profile_name").value == "  base  "
     assert app.selectbox(key="_radt_profile_choice").value == "(none)"
-

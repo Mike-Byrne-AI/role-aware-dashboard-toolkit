@@ -127,7 +127,9 @@ def _require_streamlit() -> Any:
             raise
         raise attach_diagnostic(ModuleNotFoundError(
             "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-            'Install with: pip install "role-aware-dashboard-toolkit[workbench]"',
+            'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+            "From another directory, use the absolute source path or local wheel filename "
+            "with [workbench] appended. No package-index release is assumed.",
             name="streamlit",
         ), "RADT-STREAMLIT") from None
     st = streamlit_runtime

@@ -199,7 +199,9 @@ jobs:
                       assert exc.name == "streamlit"
                       assert str(exc) == (
                           "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-                          'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
+                          'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+                          "From another directory, use the absolute source path or local wheel filename "
+                          "with [workbench] appended. No package-index release is assumed."
                           " " + diagnostic_text("RADT-STREAMLIT")
                       )
                       assert exc.diagnostic == build_diagnostic("RADT-STREAMLIT")
@@ -428,7 +430,9 @@ jobs:
                       radt.render(config)
                   except ModuleNotFoundError as exc:
                       assert exc.name == "streamlit"
-                      assert 'pip install "role-aware-dashboard-toolkit[workbench]"' in str(exc)
+                      assert 'python -m pip install ".[workbench]"' in str(exc)
+                      assert "absolute source path or local wheel filename" in str(exc)
+                      assert "No package-index release is assumed" in str(exc)
                   else:
                       raise AssertionError("core sdist render should require the workbench extra")
                   print(radt.__version__)
@@ -654,7 +658,7 @@ jobs:
           pip install -e .[dev]
       - name: Windows focused tests
         shell: powershell
-        run: python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py -q -p no:cacheprovider -o addopts=
+        run: python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py tests/test_review_identifier_regressions.py tests/test_store_identifier_contract.py -q -p no:cacheprovider -o addopts=
       - name: Download validated distribution artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

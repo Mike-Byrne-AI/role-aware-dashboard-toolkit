@@ -2,9 +2,9 @@
 
 This runbook prepares a GitHub-source release at
 [Mike-Byrne-AI/role-aware-dashboard-toolkit](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit).
-The URL is the planned destination until the repository exists. Completing
-local preparation does not authorize repository creation, network pushes,
-hosted CI, or publication.
+Use the existing private repository for staging and verify its identity and
+visibility before making changes. Completing local preparation does not authorize
+repository creation, network pushes, hosted CI, merging, or publication.
 
 ## Freeze the source identity
 
@@ -74,11 +74,19 @@ run identifier, run attempt, and artifact hashes before recording a candidate.
 
 ## Stage on a private GitHub repository
 
-After separate authorization, create a new private repository at the configured
-destination. Push the prepared local candidate commit to remote `main` only.
-Confirm the remote `main` SHA equals `$releaseCommit`, the repository is still
-private, and no inherited history or unexpected refs have been introduced.
-Do not create another metadata commit before the hosted run.
+After separate authorization, use the private repository at the configured
+destination. If it does not exist, creating it also requires authorization.
+Push the reviewed candidate branch and open a pull request targeting `main`.
+Require the protected-branch checks and an up-to-date branch before an authorized
+merge. Review the commits and refs being introduced; keep application data and
+unrelated history outside the public source.
+
+After merging, check out the final remote `main` commit in a clean release
+checkout. If the merge or rebase changed the SHA, capture that final SHA as
+`$releaseCommit` and repeat the local source checks, artifact build, audits, and
+install smokes above for that commit. Pull-request-head evidence does not certify
+a different merge commit. Confirm remote `main` equals `$releaseCommit` and the
+repository remains private. Do not add another metadata commit before the hosted run.
 
 Check branch protection using live GitHub evidence: require the stable
 `contributor-checks` status from `contributor-ci.yml`, require branches to be

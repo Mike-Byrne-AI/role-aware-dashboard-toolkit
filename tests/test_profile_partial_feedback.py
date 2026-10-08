@@ -61,4 +61,3 @@ def test_partial_load_preserves_restricted_values_and_uses_neutral_feedback(incl
     assert not any("missing" in item.value.lower() for item in app.warning)
     visible = "\n".join(str(element.proto) for element in app if hasattr(element, "proto"))
     assert secret_before not in visible
-
