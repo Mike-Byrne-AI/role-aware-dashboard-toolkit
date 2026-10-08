@@ -11,6 +11,13 @@ for profiles, audit history, checkpoints, comparisons and replay previews.
 The core package has no required third-party dependencies. Streamlit, FastAPI,
 and pandas support are isolated behind optional extras.
 
+This is an early beta. The authenticated starter is intended for a single-host
+dashboard with an external sign-in provider and explicit role assignments.
+Evaluate it with synthetic data, then complete the deployment acceptance checks
+before admitting private data or real users. Tests and example deployments have
+limited scope; they do not establish a security certification or comparative
+advantage over other dashboard tools. See the [security and update policy](SECURITY.md).
+
 ## Why Role-Aware Dashboard Toolkit
 
 The toolkit is useful when several operator workflows need to follow the same
