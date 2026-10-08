@@ -4,6 +4,21 @@
 
 Initial release candidate of Role-Aware Dashboard Toolkit.
 
+- Authenticated starter failures clear private session data without discarding a
+  pending logout denial. Shared sign-out and cleanup helpers keep failed provider
+  logout from resuming the same session on a later rerun.
+- Access initialization and role-switch audit failures deny with generic messages;
+  freeze updates whose audit write fails retain the committed state and report
+  unconfirmed audit recording. Malformed freeze revisions deny protected writes.
+- Authenticated profile menus require profile authority before reading metadata,
+  and saved-value previews recheck their separate permissions before display.
+- Authenticated scaffolds disable detailed browser errors and native exports;
+  project creation explains demo versus authenticated setup. An installed
+  deployment guide covers one-host HTTPS, cookie handling and actual-provider
+  acceptance without claiming that local source tests establish deployment safety.
+- Windows release validation consumes the same audited wheel and source archive
+  as the release candidate, with source/run-bound SHA-256 receipts.
+
 - Typed dashboard controls with explicit roles, per-control permissions,
   write policy, finite numeric validation, and sensitive-value handling.
 - Profiles and audit history with detached records, strict JSON persistence,
@@ -40,6 +55,53 @@ Initial release candidate of Role-Aware Dashboard Toolkit.
   authenticated starter retains its verified session-start audit event.
 - Decision and handoff views respect control-read permission without altering
   the stored evidence.
+- Sensitive controls keep stored values and choices out of client widgets;
+  permitted edits use explicit blank replacement inputs for every control kind.
+- Spreadsheet-oriented audit CSV exports neutralize formula-like text while
+  JSONL exports retain the original audit evidence.
+- Record validation reports malformed field shapes consistently, and profile
+  loading rejects invalid stored values before changing live controls.
+- Decision validation accepts structured blockers; run validation checks nested
+  checkpoint and approval records, and governance validation checks summary
+  counters and role lists while packet envelopes retain partial-record support.
+- Malformed non-ASCII API credentials return a generic unauthorized response
+  without server errors or anonymous fallback.
+- Store identifiers use consistent canonical values across save, list, load,
+  and delete, including reads of existing records.
+- The README dashboard retains session-local audit history across reruns, and
+  starter installation guidance applies the workbench dependency requirements
+  through a reviewed source checkout or local wheel.
+- Independent API installations enforce the reviewed dependency floors;
+  development tooling supports the metadata emitted by isolated builds.
+- Read-only contributor CI runs automatically on pull requests and updates to
+  `main`, with a stable aggregate check for branch protection. Release-candidate
+  validation remains separately gated by an approved source commit.
+- API profile responses and activation honor historical sensitivity, omit removed
+  controls and nested secret fields, and preserve stored profile evidence.
+- Ledger entries and governance policy checks reject invalid nested values;
+  malformed schema-version text produces structured validation errors.
+- Governance action lists remain disjoint, and timeline evidence retains incident
+  status. Monitoring and mitigated incidents remain unresolved until closed.
+- File stores bound readable filename prefixes while retaining complete logical
+  identifiers and reusing existing Unicode filenames.
+- Slider definitions, sanitation and rendering share effective bounds; numeric
+  widgets reject unsupported integer limits before rendering, and control keys
+  cannot occupy the reserved `_radt_` state namespace.
+- Authenticated freeze callbacks reject queued changes when the same submission
+  switches away from the callback's assigned role.
+- Runbook rendering tolerates records disappearing after listing, and deeply
+  nested audit lines produce diagnostics without hiding healthy neighboring events.
+- Native profile replacement requires confirmation tied to the current draft;
+  changed, unreadable or no-longer-authorized targets cannot reuse stale consent.
+  Read-only profile names are disabled, and partial loads explain retained settings.
+- Signed-out pages show a neutral sign-in prompt; denied or unavailable access
+  provides account recovery without disclosing identity details or weakening checks.
+- Native profile Load omits historical-sensitive values and values containing
+  nested secret fields, matching its preview while preserving stored evidence.
+- Failed run-history reads show a warning, retain active-run associations and
+  draft notes, and keep healthy neighboring records visible during recovery.
+- Shared plugin registries synchronize setup per registration; concurrent callers
+  share its result, with safe retry, removal and callback re-entry behavior.
 
 The core package has no required third-party dependencies. Public release
 remains subject to the metadata, security-intake, and validation gates in the

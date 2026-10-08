@@ -15,7 +15,7 @@ Role-Aware Dashboard Toolkit defines one Python distribution with a dependency-f
 - Artifact id: `auth`
 - Family: `ui`
 - Install target: `role-aware-dashboard-toolkit[auth]`
-- Docs: `role_aware_dashboard_toolkit/resources/guides/authentication.md`
+- Docs: `role_aware_dashboard_toolkit/resources/guides/authentication.md`, `role_aware_dashboard_toolkit/resources/guides/deployment.md`
 - Description: Optional OIDC login with server-owned role grants and shared freeze.
 
 ## Role-Aware Dashboard Toolkit core

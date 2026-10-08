@@ -6,6 +6,10 @@ from typing import Any
 
 from .audit_store import redact_audit_event
 from .controls import ControlRegistry
+from .profiles import (
+    _historical_sensitive_keys, _InvalidProfileError, _public_profile_values,
+    _require_profile_shape,
+)
 from .security import SecurityContext, can_write, has_perm
 
 
@@ -36,12 +40,16 @@ def build_profile_restore_preview(
     at action time; this preview is not an authorization token.
     """
     try:
+        _require_profile_shape(profile)
         raw_values = dict(profile.get("values") or {})
-    except (TypeError, ValueError):
+    except _InvalidProfileError:
         # Stored records are not necessarily schema-validated. Selection must
         # not expose their contents through conversion errors or crash the UI.
         raise InvalidProfilePreviewValues("Profile values are invalid.") from None
-    values = registry.filter_persistable_values(raw_values)
+    values = _public_profile_values(
+        registry, raw_values, profile.get("control_meta"), known_only=False,
+    )
+    omitted_keys = raw_values.keys() - values.keys()
     staged = dict(session_state)
     corrected = registry.restore(staged, values, include_sensitive=False)
     reasons = []
@@ -50,12 +58,7 @@ def build_profile_restore_preview(
     if not has_perm(ctx, "can_load_profiles"):
         reasons.append("Loading requires can_load_profiles.")
     visible = has_perm(ctx, "can_view_metrics") and has_perm(ctx, "can_load_profiles")
-    metadata = profile.get("control_meta")
-    historical_sensitive = {
-        item.get("key") for item in (metadata if isinstance(metadata, list) else [])
-        if isinstance(item, dict) and item.get("sensitive")
-        and isinstance(item.get("key"), str)
-    }
+    historical_sensitive = _historical_sensitive_keys(profile.get("control_meta"))
     rows = []
     for ctrl in registry.all():
         current = session_state.get(ctrl.key, ctrl.default)
@@ -70,10 +73,10 @@ def build_profile_restore_preview(
                     reasons.append(reason)
         if not visible:
             continue
-        hidden = ctrl.sensitive or ctrl.key in historical_sensitive
+        hidden = ctrl.sensitive or ctrl.key in historical_sensitive or ctrl.key in omitted_keys
         candidate = values[ctrl.key] if restored else current
         corrected_value = candidate != effective
-        if ctrl.sensitive:
+        if hidden:
             outcome = "Sensitive value not restored"
         elif restored:
             outcome = "Restored" if changed else "Already matches"
@@ -98,7 +101,7 @@ def build_profile_restore_preview(
         # either their values or their untrusted names, even in diagnostics.
         unknown_count=sum(registry.get(str(key)) is None for key in raw_values),
         sensitive_omitted_count=sum(
-            ctrl.sensitive and ctrl.key in raw_values for ctrl in registry.all()
+            ctrl.key in omitted_keys for ctrl in registry.all()
         ),
         values_visible=visible,
     )

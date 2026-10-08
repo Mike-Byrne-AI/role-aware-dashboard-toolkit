@@ -30,7 +30,7 @@
     "comment_count": {"type": "integer"},
     "signoff_count": {"type": "integer"},
     "handoff_count": {"type": "integer"},
-    "blockers": {"type": "array"},
+    "blockers": {"type": "array", "items": {"type": "object"}},
     "allowed_actions": {"type": "array"},
     "history": {"type": "array"},
     "summary": {"type": "object"}

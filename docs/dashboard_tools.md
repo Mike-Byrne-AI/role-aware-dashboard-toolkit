@@ -51,6 +51,13 @@ callbacks live on the `ControlDef`, not in the renderer.
 Controls whose name or key looks sensitive are marked sensitive automatically;
 you can also pass `sensitive=True`. Sensitive values are omitted from durable
 profiles and redacted from audit and API response surfaces.
+For a nonsecret field matched by this heuristic, such as `max_tokens`, explicitly
+pass `sensitive=False` to retain its ordinary widget and profile values.
+Sensitive UI fields use a blank replacement form, including non-text kinds;
+read-only users see only `Hidden`. Stored values and select options are never
+prefilled or sent to the browser. See the installed
+[controls guide](../role_aware_dashboard_toolkit/resources/guides/controls.md)
+for replacement formats and explicit text clearing.
 
 ## Configure the dashboard
 
@@ -174,6 +181,14 @@ Audit permissions are intentionally split: `can_view_audit` permits inspection,
 while `can_manage_audit` permits clearing the in-memory log and changing the
 JSONL writer lifecycle. The built-in `Admin` role is the only role granted
 `can_manage_audit`; custom roles must opt in explicitly.
+
+The audit CSV download is a spreadsheet-oriented view: fields are quoted and
+formula-like text is prefixed with an apostrophe, including formula prefixes
+after whitespace or Unicode formatting characters. This changes only the CSV
+view; stored audit events and the JSONL download retain their original values.
+Use JSONL for faithful machine-readable evidence. Spreadsheet applications and
+subsequent CSV re-exports can remove text protection, so downstream exports must
+apply their own spreadsheet policy.
 
 ```python
 audit = radt.AuditLog()

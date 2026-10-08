@@ -4,6 +4,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
     sorted_store_ids,
 )
@@ -37,7 +38,7 @@ class FileDecisionStore(_JsonRecordFileStoreMixin, BaseDecisionStore):
         self.decision_dir = decision_dir
 
     def save(self, decision: dict[str, Any]) -> str:
-        decision_id = str(decision.get("decision_id") or "").strip() or "default"
+        decision_id = canonical_store_id(decision.get("decision_id"))
         return self._save_record(decision, decision_id)
 
     def load(self, decision_id: str) -> dict[str, Any] | None:
@@ -71,18 +72,18 @@ class InMemoryDecisionStore(BaseDecisionStore):
         self._decisions: dict[str, dict[str, Any]] = {}
 
     def save(self, decision: dict[str, Any]) -> str:
-        decision_id = str(decision.get("decision_id") or "").strip() or "default"
-        self._decisions[decision_id] = json_roundtrip_copy(decision)
+        decision_id = canonical_store_id(decision.get("decision_id"))
+        self._decisions[decision_id] = json_roundtrip_copy({**decision, "decision_id": decision_id})
         return decision_id
 
     def load(self, decision_id: str) -> dict[str, Any] | None:
-        data = self._decisions.get(str(decision_id))
+        data = self._decisions.get(canonical_store_id(decision_id))
         if data is None:
             return None
         return json_roundtrip_copy(data)
 
     def delete(self, decision_id: str) -> bool:
-        return self._decisions.pop(str(decision_id), None) is not None
+        return self._decisions.pop(canonical_store_id(decision_id), None) is not None
 
     def list_ids(self) -> list[str]:
         return sorted_store_ids(self._decisions.keys())

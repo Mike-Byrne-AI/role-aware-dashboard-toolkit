@@ -33,19 +33,49 @@ Documentation = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/b
 Homepage = "https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit#readme"
 
 [project.optional-dependencies]
-workbench = ["streamlit>=1.30.0"]
-auth = ["streamlit[auth]>=1.52.2"]
+# Keep shared host dependency floors aligned across every applicable extra.
+# They exclude reviewed advisory ranges; audit each resolved deployment too.
+workbench = [
+    "streamlit>=1.65.0",
+    "starlette>=1.3.1",
+    "anyio>=4.14.2",
+    "python-multipart>=0.0.31",
+    "h11>=0.16.0",
+    "urllib3>=2.8.0",
+]
+auth = [
+    "streamlit[auth]>=1.65.0",
+    "starlette>=1.3.1",
+    "anyio>=4.14.2",
+    "python-multipart>=0.0.31",
+    "h11>=0.16.0",
+    "urllib3>=2.8.0",
+    "Authlib>=1.6.11",
+    "cryptography>=50.0.0",
+    "joserfc>=1.7.4",
+]
 pandas = ["pandas>=2.0.0"]
 api = [
-    "fastapi>=0.110.0",
+    "fastapi>=0.133.0",
     "pydantic>=2.0.0",
     "uvicorn>=0.29.0",
+    "starlette>=1.3.1",
+    "anyio>=4.14.2",
+    "h11>=0.16.0",
 ]
 full = [
-    "streamlit>=1.30.0",
-    "streamlit[auth]>=1.52.2",
+    "streamlit>=1.65.0",
+    "streamlit[auth]>=1.65.0",
+    "starlette>=1.3.1",
+    "anyio>=4.14.2",
+    "python-multipart>=0.0.31",
+    "h11>=0.16.0",
+    "urllib3>=2.8.0",
+    "Authlib>=1.6.11",
+    "cryptography>=50.0.0",
+    "joserfc>=1.7.4",
     "pandas>=2.0.0",
-    "fastapi>=0.110.0",
+    "fastapi>=0.133.0",
     "pydantic>=2.0.0",
     "uvicorn>=0.29.0",
 ]
@@ -55,11 +85,21 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.4.0",
     "build>=1.2.0",
-    "twine>=5.1.0",
+    # Twine 7 requires packaging >=26.1, including Core Metadata 2.5 support.
+    "twine>=7.0.0",
     "tomli>=2.0.0; python_version < '3.11'",
     "httpx>=0.27.0",
-    "streamlit>=1.30.0",
-    "fastapi>=0.110.0",
+    "streamlit>=1.65.0",
+    "streamlit[auth]>=1.65.0",
+    "starlette>=1.3.1",
+    "anyio>=4.14.2",
+    "python-multipart>=0.0.31",
+    "h11>=0.16.0",
+    "urllib3>=2.8.0",
+    "Authlib>=1.6.11",
+    "cryptography>=50.0.0",
+    "joserfc>=1.7.4",
+    "fastapi>=0.133.0",
     "pydantic>=2.0.0",
     "uvicorn>=0.29.0",
     "pandas>=2.0.0",
@@ -109,6 +149,11 @@ include = [
     "/examples/operator_review/workflow.py",
     "/examples/operator_review/report.py",
     "/examples/operator_review/README.md",
+    "/examples/section_access/app.py",
+    "/examples/section_access/demo.py",
+    "/examples/section_access/policy.py",
+    "/examples/section_access/provision.py",
+    "/examples/section_access/README.md",
     "/docs/README.md",
     "/docs/api_security.md",
     "/docs/assets/dashboard_admin_controls_app.png",
@@ -156,6 +201,7 @@ include = [
     "/ARCHITECTURE_SCOPE.md",
     "/CHANGELOG.md",
     "/.github/workflows/ci.yml",
+    "/.github/workflows/contributor-ci.yml",
 ]
 exclude = [
     "/role_aware_dashboard_toolkit/_archive_review",

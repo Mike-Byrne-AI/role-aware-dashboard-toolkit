@@ -18,6 +18,10 @@ _CATALOG = {
         "controls", "register_control", "The control definition was rejected.",
         "The rejected definition was not registered; earlier registrations are preserved.",
     ),
+    "RADT-CONTROL-RENDER": (
+        "controls", "render_controls", "A control definition cannot be rendered as a widget.",
+        "Native dashboard rendering did not start; plugin setup may already have run.",
+    ),
     "RADT-APPEARANCE": (
         "appearance", "configure_appearance", "Appearance configuration or rendering was rejected.",
         "The requested appearance was not accepted; plugin setup may already have run.",

@@ -1,5 +1,9 @@
 # Verified sign-in, assigned roles and shared freeze
 
+For the single-host HTTPS reference configuration and installed-artifact
+acceptance sequence, read `python -m role_aware_dashboard_toolkit guide deployment`
+after completing this identity and grant setup.
+
 For a shared dashboard, create the authenticated starter:
 
 ```powershell
@@ -15,18 +19,62 @@ host integration hook; it does not provide the persistent grants in this guide.
 
 ## Configure the host
 
-Use the environment containing the toolkit. Install authentication dependencies:
+Use Python 3.10 or later and install the toolkit's `auth` extra, which includes
+the required server and authentication dependency floors. Validate a separate
+environment without system site packages before changing an existing launcher.
+From a reviewed toolkit source checkout (not the generated app directory), use
+an unused environment directory; choose another name if `.venv-auth` exists:
 
 ```powershell
-python -m pip install "streamlit[auth]>=1.52.2"
+python -m venv .venv-auth
+.\.venv-auth\Scripts\python.exe -m pip install --upgrade pip setuptools
+.\.venv-auth\Scripts\python.exe -m pip install -e ".[auth]"
+.\.venv-auth\Scripts\python.exe -m pip check
 ```
+
+A reviewed local wheel with its `[auth]` extra is also supported; package-index
+publication is not assumed. Run the remaining commands with that environment's interpreter or
+activate it first. Do not upgrade global Python or an active environment in place.
+Keep the previous environment and launcher configuration until acceptance passes.
+
+The supported Streamlit baseline is `streamlit[auth]>=1.65.0`, using its maintained
+Starlette session implementation. The toolkit also requires these reviewed floors:
+
+| Dependency | Minimum | Primary advisory |
+| --- | --- | --- |
+| Starlette | 1.3.1 | [Form limits](https://github.com/Kludex/starlette/security/advisories/GHSA-82w8-qh3p-5jfq) |
+| AnyIO | 4.14.2 | [TLS hostname handling](https://github.com/agronholm/anyio/security/advisories/GHSA-82r6-8w77-94w6) |
+| python-multipart | 0.0.31 | [Content-Length parsing](https://github.com/Kludex/python-multipart/security/advisories/GHSA-v9pg-7xvm-68hf) |
+| h11 | 0.16.0 | [Chunked encoding](https://github.com/python-hyper/h11/security/advisories/GHSA-vqfr-h8mv-ghfj) |
+| urllib3 | 2.8.0 | [Chunked response handling](https://github.com/urllib3/urllib3/security/advisories/GHSA-vxq7-64xx-v4gw) |
+| Authlib | 1.6.11 | [OAuth state binding](https://github.com/authlib/authlib/security/advisories/GHSA-jj8c-mmj3-mmgv) |
+| cryptography | 50.0.0 | [PKCS#7 decryption](https://github.com/pyca/cryptography/security/advisories/GHSA-g6cj-pr64-35w5) |
+| joserfc | 1.7.4 | [Empty signature arrays](https://github.com/authlib/joserfc/security/advisories/GHSA-4pp3-559j-c5c2) |
+
+These floors exclude reviewed affected ranges; an advisory match alone does not
+establish reachability in a host application. Floors are not a reproducible lock
+or a guarantee about future resolutions. Audit the complete resolved environment,
+including installer/build tools, and retain its exact versions and package hashes
+with private acceptance evidence. `pip check` checks dependency compatibility,
+not known vulnerabilities. For example, install and run `pip-audit` inside the new
+environment; investigate findings and packages it cannot audit. An unpublished
+local toolkit may be skipped and still needs source review. Do not put host locks,
+credentials or private evidence in the public source tree.
 
 Register an OIDC application with your identity provider and obtain its exact
 issuer, client ID, client secret and discovery URL. Register the exact callback
 URL, such as `http://localhost:8501/oauth2callback` for local testing; use HTTPS
 for a shared deployment. Streamlit and Authlib handle token signature, state and
-nonce verification. This adapter consumes only their verified `st.user` result;
-it is not a parser or verifier for arbitrary tokens or browser-supplied claims.
+nonce verification. Streamlit's [Starlette callback implementation](https://github.com/streamlit/streamlit/blob/1.65.0/lib/streamlit/web/server/starlette/starlette_auth_routes.py)
+uses the initiating browser session for OAuth state. This adapter consumes only
+their verified `st.user` result; it is not a parser or verifier for arbitrary
+tokens or browser-supplied claims.
+
+When provider metadata advertises `end_session_endpoint`, Streamlit also attempts
+OIDC logout. Register the exact callback URL as a permitted
+`post_logout_redirect_uri` with that provider and verify its sign-out flow. The
+logout request may include an ID token as `id_token_hint`; redact those URLs from
+logs and evidence. Provider support and logout policy must be checked explicitly.
 
 Create an application-specific protected directory outside every repository.
 On Windows, restrict its NTFS permissions to the app service account and trusted
@@ -144,11 +192,53 @@ authentication, request OIDC `max_age` and set `require_auth_time=True`.
 Provider-specific support must be verified; issuance time alone does not prove
 recent credential entry.
 
-Streamlit's cookie can outlive token expiry; the adapter denies expired claims
-on each check. Logging out ends the current Streamlit session and removes its
-cookie, but other existing sessions remain. Server-side grant revocation denies
-their next checked action. Provider-side account/session revocation is not
+Streamlit's cookies can outlive token expiry; the adapter denies expired claims
+on each check. Logging out ends the current Streamlit session and clears its
+identity/token cookies. Streamlit also attempts provider OIDC logout when a usable
+`end_session_endpoint` is available; otherwise it redirects back to the app.
+This does not guarantee termination of other already-open dashboard sessions.
+Server-side grant revocation denies their next checked action.
+Provider-side account/session revocation is not
 polled here; add that host integration when required.
+
+The signed-out page shows a neutral sign-in prompt. If a provider session exists
+but dashboard access cannot be confirmed, recovery offers **Sign out**, then a
+fresh sign-in with an assigned account. The message does not guess whether the
+cause is expiry, changed grants, or unavailable access services. Contact the
+administrator if retrying does not restore access; signing in again cannot
+restore a revoked grant. Denial still clears protected session state and stops
+before host data is loaded.
+Recovery sign-out runs before the next access check, so restoring a grant while
+the denied page is open does not discard the user's sign-out click.
+
+Custom Streamlit OIDC apps should use the same session boundaries as the starter:
+
+```python
+from role_aware_dashboard_toolkit.streamlit_auth import (
+    clear_authenticated_state, sign_out_and_stop,
+)
+
+# Render this after the access gate. The callback runs before the next gate.
+st.button("Sign out", on_click=sign_out_and_stop, args=(st,))
+
+# In an application configuration-failure handler, before stopping:
+# clear_authenticated_state(st)
+# st.error("Access configuration is unavailable. Contact the administrator.")
+# st.stop()
+```
+
+`clear_authenticated_state(st)` removes all application session values while
+retaining a pending sign-out denial. It does not clear provider cookies or grant
+access. `sign_out_and_stop(st)` clears application state, requests provider logout
+and stops execution. If provider logout fails, the current Streamlit session stays
+denied across reruns until signed-out state is confirmed. This cannot revoke a
+provider cookie, a new Streamlit session, or another browser's session. Treat an
+unconfirmed logout as an operational failure and resolve it with the provider;
+do not describe it as global revocation. Using a plain `session_state.clear()` in
+an error handler would erase this pending denial marker, so use the helper.
+Custom identity hosts own their provider logout and new-session recovery. An
+unrelated Streamlit signed-out status cannot release a custom host's pending
+denial.
 
 ## Data handling and acceptance checks
 
@@ -161,11 +251,20 @@ principal ID and requires reprovisioning. Backup restoration can restore revoked
 grants and old freeze state; review both before reopening access. The current
 freeze row is not a complete administrative audit history.
 
-Streamlit itself retains provider claims in its signed browser identity cookie
-and session memory. Signing prevents undetected modification; it is not
-encryption. Review which claims the provider returns, request minimal scopes,
-and do not expose tokens. The database minimization above does not remove the
-identity provider's or Streamlit's own data handling.
+Streamlit itself retains provider claims in a signed browser identity cookie and
+session memory. Version 1.65.0 also stores returned ID/access tokens in a separate
+signed browser token cookie, even though this adapter reads only `st.user`.
+Signing prevents undetected modification; it is not encryption. Review provider
+claims and token scopes, request minimal access, and exclude cookies/tokens from
+application displays, exports and logs. The database minimization above does not
+remove the identity provider's or Streamlit's own data handling.
+
+In Streamlit 1.65.0, identity/token cookies are HttpOnly and SameSite=Lax but do
+not set Secure; its session middleware enables `https_only` from
+`server.sslCertFile`. Do not assume HTTPS at a reverse proxy establishes the
+required cookie policy. Inspect the actual deployment's cookies and resolve
+transport protection and cookie policy before production use, including when
+TLS terminates outside Streamlit. Local HTTP tests do not prove these properties.
 
 Test two separately authenticated accounts and the actual provider redirect:
 Admin can unfreeze; Viewer cannot self-promote, edit controls or unfreeze; a
@@ -175,6 +274,27 @@ action is denied. Revoke all roles and verify access is denied. Switch accounts
 and confirm old account state is gone. Change freeze in one session and verify
 the other cannot submit a stale unfreeze. Confirm expired identities are denied.
 Synthetic tests prove library behavior, not your provider or deployment setup.
+
+Before switching an existing launcher, test the actual callback implementation:
+legitimate sign-in succeeds; a callback without the initiating browser session,
+with a different session, or with tampered session cookies is rejected without
+an identity cookie. Reused state/callbacks must be rejected, including replay of
+an old session cookie with a consumed authorization code. Verify forged and
+expired tokens, wrong issuer/audience/nonce, and tampered identity cookies are
+denied. An import failure in a probe for obsolete framework internals is not a
+passing test. Use synthetic accounts, separate browser contexts and bounded local
+tests, then repeat legitimate sign-in, sign-out and role checks with the actual
+host and provider. Switch only after these checks pass and verify the new process
+uses the intended interpreter. Retain a reversible launcher change.
+
+Production additionally needs the chosen provider and administrator MFA policy,
+verified HTTPS/callback/logout/cookie settings, protected storage and secret
+rotation, and a durable protected history of grants, revocations and administrator actions.
+Define logout and provider revocation across sessions. If immediate emergency
+cancellation is required, use atomic backend authorization/mutation or explicit
+cancellation semantics. Enforce authorization in real loaders, tenant queries,
+downloads, APIs and trusted plugins. A local HTTP identity provider and successful
+synthetic checks do not satisfy these production requirements.
 
 Primary references: [Streamlit authentication](https://docs.streamlit.io/develop/concepts/connections/authentication),
 [Streamlit secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management),

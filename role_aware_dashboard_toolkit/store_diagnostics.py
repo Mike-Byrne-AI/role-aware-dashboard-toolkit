@@ -35,6 +35,7 @@ _STORE_RECORD_CREATE_FLAGS = (
     _STORE_RECORD_APPEND_FLAGS | os.O_CREAT | os.O_EXCL
 )
 _STORE_RECORD_READ_CHUNK_BYTES = 64 * 1024
+_STORE_FILENAME_MAX_BYTES = 255
 _STORE_RECORD_CHANGED_MESSAGE = "store record changed between validation and read"
 _STORE_RECORD_APPEND_CHANGED_MESSAGE = (
     "store append target changed between validation and write"
@@ -134,7 +135,7 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
         return Path(str(getattr(self, self._record_store_dir_attr)))
 
     def _default_record_id(self, value: Any) -> str:
-        return str(value or "").strip() or "default"
+        return canonical_store_id(value)
 
     def _record_id_from_payload(self, payload: dict[str, Any]) -> str:
         return self._default_record_id(payload.get(self._record_id_field))
@@ -142,7 +143,7 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
     def _save_record(self, record: dict[str, Any], record_id: str | None = None) -> str:
         resolved_id = self._default_record_id(record_id) if record_id is not None else self._record_id_from_payload(record)
         path = self._path_for_write(resolved_id)
-        atomic_write_json_record(path, record, root_dir=self._record_store_root())
+        atomic_write_json_record(path, {**record, self._record_id_field: resolved_id}, root_dir=self._record_store_root())
         return str(path)
 
     def _load_record(self, record_id: str) -> dict[str, Any] | None:
@@ -176,7 +177,15 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
         diagnose_read_errors: bool = False,
     ) -> Path | None:
         root = self._record_store_root()
-        path = self._path_for_write(record_id)
+        identifier = canonical_store_id(record_id)
+        try:
+            path = self._path_for_write(identifier)
+        except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
+            if not diagnose_read_errors:
+                raise
+            path = root / f"{hashed_store_filename(identifier)}.json"
+            self._read_errors.append(build_read_error(path, exc, root_dir=root))
+            return None
         if not diagnose_read_errors:
             if path.is_file():
                 return path
@@ -193,10 +202,20 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
         return None
 
     def _path_for_write(self, record_id: str) -> Path:
-        return self._record_store_root() / f"{hashed_store_filename(record_id)}.json"
+        return _record_file_path(self._record_store_root(), record_id)
 
     def _read_path(self, path: Path) -> dict[str, Any] | None:
-        return read_json_record(path, self._read_errors, root_dir=self._record_store_root())
+        record = read_json_record(path, self._read_errors, root_dir=self._record_store_root())
+        if record is not None:
+            # Old files can retain an untrimmed ID while their filename already
+            # uses the canonical ID. Normalize the detached result, not the file.
+            record[self._record_id_field] = canonical_store_id(record.get(self._record_id_field))
+            try:
+                self._path_for_write(record[self._record_id_field])
+            except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
+                self._read_errors.append(build_read_error(path, exc, root_dir=self._record_store_root()))
+                return None
+        return record
 
 
 class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
@@ -206,14 +225,14 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
         return Path(str(getattr(self, self._collection_store_dir_attr)))
 
     def _save_collection_record(self, subdir: str, id_key: str, record: dict[str, Any]) -> str:
-        object_id = str(record.get(id_key) or "").strip() or "default"
+        object_id = canonical_store_id(record.get(id_key))
         store_root = self._collection_store_root()
         target_dir = store_root / subdir
-        path = target_dir / f"{hashed_store_filename(object_id)}.json"
-        atomic_write_json_record(path, record, root_dir=store_root)
+        path = _record_file_path(target_dir, object_id)
+        atomic_write_json_record(path, {**record, id_key: object_id}, root_dir=store_root)
         return str(path)
 
-    def _list_collection_records(self, subdir: str, **filters: Any) -> list[dict[str, Any]]:
+    def _list_collection_records(self, subdir: str, *, id_key: str = "", **filters: Any) -> list[dict[str, Any]]:
         store_root = self._collection_store_root()
         target_dir = store_root / subdir
         try:
@@ -232,6 +251,13 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
             loaded = read_json_record(path, self._read_errors, root_dir=store_root)
             if loaded is None:
                 continue
+            if id_key:
+                loaded[id_key] = canonical_store_id(loaded.get(id_key))
+                try:
+                    _record_file_path(target_dir, loaded[id_key])
+                except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
+                    self._read_errors.append(build_read_error(path, exc, root_dir=store_root))
+                    continue
             if any(value and str(loaded.get(key) or "") != str(value) for key, value in filters.items()):
                 continue
             rows.append(loaded)
@@ -337,7 +363,9 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
     target.parent.mkdir(parents=True, exist_ok=True)
 
     fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{safe_store_filename(target.stem, default='record')}-",
+        # The temporary name needs its own budget: a valid final filename can
+        # already occupy the filesystem's entire component length allowance.
+        prefix=".radt-record-",
         suffix=".tmp",
         dir=str(target.parent),
     )
@@ -379,6 +407,11 @@ def safe_store_write_path(path: Path, *, root_dir: Path | None = None) -> Path:
     return _resolve_safe_store_write_path(path, root_dir=root_dir)
 
 
+def canonical_store_id(value: Any) -> str:
+    """Use the existing write identity policy for payloads and lookups alike."""
+    return str(value or "").strip() or "default"
+
+
 def json_roundtrip_copy(value: Any) -> Any:
     rendered = json.dumps(
         value,
@@ -394,11 +427,53 @@ def safe_store_filename(name: Any, *, default: str = "default") -> str:
     return safe or str(default or "default")
 
 
-def hashed_store_filename(name: Any, *, default: str = "default", digest_len: int = 10) -> str:
+def _unbounded_hashed_store_filename(name: Any, *, default: str = "default", digest_len: int = 10) -> str:
     identifier = str(name)
     safe_id = safe_store_filename(identifier, default=default)
     digest = hashlib.sha1(identifier.encode("utf-8")).hexdigest()[: max(1, int(digest_len))]
     return f"{safe_id}-{digest}"
+
+
+def hashed_store_filename(name: Any, *, default: str = "default", digest_len: int = 10) -> str:
+    """Keep the full identifier's hash and bound the readable prefix for JSON files."""
+    original = _unbounded_hashed_store_filename(name, default=default, digest_len=digest_len)
+    prefix, _, digest = original.rpartition("-")
+    prefix_bytes = _STORE_FILENAME_MAX_BYTES - len(".json") - len(digest) - 1
+    # Encoding starts valid; ignore only a partial final code point at the cut.
+    bounded_prefix = prefix.encode("utf-8")[:prefix_bytes].decode("utf-8", errors="ignore")
+    return f"{bounded_prefix}-{digest}"
+
+
+def _record_file_path(directory: Path, identifier: str) -> Path:
+    """Reuse an exact existing legacy filename before choosing a bounded new one.
+
+    NTFS can hold Unicode components whose UTF-8 representation exceeds 255
+    bytes. A changed naming budget must not orphan or duplicate those records.
+    This only selects a path; callers still enforce normal store path safety.
+    """
+    target = directory / f"{hashed_store_filename(identifier)}.json"
+    legacy_name = f"{_unbounded_hashed_store_filename(identifier)}.json"
+    if legacy_name == target.name:
+        return target
+    if os.name == "nt" and len(legacy_name.encode("utf-16-le")) > 510:
+        # No prior NTFS component could have used this many UTF-16 code units.
+        return target
+    legacy = directory / legacy_name
+    try:
+        # Do not follow a link or silently replace an unsafe legacy record with
+        # a second file. Returning it lets the existing safety boundary reject it.
+        legacy.stat(follow_symlinks=False)
+    except (FileNotFoundError, NotADirectoryError):
+        return target
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG or getattr(exc, "winerror", None) == 206:
+            return target
+        raise
+    try:
+        target.stat(follow_symlinks=False)
+    except (FileNotFoundError, NotADirectoryError):
+        return legacy
+    raise StorePathSecurityError("ambiguous store record has both legacy and bounded filenames")
 
 
 def sorted_store_ids(values: Iterable[Any], *, dedupe: bool = True) -> list[str]:

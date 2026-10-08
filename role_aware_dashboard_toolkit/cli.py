@@ -112,7 +112,11 @@ def initialize_project(destination: str, *, dry_run: bool = False,
     path = _new_destination(destination)
     contents = read_starter(authenticated=authenticated)
     result = {"destination": str(path), "dry_run": bool(dry_run), "files": list(contents),
-              "created_files": [], "run_command": _RUN_COMMAND}
+              "created_files": [], "run_command": _RUN_COMMAND,
+              "auth_mode": "authenticated" if authenticated else "demo",
+              "setup_required": bool(authenticated)}
+    if authenticated:
+        result["setup_command"] = f"{_COMMAND} guide authentication"
     if dry_run:
         return result
     created = []
@@ -182,7 +186,20 @@ def _render_text(command: str, result: dict[str, Any]) -> str:
         return "\n\n".join(f"--- {name} ---\n{content}" for name, content in result["files"].items())
     if command == "init":
         action = "Would create" if result["dry_run"] else "Created"
-        return f"{action} {result['destination']}:\n" + "\n".join(result["files"]) + f"\n\nFrom that directory, run:\n{result['run_command']}"
+        output = f"{action} {result['destination']}:\n" + "\n".join(result["files"])
+        if result.get("setup_required"):
+            return output + (
+                "\n\nAuthenticated dashboard: access stays locked until setup is complete.\n"
+                "Configure the provider, protected secrets and explicit account grants first:\n"
+                f"{result['setup_command']}\n"
+                "Then launch from the generated directory using the guide's secrets-file command.\n"
+                "Shared hosting also requires the guide's HTTPS and deployment checks."
+            )
+        return output + (
+            "\n\nLocal demo: self-selected roles do not authenticate users.\n"
+            "For a shared dashboard, create a new project with init --auth.\n"
+            f"\nFrom the generated directory, run:\n{result['run_command']}"
+        )
     return json.dumps(result, indent=2, ensure_ascii=True)
 
 

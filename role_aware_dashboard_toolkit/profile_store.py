@@ -4,6 +4,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
     sorted_store_ids,
 )
@@ -37,7 +38,7 @@ class FileProfileStore(_JsonRecordFileStoreMixin, BaseProfileStore):
         self.profile_dir = profile_dir
 
     def save(self, profile: dict[str, Any]) -> str:
-        profile_id = str(profile.get("profile_id") or "").strip() or "default"
+        profile_id = canonical_store_id(profile.get("profile_id"))
         return self._save_record(profile, profile_id)
 
     def load(self, profile_id: str) -> dict[str, Any] | None:
@@ -60,18 +61,18 @@ class InMemoryProfileStore(BaseProfileStore):
         self._profiles: dict[str, dict[str, Any]] = {}
 
     def save(self, profile: dict[str, Any]) -> str:
-        profile_id = str(profile.get("profile_id") or "").strip() or "default"
-        self._profiles[profile_id] = json_roundtrip_copy(profile)
+        profile_id = canonical_store_id(profile.get("profile_id"))
+        self._profiles[profile_id] = json_roundtrip_copy({**profile, "profile_id": profile_id})
         return profile_id
 
     def load(self, profile_id: str) -> dict[str, Any] | None:
-        data = self._profiles.get(str(profile_id))
+        data = self._profiles.get(canonical_store_id(profile_id))
         if data is None:
             return None
         return json_roundtrip_copy(data)
 
     def delete(self, profile_id: str) -> bool:
-        return self._profiles.pop(str(profile_id), None) is not None
+        return self._profiles.pop(canonical_store_id(profile_id), None) is not None
 
     def list_ids(self) -> list[str]:
         return sorted_store_ids(self._profiles.keys(), dedupe=False)

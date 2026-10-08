@@ -35,7 +35,11 @@ VALID_GOVERNANCE_EVENT_TYPES = (
 )
 
 
-INCIDENT_STATUS_OPEN = {"open", "triaging", "investigating", "mitigating", "watch"}
+# Native incidents remain open until explicitly closed, including monitoring
+# and mitigated records. Retain the existing host-supplied status vocabulary.
+INCIDENT_STATUS_OPEN = {
+    "open", "monitoring", "mitigated", "triaging", "investigating", "mitigating", "watch",
+}
 SIGNOFF_APPROVED = {"approved", "acknowledged"}
 BLOCKING_DECISION_STATES = {"rejected", "frozen"}
 REPLAY_ONLY_DECISION_STATES = {"replay_only"}
@@ -547,7 +551,11 @@ def allowed_actions_for_governance(
         actions.extend(["apply_live_changes", "close_case"])
     if state in {"needs_review", "escalated"}:
         actions.append("request_review")
-    return sorted(set(actions))
+    blocked = blocked_actions_for_governance(
+        state, approval_requirements=approval_requirements,
+        unresolved_incidents=unresolved_incidents,
+    )
+    return sorted(set(actions).difference(blocked))
 
 
 

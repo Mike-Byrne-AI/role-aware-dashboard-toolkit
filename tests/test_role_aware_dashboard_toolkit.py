@@ -1115,6 +1115,12 @@ class FakeStreamlit(_FakeContext):
     def container(self, *args, **kwargs):
         return _FakeContext(self)
 
+    def form(self, *args, **kwargs):
+        return _FakeContext(self)
+
+    def form_submit_button(self, *args, **kwargs):
+        return False
+
     def columns(self, spec, *args, **kwargs):
         count = spec if isinstance(spec, int) else len(spec)
         return [_FakeContext(self) for _ in range(count)]
@@ -1318,7 +1324,7 @@ class TestDashboardPanels:
         assert global_calls == [("gain", 0.6, 0.8)]
         assert [event["type"] for event in audit.all_events()] == ["control_change"]
 
-    def test_sensitive_text_controls_use_password_input_and_redacted_audit(self):
+    def test_sensitive_text_controls_use_blank_replacement_and_redacted_audit(self):
         dashboard_panels = importlib.import_module("role_aware_dashboard_toolkit.dashboard_panels")
         audit = AuditLog()
         registry = ControlRegistry()
@@ -1337,14 +1343,16 @@ class TestDashboardPanels:
             on_change=None,
         )
         ctx = make_security_context("Admin", {"can_edit_controls": True})
-        fake_st = RecordingStreamlit(widget_values={"credential": "first-secret"})
+        fake_st = RecordingStreamlit()
 
         dashboard_panels.render_groups(fake_st, registry.iter_groups(), ctx, config)
-        fake_st.session_state["credential"] = "second-secret"
-        fake_st.widget_values["credential"] = "second-secret"
+        fake_st.session_state["_radt_sensitive_replacement__credential"] = "second-secret"
+        fake_st.form_submit_button = lambda *args, **kwargs: True
         dashboard_panels.render_groups(fake_st, registry.iter_groups(), ctx, config)
 
         assert [item["type"] for item in fake_st.text_inputs] == ["password", "password"]
+        assert [item["value"] for item in fake_st.text_inputs] == ["", ""]
+        assert fake_st.session_state["credential"] == "second-secret"
         events = audit.all_events()
         assert len(events) == 1
         assert events[0]["old"] == "<redacted-secret>"
@@ -1510,6 +1518,7 @@ class TestDashboardPanels:
             min_value=32,
             max_value=4096,
             step=1,
+            sensitive=False,
         )
         config = types.SimpleNamespace(
             layout="stacked",
@@ -1711,7 +1720,7 @@ class TestDashboardSmoke:
         )
         monkeypatch.setattr(
             sidebar_module,
-            "load_profile",
+            "_load_ui_profile",
             lambda *_args, **_kwargs: mutation_calls.append("load"),
         )
         monkeypatch.setattr(

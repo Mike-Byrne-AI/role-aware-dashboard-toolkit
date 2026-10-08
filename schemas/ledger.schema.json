@@ -25,10 +25,26 @@
       "items": {
         "type": "object",
         "properties": {
+          "entry_type": {"type": "string", "enum": ["run_started", "checkpoint", "audit_event", "run_ended"]},
+          "entry_id": {"type": "string"},
+          "ts": {"type": "string"},
+          "run_id": {"type": "string"},
+          "checkpoint_id": {"type": "string"},
+          "actor": {"type": "string"},
+          "role": {"type": "string"},
+          "approval_state": {"type": "string"},
+          "label": {"type": "string"},
+          "reason": {"type": "string"},
+          "detail": {"type": "string"},
+          "controls": {"type": "object"},
+          "controls_diff": {"type": "object"},
+          "telemetry": {"type": "object"},
+          "audit_event": {"type": "object"},
+          "audit_count": {"type": "integer"},
           "source_sequence": {
             "type": "integer",
             "minimum": 0,
-            "description": "Optional original entry position before chronological sorting. Complete unique values preserve source order for reconstruction; legacy ledgers may omit this field."
+            "description": "Optional original entry position before chronological sorting. Complete unique values preserve source order for reconstruction; legacy ledgers with absent, incomplete or duplicate sequences retain list order. Present values must be nonnegative integers."
           }
         }
       }

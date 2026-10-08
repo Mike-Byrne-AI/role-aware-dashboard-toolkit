@@ -137,12 +137,13 @@ def test_preview_hides_sensitive_unknown_historical_and_nested_secret_values():
     )
     assert "canary" not in repr(preview)
     assert preview.unknown_count == 2
-    assert preview.sensitive_omitted_count == 1
+    assert preview.sensitive_omitted_count == 3
     rows = {row["Control"]: row for row in preview.rows}
     assert rows["Credential"]["Effective"] == "Hidden"
     assert rows["Mode"]["Saved"] == "Hidden"
     assert rows["Note"]["Effective"] == "Hidden"
-    assert "redacted-secret" in rows["Note"]["Saved"]
+    assert rows["Note"]["Saved"] == "Hidden"
+    assert rows["Note"]["Result"] == "Sensitive value not restored"
 
 
 def test_rendering_preview_does_not_write_stores_audit_controls_or_callbacks():

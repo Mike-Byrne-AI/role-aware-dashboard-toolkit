@@ -92,6 +92,17 @@ def test_write_requires_unfrozen_server_state(store, identity):
     assert not policy.authorize(pid, "Admin", "can_edit_controls", write=True)
 
 
+@pytest.mark.parametrize("revision", [-1, True, "0", None, 0.0])
+def test_malformed_custom_store_freeze_revision_denies_all_authorization(identity, revision, monkeypatch):
+    store = InMemoryAccessStore()
+    policy, pid = policy_for(identity, store)
+    monkeypatch.setattr(store, "read_freeze", lambda: FreezeState(False, revision))
+    assert not policy.authorize(pid, "Admin", "can_view_metrics")
+    assert not policy.authorize(pid, "Admin", "can_edit_controls", write=True)
+    with pytest.raises(AccessDenied):
+        policy.change_freeze(pid, "Admin", False, 0)
+
+
 def test_viewer_cannot_unfreeze_or_forge_admin(store, identity):
     policy, pid = policy_for(identity, store, ("Viewer",))
     for role in ("Viewer", "Admin"):

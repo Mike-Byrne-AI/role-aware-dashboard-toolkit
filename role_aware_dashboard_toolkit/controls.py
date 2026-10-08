@@ -33,7 +33,7 @@ class ControlDef:
     Attributes:
         name:       Display label.
         kind:       Widget type - one of VALID_KINDS.
-        key:        Streamlit session_state key. Must be unique.
+        key:        Unique Streamlit session_state key; '_radt_' is reserved.
         group:      Logical group name (renders as a card / expander).
         permission: RBAC permission key required to edit this control.
         default:    Default value when the control first appears.
@@ -96,6 +96,10 @@ class ControlRegistry:
 
         if key is None:
             key = name.lower().replace(" ", "_")
+        if isinstance(key, str) and key.startswith("_radt_"):
+            raise attach_diagnostic(ValueError(
+                "Control keys beginning with '_radt_' are reserved for toolkit state"
+            ), "RADT-CONTROL-DEFINITION")
         if sensitive is None:
             sensitive = is_sensitive_name(name) or is_sensitive_name(key)
 
@@ -287,13 +291,14 @@ def _default_for_kind(
     options: list[Any] | None,
 ) -> Any:
     if kind == "slider":
-        lo = float(min_value if min_value is not None else 0.0)
-        hi = float(max_value if max_value is not None else 1.0)
-        return round((lo + hi) / 2, 4)
+        lo, hi = _numeric_bounds(kind, min_value, max_value)
+        # Registration will reject invalid configured bounds with guidance.
+        return round(lo / 2 + hi / 2, 4) if lo is not None and hi is not None else 0.0
     if kind == "toggle":
         return False
     if kind == "number":
-        return float(min_value if min_value is not None else 0.0)
+        minimum = _finite_float(min_value)
+        return minimum if minimum is not None else 0.0
     if kind == "select":
         return options[0] if options else None
     if kind == "text":
@@ -330,8 +335,7 @@ def _sanitize_numeric(ctrl: ControlDef, value: Any) -> Any:
 
     # The final literal fallback above is always finite.
     assert num is not None
-    min_value = _finite_float(ctrl.min_value)
-    max_value = _finite_float(ctrl.max_value)
+    min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
     if min_value is not None and num < min_value:
         num = min_value
     if max_value is not None and num > max_value:
@@ -352,17 +356,28 @@ def _validate_numeric_configuration(ctrl: ControlDef) -> None:
                 f"Numeric control '{ctrl.key}' {field_name} must be a finite number"
             ), "RADT-CONTROL-DEFINITION")
 
-    min_value = _finite_float(ctrl.min_value)
-    max_value = _finite_float(ctrl.max_value)
+    min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
     step = _finite_float(ctrl.step)
     if min_value is not None and max_value is not None and min_value > max_value:
         raise attach_diagnostic(ValueError(
             f"Numeric control '{ctrl.key}' min_value must be less than or equal to max_value"
         ), "RADT-CONTROL-DEFINITION")
+    if ctrl.kind == "slider" and min_value == max_value:
+        raise attach_diagnostic(ValueError(
+            f"Slider control '{ctrl.key}' min_value must be strictly less than max_value"
+        ), "RADT-CONTROL-DEFINITION")
     if step is not None and step <= 0:
         raise attach_diagnostic(ValueError(
             f"Numeric control '{ctrl.key}' step must be greater than zero"
         ), "RADT-CONTROL-DEFINITION")
+
+
+def _numeric_bounds(kind: str, min_value: Any, max_value: Any) -> tuple[float | None, float | None]:
+    """Use the same implicit slider range for defaults, validation and values."""
+    if kind == "slider":
+        min_value = 0.0 if min_value is None else min_value
+        max_value = 1.0 if max_value is None else max_value
+    return _finite_float(min_value), _finite_float(max_value)
 
 
 def _finite_float(value: Any) -> float | None:

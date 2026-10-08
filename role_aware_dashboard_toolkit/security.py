@@ -41,9 +41,12 @@ def make_security_context(
 
 
 def has_perm(ctx: SecurityContext | None, key: str, *, default: bool = False) -> bool:
-    """Check whether the context grants a specific permission."""
+    """Check permission; the reserved Unauthenticated role always denies."""
     if ctx is None:
         return bool(default)
+    # A failed access gate must not inherit a host's permissive defaults.
+    if ctx.role == "Unauthenticated":
+        return False
     if ctx.perms is None:
         return False if ctx.authenticated else bool(default)
     if not isinstance(ctx.perms, Mapping):
@@ -59,6 +62,8 @@ def can_write(ctx: SecurityContext | None, perm_key: str, *, default: bool = Fal
     """Require both the master writable switch and the specific permission."""
     if ctx is None:
         return bool(default)
+    if ctx.role == "Unauthenticated":
+        return False
     if not bool(getattr(ctx, "controls_writable", True)):
         return False
     if ctx.authenticated:

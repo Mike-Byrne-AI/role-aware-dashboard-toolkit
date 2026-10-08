@@ -4,6 +4,7 @@ from typing import Any
 
 from .store_diagnostics import (
     _JsonCollectionFileStoreMixin,
+    canonical_store_id,
     json_roundtrip_copy,
 )
 
@@ -61,6 +62,7 @@ class FileOperatorMemoryStore(_JsonCollectionFileStoreMixin, BaseOperatorMemoryS
     def _list(self, subdir: str, *, run_id: str = '', checkpoint_id: str = '', decision_id: str = '') -> list[dict[str, Any]]:
         rows = self._list_collection_records(
             subdir,
+            id_key={'notes': 'note_id', 'incidents': 'incident_id', 'narratives': 'narrative_id'}[subdir],
             run_id=run_id,
             checkpoint_id=checkpoint_id,
             decision_id=decision_id,
@@ -95,8 +97,8 @@ class InMemoryOperatorMemoryStore(BaseOperatorMemoryStore):
 
     @staticmethod
     def _save(bucket: dict[str, dict[str, Any]], id_key: str, record: dict[str, Any]) -> str:
-        object_id = str(record.get(id_key) or '').strip() or 'default'
-        bucket[object_id] = json_roundtrip_copy(record)
+        object_id = canonical_store_id(record.get(id_key))
+        bucket[object_id] = json_roundtrip_copy({**record, id_key: object_id})
         return object_id
 
     @staticmethod

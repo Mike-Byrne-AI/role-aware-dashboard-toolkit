@@ -19,6 +19,7 @@ _GUIDE_TITLES = {
     "plugins": "Add custom panels and sidebar callbacks",
     "permissions": "Roles, permissions and frozen controls",
     "authentication": "Verified sign-in, role grants and shared freeze",
+    "deployment": "Deploy and verify one shared authenticated dashboard",
     "profiles": "Save and load profiles",
     "runs": "Runs, checkpoints and replay",
     "telemetry": "Sample and capture telemetry",
@@ -67,7 +68,7 @@ def inspect_capabilities() -> dict[str, Any]:
     from .plugins import DashboardPlugin, PluginRegistry
     from .public_api import public_api_manifest
     from .sections import DashboardSections
-    from .streamlit_auth import StreamlitIdentityResolver
+    from .streamlit_auth import StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop
 
     symbols = {
         "DashboardConfig": DashboardConfig,
@@ -75,6 +76,8 @@ def inspect_capabilities() -> dict[str, Any]:
         "SQLiteAccessStore.create": SQLiteAccessStore.create,
         "prepare_access": prepare_access,
         "StreamlitIdentityResolver": StreamlitIdentityResolver,
+        "clear_authenticated_state": clear_authenticated_state,
+        "sign_out_and_stop": sign_out_and_stop,
         "DashboardSections": DashboardSections,
         "ControlDef": ControlDef,
         "ControlRegistry.register": ControlRegistry.register,
@@ -98,14 +101,14 @@ def inspect_capabilities() -> dict[str, Any]:
         "control_kinds": list(VALID_KINDS),
         "supported_layouts": ["stacked", "columns"],
         "appearance_requirements": {
-            "core_workbench": "Streamlit >=1.30",
+            "core_workbench": "Streamlit >=1.65.0",
             "group_fills": "Streamlit >=1.39 with st.container(key=...) and st.html()",
             "sidebar_theme": "Streamlit >=1.44",
             "note": "Documented API requirements, not certification of the installed runtime.",
         },
         "section_defaults": asdict(DashboardSections()),
         "authentication_requirements": {
-            "streamlit": "Streamlit >=1.52.2 with its auth extra (Authlib >=1.3.2)",
+            "streamlit": "Streamlit >=1.65.0 with the toolkit auth extra (Authlib >=1.6.11)",
             "provider": "Host-configured OIDC provider and explicit server-side role provisioning",
             "guide": "python -m role_aware_dashboard_toolkit guide authentication",
         },

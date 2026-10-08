@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 import textwrap
@@ -12,6 +13,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+CONTRIBUTOR_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "contributor-ci.yml"
 ACTION_PINS = {
     "actions/checkout": (
         "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -26,12 +28,12 @@ ACTION_PINS = {
     "actions/upload-artifact": (
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
         "v7.0.1",
-        3,
+        4,
     ),
     "actions/download-artifact": (
         "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "v8.0.1",
-        1,
+        3,
     ),
 }
 
@@ -77,7 +79,12 @@ def test_ci_actions_are_pinned_to_reviewed_full_revisions():
     assert len(candidate_uses) == sum(expected_uses.values())
     assert all_uses == expected_refs
     assert not re.search(r"uses\s*:\s+actions/[^@\s]+@v\d", workflow)
-    assert "digest-mismatch: error" in workflow
+    downloads = [
+        step for step in re.split(r"\n      - ", workflow)
+        if "uses: actions/download-artifact@" in step
+    ]
+    assert len(downloads) == ACTION_PINS["actions/download-artifact"][2]
+    assert all("digest-mismatch: error" in step for step in downloads)
 
 
 def test_ci_checkouts_do_not_persist_credentials():
@@ -94,6 +101,57 @@ def test_ci_checkouts_do_not_persist_credentials():
     )
 
     assert len(re.findall(pattern, workflow)) == checkout_count
+
+
+def test_contributor_ci_runs_unprivileged_without_release_authorization():
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    triggers = workflow.split("on:\n", 1)[1].split("permissions:\n", 1)[0]
+    assert re.findall(r"^  ([A-Za-z_]+):", triggers, flags=re.MULTILINE) == [
+        "pull_request", "push", "workflow_dispatch",
+    ]
+    assert "branches: [main]" in triggers
+    assert "paths:" not in triggers and "paths-ignore:" not in triggers
+    assert "permissions:\n  contents: read\n" in workflow
+    assert "    permissions: {}\n" in workflow
+    for forbidden in (
+        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "id-token:", "continue-on-error", "twine upload", "actions/cache@",
+    ):
+        assert forbidden not in workflow
+    refs = re.findall(r"^\s*- uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
+    assert Counter(refs) == Counter({
+        f"{action}@{ACTION_PINS[action][0]}": 2
+        for action in ("actions/checkout", "actions/setup-python")
+    })
+    assert workflow.count("persist-credentials: false") == 2
+    assert workflow.count("timeout-minutes:") == 3
+    assert 'python-version: ["3.10", "3.11", "3.12"]' in workflow
+    assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
+    assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
+    assert "python -m build\n          python -m twine check dist/*" in workflow
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
+@pytest.mark.parametrize("job", ["tests", "quality"])
+def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch, result, job):
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    gate = workflow.split("  required:\n", 1)[1]
+    assert "    name: contributor-checks\n" in gate
+    assert "    if: ${{ always() }}\n" in gate
+    assert "    needs: [tests, quality]\n" in gate
+    body = re.search(r"python - <<'PY'\n(.*?)^          PY$", gate, flags=re.MULTILINE | re.DOTALL).group(1)
+    checks = compile(textwrap.dedent(body), "contributor-required-check", "exec")
+    results = {name: {"result": "success"} for name in ("tests", "quality")}
+    results[job]["result"] = result
+    monkeypatch.setenv("NEEDS_JSON", json.dumps(results))
+    if result == "success":
+        exec(checks, {})
+    else:
+        with pytest.raises(SystemExit, match="All contributor jobs must succeed"):
+            exec(checks, {})
+    monkeypatch.setenv("NEEDS_JSON", json.dumps({name: data for name, data in results.items() if name != job}))
+    with pytest.raises(SystemExit, match="All contributor jobs must succeed"):
+        exec(checks, {})
 
 
 def test_ci_smokes_each_supported_optional_extra_without_product_adapters():
@@ -166,6 +224,14 @@ def _installed_smoke_script(workflow: str, lane: str) -> str:
         job = workflow.split(marker, 1)[1]
         body = re.search(r"-I - <<'PY'\n(.*?)^          PY$", job, flags=re.MULTILINE | re.DOTALL).group(1)
     return textwrap.dedent(body)
+
+
+def test_api_smoke_builds_the_installed_app_without_streamlit():
+    script = _installed_smoke_script(WORKFLOW_PATH.read_text(encoding="utf-8"), "api")
+    compile(script, "workflow-api-smoke", "exec")
+    assert 'assert importlib.util.find_spec("streamlit") is None' in script
+    assert "app = create_app(role_aware_dashboard_toolkit.ControlRegistry())" in script
+    assert 'assert {"/health", "/controls"} <= {route.path for route in app.routes}' in script
 
 
 @pytest.mark.parametrize("problem", [None, "wrong_dependency", "missing_help", "wrong_diagnostic", "missing_diagnostic", "render_succeeds"])
