@@ -24,10 +24,22 @@ registration and can be shared across sessions: never cache user data,
 identities or authorization decisions there. Keep user-specific reads and
 actions in callbacks that check the current render context at the boundary.
 
+Concurrent sessions share one setup attempt for a registration and wait for its
+completion before rendering its hooks. If that attempt fails, waiting sessions
+receive its diagnostic; a later call can retry. Setup and render callbacks run
+outside the registry lock. Reentrant calls made from setup skip registrations
+whose setup is already running, so they must not assume every plugin is ready.
+Render hooks can run concurrently; protect any shared host resources they use.
+
 `plugins.unregister("overview")` removes a registration and returns it;
-an unknown name raises `KeyError`. Future dispatches skip removed callbacks.
+an unknown name raises `KeyError`. Future dispatches skip removed callbacks;
+callbacks already selected for dispatch may finish.
 Removal does not undo setup effects or delete records. Setup runs once per
 registration in each registry; re-registering starts a fresh registration.
+Removing an in-progress registration releases waiting callers. Its old setup
+may finish, but cannot initialize or render the replacement, even when the same
+plugin object is registered again. Coordinate host effects if old and new setup
+callbacks must not overlap. Keep plugin names stable while registered.
 
 Plugins execute as trusted Python in the host process. Entry-point discovery
 is explicit opt-in; allowlist reviewed entry points rather than assuming that

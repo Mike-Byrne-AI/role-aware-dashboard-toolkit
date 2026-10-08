@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .controls import ControlRegistry
+from .sensitive_values import is_sensitive_name
 from .validators_parts.common import record_shape_errors
 from .profile_store import (
     DEFAULT_PROFILE_DIR,
@@ -141,6 +142,67 @@ def _restore_profile_data(
         session_state[key] = staged[key]
     data["corrected_values"] = int(corrected)
     return data
+
+
+def _historical_sensitive_keys(metadata: Any) -> set[str]:
+    return {
+        item.get("key") for item in (metadata if isinstance(metadata, list) else [])
+        if isinstance(item, dict) and item.get("sensitive")
+        and isinstance(item.get("key"), str)
+    }
+
+
+def _contains_secret_fields(value: Any) -> bool:
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        item = pending.pop()
+        if not isinstance(item, (dict, list, tuple)) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        if isinstance(item, dict):
+            if any(is_sensitive_name(key) for key in item):
+                return True
+            pending.extend(item.values())
+        else:
+            pending.extend(item)
+    return False
+
+
+def _public_profile_values(
+    registry: ControlRegistry, values: dict[str, Any] | None, metadata: Any = None,
+    *, known_only: bool = True,
+) -> dict[str, Any]:
+    """Project browser-bound profile values before coercion erases secret keys.
+
+    Native loading retains safe unknown fields for its existing feedback; the
+    HTTP boundary exposes registered controls only. Neither projection edits
+    stored evidence or changes the host-controlled core restore contract.
+    """
+    historical_sensitive = _historical_sensitive_keys(metadata)
+    candidates = values or {}
+    if not known_only:
+        candidates = registry.filter_persistable_values(candidates)
+    return {
+        key: value for key, value in candidates.items()
+        if ((control := registry.get(key)) is not None and not control.sensitive
+            or not known_only and control is None)
+        and key not in historical_sensitive and not _contains_secret_fields(value)
+    }
+
+
+def _load_ui_profile(
+    profile_id: str, registry: ControlRegistry, session_state: dict[str, Any],
+    *, profile_dir: str = DEFAULT_PROFILE_DIR, store: BaseProfileStore | None = None,
+) -> dict[str, Any] | None:
+    data = load_profile_data(profile_id, profile_dir=profile_dir, store=store)
+    if data is None:
+        return None
+    _require_profile_shape(data)
+    safe_data = {**data, "values": _public_profile_values(
+        registry, data.get("values"), data.get("control_meta"), known_only=False,
+    )}
+    return _restore_profile_data(safe_data, registry, session_state)
 
 
 def list_profiles(profile_dir: str = DEFAULT_PROFILE_DIR, *, store: BaseProfileStore | None = None) -> list[str]:

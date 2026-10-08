@@ -27,6 +27,40 @@ from .runbook_panels_parts.shared import (
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
 from .security import can_mutate, can_write, has_perm
 from .sections import section_visible
+from .store_diagnostics import StorePathSecurityError
+
+
+_RUN_READ_HELP = "Help: python -m role_aware_dashboard_toolkit guide runs"
+_RUN_SIDEBAR_DRAFT_KEYS = (
+    "_radt_team_comment_body", "_radt_review_assignee", "_radt_review_assignee_role",
+    "_radt_review_title", "_radt_handoff_to", "_radt_handoff_role",
+    "_radt_operator_note_body", "_radt_operator_note_type", "_radt_incident_severity",
+    "_radt_incident_title", "_radt_incident_summary", "_radt_incident_cause",
+)
+
+
+def _read_run_store(store: Any, operation: Any, *args: Any) -> tuple[Any, bool]:
+    """Separate a missing record from a failed read without consuming diagnostics.
+
+    File stores retain their read-error history across successful operations.
+    Only errors added by this read indicate that its result is incomplete.
+    """
+    errors_before = len(getattr(store, "read_errors", ()) or ())
+    try:
+        result = operation(*args)
+    except (OSError, ValueError, StorePathSecurityError):
+        # Store exceptions and diagnostic records can contain paths or secrets.
+        # UI messages below never copy those payloads.
+        return None, True
+    return result, len(getattr(store, "read_errors", ()) or ()) > errors_before
+
+
+def _warn_run_history_read(st: Any) -> None:
+    st.warning(
+        "Run history could not be read completely. Unreadable records were skipped; "
+        "available runs may still be displayed. Check the run store and retry. "
+        + _RUN_READ_HELP
+    )
 
 
 
@@ -38,8 +72,10 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
     st.divider()
     st.subheader(getattr(config, "runbook_title", "Runbook"))
     active_run_id = str(st.session_state.get("_radt_active_run_id", "") or "")
-    active_run = store.load(active_run_id) if active_run_id else None
-    if active_run is None and active_run_id:
+    active_run, read_failed = (
+        _read_run_store(store, store.load, active_run_id) if active_run_id else (None, False)
+    )
+    if not read_failed and active_run is None and active_run_id:
         st.session_state["_radt_active_run_id"] = ""
         active_run_id = ""
 
@@ -50,6 +86,21 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
     st.text_input("Checkpoint label", key="_radt_checkpoint_label")
     st.text_input("Checkpoint reason", key="_radt_checkpoint_reason")
     st.text_input("Run outcome", key="_radt_run_outcome")
+
+    if read_failed:
+        # Keep draft widgets alive, but do not abandon or mutate a run when
+        # storage could not establish that the record is actually missing.
+        # Child sidebars cannot render without the run. Detach their draft
+        # values from Streamlit's omitted-widget cleanup; never retain buttons.
+        for key in _RUN_SIDEBAR_DRAFT_KEYS:
+            if key in st.session_state:
+                st.session_state[key] = st.session_state[key]
+        st.warning(
+            "The active run could not be read. Its selection is preserved; "
+            "run actions are unavailable until the record can be read. "
+            "Check the run store and retry. " + _RUN_READ_HELP
+        )
+        return
 
     if active_run is None:
         st.caption("No active run.")
@@ -134,20 +185,39 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
     if not section_visible(config, "runbook") or store is None or not has_perm(ctx, "can_view_team_ops", default=False):
         return
 
-    run_ids = store.list_ids()
+    run_ids, read_failed = _read_run_store(store, store.list_ids)
     if not run_ids:
         st.divider()
         with st.expander(getattr(config, "runbook_title", "Runbook"), expanded=False):
-            st.caption("No runs recorded yet.")
+            if read_failed:
+                _warn_run_history_read(st)
+            else:
+                st.caption("No runs recorded yet.")
         return
 
-    runs = [store.load(run_id) for run_id in run_ids]
+    runs = []
+    for run_id in run_ids:
+        run, load_failed = _read_run_store(store, store.load, run_id)
+        read_failed = read_failed or load_failed
+        if not load_failed:
+            runs.append(run)
     runs = [run for run in runs if isinstance(run, dict)]
+    if not runs:
+        # A listed record can disappear or become unreadable before loading.
+        st.divider()
+        with st.expander(getattr(config, "runbook_title", "Runbook"), expanded=False):
+            if read_failed:
+                _warn_run_history_read(st)
+            else:
+                st.caption("No runs are currently available to display.")
+        return
     runs.sort(key=lambda run: (str(run.get("started_at", "")), str(run.get("run_id", ""))), reverse=True)
     summaries = [run_summary(run) for run in runs]
 
     st.divider()
     with st.expander(getattr(config, "runbook_title", "Runbook"), expanded=False):
+        if read_failed:
+            _warn_run_history_read(st)
         st.subheader("Recent Runs")
         _render_table(st, summaries)
 

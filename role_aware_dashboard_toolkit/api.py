@@ -28,6 +28,7 @@ from .controls import ControlRegistry
 from .profile_store import BaseProfileStore
 from .profiles import (
     _InvalidProfileError,
+    _public_profile_values as _profile_response_values,
     _require_profile_shape,
     _restore_profile_data,
     save_profile,
@@ -43,7 +44,7 @@ from .security import (
     RoleDef,
     BUILTIN_ROLES,
 )
-from .sensitive_values import REDACTED_SECRET, is_sensitive_name
+from .sensitive_values import REDACTED_SECRET
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -332,40 +333,6 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
             )
             updated.append(_control_value(app_state, ctrl.key))
         return updated
-
-
-def _profile_response_values(
-    registry: ControlRegistry, values: dict[str, Any] | None, metadata: Any = None,
-) -> dict[str, Any]:
-    """Expose only known public values; never stringify a nested saved secret."""
-    historical_sensitive = {
-        item.get("key") for item in (metadata if isinstance(metadata, list) else [])
-        if isinstance(item, dict) and item.get("sensitive")
-        and isinstance(item.get("key"), str)
-    }
-    return {
-        key: value for key, value in (values or {}).items()
-        if (control := registry.get(key)) is not None
-        and not control.sensitive and key not in historical_sensitive
-        and not _contains_secret_fields(value)
-    }
-
-
-def _contains_secret_fields(value: Any) -> bool:
-    pending = [value]
-    seen: set[int] = set()
-    while pending:
-        item = pending.pop()
-        if not isinstance(item, (dict, list, tuple)) or id(item) in seen:
-            continue
-        seen.add(id(item))
-        if isinstance(item, dict):
-            if any(is_sensitive_name(key) for key in item):
-                return True
-            pending.extend(item.values())
-        else:
-            pending.extend(item)
-    return False
 
 
 def _load_api_profile(
