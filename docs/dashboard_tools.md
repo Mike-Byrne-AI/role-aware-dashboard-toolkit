@@ -51,6 +51,13 @@ callbacks live on the `ControlDef`, not in the renderer.
 Controls whose name or key looks sensitive are marked sensitive automatically;
 you can also pass `sensitive=True`. Sensitive values are omitted from durable
 profiles and redacted from audit and API response surfaces.
+For a nonsecret field matched by this heuristic, such as `max_tokens`, explicitly
+pass `sensitive=False` to retain its ordinary widget and profile values.
+Sensitive UI fields use a blank replacement form, including non-text kinds;
+read-only users see only `Hidden`. Stored values and select options are never
+prefilled or sent to the browser. See the installed
+[controls guide](../role_aware_dashboard_toolkit/resources/guides/controls.md)
+for replacement formats and explicit text clearing.
 
 ## Configure the dashboard
 
@@ -164,6 +171,9 @@ hidden, and frozen controls.
 Packet export does not override visibility permissions. Full run and checkpoint
 packet previews require `can_export_packets`, `can_view_metrics`, and
 `can_view_audit`; replay previews require export and metrics access.
+Native historical output also reapplies current and recorded control sensitivity
+before building summaries or comparisons. Read/export permission never makes a
+sensitive historical value public, and projection does not rewrite the evidence.
 
 ## Audit
 
@@ -174,6 +184,17 @@ Audit permissions are intentionally split: `can_view_audit` permits inspection,
 while `can_manage_audit` permits clearing the in-memory log and changing the
 JSONL writer lifecycle. The built-in `Admin` role is the only role granted
 `can_manage_audit`; custom roles must opt in explicitly.
+
+The audit CSV download is a spreadsheet-oriented view: fields are quoted and
+formula-like text is prefixed with an apostrophe, including formula prefixes
+after whitespace or Unicode formatting characters. This formula escaping changes
+only the CSV view. Both native downloads first redact currently sensitive
+historical values; the stored audit events remain unchanged.
+NUL characters are displayed as literal `\x00` text so CSV readers, including
+Python 3.10's reader, can import the download. Use JSONL for faithful
+machine-readable evidence. Spreadsheet applications and
+subsequent CSV re-exports can remove text protection, so downstream exports must
+apply their own spreadsheet policy.
 
 ```python
 audit = radt.AuditLog()

@@ -23,14 +23,31 @@ it does not verify or claim PyPI ownership, reservation, or publishing rights.
 
 ## Source quality
 
+Start from the repository root with a fresh environment outside the checkout.
+Do not reuse a development environment with system site packages. Keep this
+PowerShell session open so every check and build uses the same interpreter:
+
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE = "1"
-py -3 -m pytest -q
-py -3 -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75
-py -3 -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
-py -3 tools/pre_release_check.py --json --require-clean
-py -3 -m pip check
+$releaseEnv = Join-Path $env:TEMP ("radt-release-" + [guid]::NewGuid().ToString("N"))
+py -3.11 -m venv $releaseEnv
+$releasePython = Join-Path $releaseEnv "Scripts\python.exe"
+& $releasePython -m pip install --upgrade pip
+& $releasePython -m pip install -e ".[dev]"
+& $releasePython -m pip check
+& $releasePython -c "import role_aware_dashboard_toolkit as r; print(r.__file__)"
+& $releasePython -m pytest -q
+& $releasePython -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75
+& $releasePython -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
+& $releasePython tools/pre_release_check.py --json --require-clean
 ```
+
+Require every command to succeed and the printed import path to point into
+the release checkout. The `dev` extra requires Twine 7 or later, whose
+`packaging>=26.1` dependency reads the Core Metadata 2.5 emitted by current
+Hatchling. Do not work around a metadata-check failure by skipping Twine or
+silently using a different interpreter. Record the resolved tool versions
+with release evidence. On Linux, use the fresh environment's `bin/python`.
 
 Set the bytecode environment variable before Python starts, including pytest
 collection and child processes. Hosted CI applies the same setting to all jobs.
@@ -54,7 +71,13 @@ Pytest creates each default basetemp as a unique session-owned child under
 `.pytest-runtime-tmp/`. Explicit `--basetemp` overrides must be cleaned by the
 caller.
 
-Hosted CI is manual-only and unarmed by default. It requires
+Contributor CI runs automatically for pull requests and pushes to `main`.
+Require its `contributor-checks` status on `main` with up-to-date branches;
+verify live rules, including disabled force pushes and deletions. That status
+requires all contributor test and quality jobs to succeed, including the
+75% coverage gate. A skipped or cancelled dependency is a failure.
+
+Release CI is manual-only and unarmed by default. It requires
 `workflow_dispatch`, a `candidate` or `main` ref, and the repository variable
 `XL422_CI_APPROVED_SHA` equal to that run's exact commit SHA. Setting the
 variable and dispatching a run require separate maintainer authorization.
@@ -77,10 +100,10 @@ ordinary Python matrix. Local verification does not establish hosted success.
 Use a clean release checkout with a fresh output directory. Build and validate:
 
 ```powershell
-py -3 -m build
+& $releasePython -m build
 $distArtifacts = Get-ChildItem -LiteralPath dist -File
-$twineArgs = @("-3", "-m", "twine", "check") + $distArtifacts.FullName
-py @twineArgs
+$twineArgs = @("-m", "twine", "check") + $distArtifacts.FullName
+& $releasePython @twineArgs
 ```
 
 Audit both wheel and source-distribution member lists with
@@ -104,6 +127,9 @@ From temporary directories outside the repository:
 - construct `ControlRegistry`, `DashboardConfig`, a run, and a packet without
   optional dependencies present
 - install and smoke `workbench`, `auth`, `api`, and `pandas` independently
+- verify the independent `api` installation honors the Starlette, AnyIO and
+  h11 floors and imports without Streamlit; audit the resolved dependency
+  versions against current advisories as well as running `pip check`
 - install `full` and check every optional dependency, including Authlib
 - on Linux and Windows, smoke the isolated `auth` wheel installation: check
   dependency consistency, Streamlit login/logout and access/resolver imports,
@@ -124,10 +150,16 @@ responsibilities described in the authentication guide.
 
 - required Linux and Windows jobs and every required step pass for the exact
   final release commit; a skipped or cancelled job is insufficient
+- `contributor-checks` succeeds for the final source, and live `main` protection
+  requires this context rather than the manual release jobs
 - workflow permissions remain read-only, actions remain pinned, runs have
   bounded timeouts, and artifacts have one-day retention
 - the release candidate reuses the exact audited artifacts rather than
   rebuilding them in the evidence job
+- Windows installs the same downloaded `validated-dist` wheel, fails on an
+  artifact download digest mismatch, and records per-file hashes before its
+  smokes; the release evidence requires matching Windows hashes and run identity
+- Windows verifies those downloaded files remain unchanged after its smokes
 - SHA-256 digests are recorded for every uploaded artifact, along with the
   source commit, branch, run identifier, and run attempt
 - live repository settings and evidence refer to that same final commit

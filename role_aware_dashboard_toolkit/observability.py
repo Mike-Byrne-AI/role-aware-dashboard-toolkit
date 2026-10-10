@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from ._json_safety import sanitize_non_finite_numbers
 from ._optional_pandas import load_optional_pandas
+from ._record_projection import project_record
 from .audit import AuditLog
 from .diagnostics import diagnostic_text
 from .runtime import normalize_telemetry, summarize_telemetry
@@ -45,11 +46,13 @@ class ObservabilityPanel:
         session_state: dict[str, Any],
         *,
         can_read_audit: Callable[[], bool] | None = None,
+        registry: Any = None,
     ) -> None:
         self.config = config
         self.audit = audit
         self.session_state = session_state
         self._can_read_audit = can_read_audit
+        self._registry = registry
 
     @property
     def _history_key(self) -> str:
@@ -94,7 +97,8 @@ class ObservabilityPanel:
                     f"Telemetry sampling failed ({type(exc).__name__}). "
                     + diagnostic_text("RADT-TELEMETRY")
                 )
-            history = self.history()
+            source_history = self.history()
+            history = project_record(source_history, self._registry)
 
             if latest is None and not history:
                 st.caption("No telemetry samples yet.")
@@ -111,7 +115,7 @@ class ObservabilityPanel:
             audit = self.audit
             if self._can_read_audit is not None and not self._can_read_audit():
                 audit = None
-            snapshot = build_observability_snapshot(history, audit)
+            snapshot = project_record(build_observability_snapshot(history, audit), self._registry)
 
             latest_metrics = snapshot.get("latest", {})
             if latest_metrics:
@@ -124,7 +128,7 @@ class ObservabilityPanel:
                 else:
                     st.json(latest_metrics)
             elif latest is not None:
-                st.json({"ts": latest["ts"], "metrics": latest["metrics"]})
+                st.json(project_record({"ts": latest["ts"], "metrics": latest["metrics"]}, self._registry))
             else:
                 st.caption("Telemetry hook returned no new sample on this render.")
 
@@ -134,17 +138,17 @@ class ObservabilityPanel:
 
             if history_as_dataframe_available() and history:
                 st.subheader("History")
-                radt = history_as_dataframe(history)
+                radt = history_as_dataframe(project_record(history, self._registry))
                 if radt is not None:
                     st.dataframe(radt, use_container_width=True, hide_index=True)
             elif history:
                 st.subheader("History")
-                st.json(history[-10:])
+                st.json(project_record(history[-10:], self._registry))
 
-            # Commit only after the normalized sample has rendered successfully.
-            # A checkpoint uses this exact sample and timestamp, not a fresh hook call.
-            if history:
-                self.session_state["_radt_last_telemetry"] = deepcopy(history[-1])
+            # Keep the original normalized evidence for an authorized checkpoint.
+            # Native displays project this same sample and timestamp independently.
+            if source_history:
+                self.session_state["_radt_last_telemetry"] = deepcopy(source_history[-1])
 
 
 def coerce_telemetry_sample(payload: Any) -> dict[str, Any]:

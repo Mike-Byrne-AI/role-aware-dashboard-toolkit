@@ -3,6 +3,11 @@
 Role-Aware Dashboard Toolkit's optional FastAPI surface is secure by default. Protected routes require `ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY` and the request must send the same value in the `X-API-Key` header.
 Dashboard setup and first-run control flows are documented in `docs/dashboard_tools.md`; this page focuses on API trust boundaries and permissions.
 
+API keys must contain only ASCII characters. When a key is configured, non-ASCII
+request keys receive the same generic HTTP 401 as an incorrect key. A nonempty
+non-ASCII configured key also denies protected requests until corrected; it
+never enables anonymous access. Valid ASCII keys retain constant-time comparison.
+
 Demo dashboard roles are self-selected workflow context. Shared dashboards can
 use the [authenticated starter](../role_aware_dashboard_toolkit/resources/guides/authentication.md)
 with verified OIDC identity, server-owned grants and shared freeze. The existing
@@ -12,8 +17,14 @@ configure its API-key and role policy independently.
 
 Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
-`<redacted-secret>` and mark the control as `sensitive: true`. Profile endpoints
-omit sensitive values. Role-Aware Dashboard Toolkit profiles
+`<redacted-secret>` and mark the control as `sensitive: true`. Structured public
+control responses also redact nested secret-named fields, preserving ordinary
+siblings and the original live values. Profile endpoints
+omit sensitive values. Reads of existing profiles expose only currently registered
+public controls, and honor historical sensitivity flags. A control containing
+nested secret-named fields is omitted as a whole, before any text coercion.
+API activation leaves those omitted controls at their current values; the
+stored profile is not rewritten. Role-Aware Dashboard Toolkit profiles
 are not a credential store; use environment injection or a secret manager.
 
 `role_aware_dashboard_toolkit.api` is importable from a core install even when FastAPI and
@@ -35,12 +46,23 @@ Route permissions follow the existing role map:
 - control reads require `can_view_metrics`
 - control updates require both `can_edit_controls` and the target control's
   declared permission
-- profile reads require `can_load_profiles`; activation also requires each
+- profile value reads require both `can_load_profiles` and `can_view_metrics`;
+  profile metadata listings require `can_load_profiles`.
+  Activation requires `can_load_profiles` and each
   restored control's declared permission, including controls changed by
   sanitization. Permission checks complete before any live values or audit
   events change. Unknown and sensitive profile values are not restored.
 - profile save/delete require `can_save_profiles`
 - audit reads require `can_view_audit`
+
+Profile save and activation responses contain `values: {}` when the caller lacks
+`can_view_metrics`; the authorized action still completes. This prevents a
+save/load combination from exposing live controls through a newly saved profile.
+Existing clients that read profile values with a custom load-only role must
+receive an explicit metrics grant or use only metadata and action responses.
+Audit responses reapply current control sensitivity to historical events, so
+marking a control sensitive also hides its earlier values. Stored evidence is
+not rewritten by these response filters.
 
 Plugin loading is a separate trust boundary from API auth. Dashboard plugins are
 in-process trusted code, not sandboxed extensions. When using entry-point

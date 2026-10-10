@@ -20,11 +20,22 @@
           "title": {"type": "string"},
           "result": {"type": "string", "enum": ["pass", "warn", "fail", "waived"]},
           "detail": {"type": "string"},
-          "blocker": {"type": "boolean"}
+          "blocker": {"type": "boolean"},
+          "required_roles": {"type": "array", "items": {"type": "string"}},
+          "refs": {"type": "object"}
         }
       }
     },
-    "approval_requirements": {"type": "array", "items": {"type": "string"}},
+    "approval_requirements": {
+      "type": "object",
+      "properties": {
+        "required_roles": {"type": "array", "items": {"type": "string"}},
+        "missing_roles": {"type": "array", "items": {"type": "string"}},
+        "satisfied_roles": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "blocker_count": {"type": "integer"},
+    "warning_count": {"type": "integer"},
     "blocked_actions": {"type": "array", "items": {"type": "string"}},
     "allowed_next_actions": {"type": "array", "items": {"type": "string"}},
     "history": {"type": "array"}

@@ -13,11 +13,31 @@ Use `radt.InMemoryRunStore()` for session-local experiments. Choose a file store
 explicitly when durable records are required. The starter already retains an
 in-memory run store; change its `runbook=False` flag to enable it.
 
+The native runbook warns when run history cannot be read completely, while
+continuing to show readable runs. An unreadable active run keeps its selection;
+its actions remain unavailable until storage recovers. A confirmed missing run
+clears the active selection. Preserve damaged records, check the store's
+`read_errors` and restore access or repair the record before retrying. Historical
+read diagnostics remain available even after a successful retry; they do not
+keep a recovered run disabled or make a current successful read appear to fail.
+
 Start a run, adjust controls, capture labeled checkpoints, compare them, and
 end the run with an outcome. A checkpoint contains detached control, audit and
 telemetry evidence subject to the current visibility permissions. Sensitive
 controls are excluded. The run keeps its starting profile identifier and updates
 its active profile identifier at checkpoint/end.
+
+Historical displays, comparisons and exports also honor current control
+sensitivity and historical sensitivity metadata without rewriting the saved
+records. A control marked sensitive after capture remains hidden in those views.
+Native replay omits historically sensitive values and nested secret fields before
+restoration can convert them into visible text.
+
+Team and review panels stop dependent summaries and saves when their configured
+evidence stores cannot be read completely or contain invalid records. A corrupt
+rejection or incident must not become a missing blocker. Check the store
+diagnostics, repair the evidence and retry; old diagnostics do not prevent
+recovery after a successful read.
 
 Native checkpoint and run comparisons show recorded outcome measurements next
 to control changes when `can_view_metrics` is granted. They retain sample times

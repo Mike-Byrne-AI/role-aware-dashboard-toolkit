@@ -213,6 +213,7 @@ def test_decision_panel_previews_without_persisting_until_save_clicked():
         "Auditor",
         {
             "can_view_decisions": True,
+            "can_view_team_ops": True,
             "can_manage_runs": True,
         },
     )
@@ -252,6 +253,7 @@ def test_decision_panel_persists_only_after_explicit_save_click():
         {
             "can_view_decisions": True,
             "can_manage_decisions": True,
+            "can_view_team_ops": True,
         },
     )
     st = _FakeStreamlit(save=True)

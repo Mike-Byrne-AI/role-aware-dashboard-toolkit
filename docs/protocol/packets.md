@@ -76,3 +76,14 @@ if not result["ok"]:
 
 Consumers should validate before trusting packet structure and separately apply
 their own authorization and business rules to the payload.
+
+Built-in packet types also check the types, schema versions and declared states
+of toolkit fields present in their payload, including embedded run checkpoints
+and approvals. For compatibility, partial payloads remain accepted; envelope
+validation does not require missing record metadata, including metadata omitted
+from those embedded records. Use `validate_record()` when a consumer needs a
+complete current record. Extension payloads remain application-owned.
+Present ledger entry fields are also checked, so malformed entry kinds, control
+mappings and source sequences cannot pass import and alter reconstruction.
+Optional legacy sequence metadata may remain absent; incomplete or duplicate
+nonnegative sequences retain the existing list-order behavior.

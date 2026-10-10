@@ -76,6 +76,8 @@ def test_run_permission_does_not_imply_governance_management():
         "Custom",
         {
             "can_view_governance": True,
+            "can_view_team_ops": True,
+            "can_view_decisions": True,
             "can_manage_runs": True,
         },
     )
@@ -360,8 +362,9 @@ def test_runbook_hides_checkpoint_metrics_and_audit_without_view_permissions(
 
     rendered = repr(st.events)
     can_export_run_evidence = can_export_packets and can_view_metrics and can_view_audit
-    assert ("initial-secret" in rendered) is can_export_run_evidence
-    assert ("checkpoint-secret" in rendered) is can_view_metrics
+    # A metrics/export grant never overrides the control's sensitivity.
+    assert "initial-secret" not in rendered
+    assert "checkpoint-secret" not in rendered
     assert ("private-metric" in rendered) is can_view_metrics
     assert ("audit-secret" in rendered) is can_view_audit
     expanders = [event[1] for event in st.events if event[0] == "expander"]
@@ -411,6 +414,8 @@ def test_nested_team_view_does_not_read_denied_decisions_metrics_or_audit():
     _render_operator_memory_panel(st, config, ctx, run, {})
 
     assert "private-metric" not in repr(st.events)
+    assert any(event[0] == "warning" for event in st.events)
+    assert not any(event[0] in {"json", "button"} for event in st.events)
 
 
 def test_disabled_runbook_buttons_are_not_an_authorization_boundary():

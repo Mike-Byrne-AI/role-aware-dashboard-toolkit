@@ -5,6 +5,10 @@ secondaryBackgroundColor = "#E2E8F0"
 textColor = "#172033"
 primaryColor = "#0F766E"
 
+[client]
+disableDataExport = true
+showErrorDetails = "none"
+
 [server]
 address = "127.0.0.1"
 headless = true

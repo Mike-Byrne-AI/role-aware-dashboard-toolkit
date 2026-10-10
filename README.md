@@ -11,6 +11,13 @@ for profiles, audit history, checkpoints, comparisons and replay previews.
 The core package has no required third-party dependencies. Streamlit, FastAPI,
 and pandas support are isolated behind optional extras.
 
+This is an early beta. The authenticated starter is intended for a single-host
+dashboard with an external sign-in provider and explicit role assignments.
+Evaluate it with synthetic data, then complete the deployment acceptance checks
+before admitting private data or real users. Tests and example deployments have
+limited scope; they do not establish a security certification or comparative
+advantage over other dashboard tools. See the [security and update policy](SECURITY.md).
+
 ## Why Role-Aware Dashboard Toolkit
 
 The toolkit is useful when several operator workflows need to follow the same
@@ -63,12 +70,18 @@ python -m pip install .
 For the styled starter, install the renderer in the same environment:
 
 ```powershell
-python -m pip install ".[workbench]" "streamlit>=1.44"
+python -m pip install ".[workbench]"
 ```
 
 Then work in your own application directory. A regular installation includes
 the toolkit's Python source, offline guides and starter; the source checkout is
-not needed to run the installed guide or create a consumer project.
+not needed to run the installed guide or create a consumer project. The supported
+Streamlit baseline is 1.65.0. For verified login, install `.[auth]` and follow the
+[authentication guide](role_aware_dashboard_toolkit/resources/guides/authentication.md),
+then the [single-host deployment guide](role_aware_dashboard_toolkit/resources/guides/deployment.md),
+including isolated dependency and browser-session acceptance checks. The toolkit
+does not supply managed hosting or an identity provider. A source test run does
+not establish that a particular shared deployment is ready for private data.
 
 Only after a separate PyPI release:
 
@@ -100,7 +113,7 @@ Set-Location my-dashboard
 python -m streamlit run app.py
 ```
 
-The starter needs Streamlit 1.44 or later for its card and sidebar styling.
+The starter uses the supported Streamlit baseline, 1.65.0 or later.
 The guide and inspection commands work with the dependency-free core.
 `init` creates a new directory containing editable application code, a theme,
 a README and an `AGENTS.md` pointer to the installed handbook. It refuses an
@@ -121,7 +134,11 @@ complete diagnostic catalog.
 ## Five-minute dashboard
 
 ```python
+import streamlit as st
 import role_aware_dashboard_toolkit as radt
+
+if "service_controls_audit" not in st.session_state:
+    st.session_state["service_controls_audit"] = radt.AuditLog()
 
 registry = radt.ControlRegistry()
 registry.register(
@@ -142,11 +159,15 @@ registry.register(
 config = radt.DashboardConfig(
     title="Service controls",
     registry=registry,
-    audit=radt.AuditLog(),
+    audit=st.session_state["service_controls_audit"],
 )
 
 radt.render(config)
 ```
+
+The audit object stays in this browser session across reruns; a new session or
+server restart starts a new in-memory history. Control definitions can rebuild
+on each rerun. Choose a persistent audit store when records must survive restarts.
 
 Save the file as `app.py`, install the workbench extra, and run:
 

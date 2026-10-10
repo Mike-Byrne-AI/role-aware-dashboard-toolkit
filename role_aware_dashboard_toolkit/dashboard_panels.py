@@ -1,20 +1,60 @@
 from __future__ import annotations
 
+import csv
 from contextlib import nullcontext
+from copy import deepcopy
+from io import StringIO
+import math
 from typing import Any
+import unicodedata
 
+from ._json_safety import strict_json_loads
 from ._optional_pandas import load_optional_pandas
+from ._record_projection import project_audit_events, project_record
 from ._ui_state import last_authorized_control_value, remember_authorized_control_values
 from .appearance import group_background_color, styled_group_container
 from .audit import audit_event_view
-from .controls import ControlDef, _looks_like_int
-from .diagnostics import diagnostic_text
+from .controls import ControlDef, _looks_like_hex_color, _looks_like_int, _numeric_bounds, _validate_numeric_configuration
+from .diagnostics import attach_diagnostic, diagnostic_text
 from .security import SecurityContext, can_write, can_mutate
 
 pd = None
 PANDAS_AVAILABLE: bool | None = None
 _PREVIOUS_CONTROL_VALUES_KEY = "_radt_previous_control_values"
 _READ_ONLY_CONTROL_KEY_PREFIX = "_radt_read_only_control__"
+_SENSITIVE_INPUT_PREFIX = "_radt_sensitive_replacement__"
+
+
+def _validate_control_widgets(registry: Any) -> None:
+    """Reject unsupported widget definitions before the dashboard draws UI.
+
+    The dependency-free registry can retain wider numeric domains. Sensitive
+    replacements serialize text, so browser numeric bounds do not apply to them.
+    """
+    for ctrl in registry.all():
+        if not ctrl.visible or ctrl.sensitive or ctrl.kind not in {"slider", "number"}:
+            continue
+        try:
+            _validate_numeric_configuration(ctrl)
+        except ValueError:
+            raise attach_diagnostic(ValueError(
+                "A numeric control has invalid bounds or step for rendering"
+            ), "RADT-CONTROL-RENDER") from None
+        if ctrl.kind == "number" and _integer_widget_mode(ctrl):
+            maximum = (1 << 53) - 1
+            if any(abs(int(value)) > maximum for value in (
+                ctrl.default, ctrl.min_value, ctrl.max_value, ctrl.step,
+            )):
+                raise attach_diagnostic(ValueError(
+                    "Integer number widgets require default, bounds and step within "
+                    "-(2**53 - 1) through 2**53 - 1; choose smaller bounds or a text control"
+                ), "RADT-CONTROL-RENDER")
+
+
+def _integer_widget_mode(ctrl: ControlDef) -> bool:
+    return all(_looks_like_int(value) for value in (
+        ctrl.default, ctrl.step, ctrl.min_value, ctrl.max_value,
+    ))
 
 
 def _previous_control_values(session_state: Any) -> dict[str, Any]:
@@ -37,11 +77,13 @@ def render_audit_panel(
     st: Any,
     audit: Any,
     ctx: SecurityContext | None = None,
+    *,
+    registry: Any = None,
 ) -> None:
     can_clear = can_mutate(ctx, "can_manage_audit")
     st.divider()
     with st.expander("Audit Log", expanded=False):
-        events = audit.recent(100)
+        events = project_audit_events(audit.recent(100), registry)
         if not events:
             st.caption("No audit events yet.")
             clear_requested = st.button(
@@ -72,7 +114,7 @@ def render_audit_panel(
                 audit.clear()
                 st.rerun()
 
-        source_events = audit.all_events() if hasattr(audit, "all_events") else events
+        source_events = project_audit_events(audit.all_events(), registry) if hasattr(audit, "all_events") else events
         filtered = _filter_audit_panel_events(source_events, event_types=selected_types, text=search, limit=100)
         if not filtered:
             st.info("No matching events.")
@@ -95,11 +137,11 @@ def render_audit_panel(
             st.dataframe(radt[display_cols], use_container_width=True, hide_index=True)
 
         st.subheader("Replay Preview")
-        st.json(audit.replay_plan(limit=replay_limit))
+        st.json(project_record(audit.replay_plan(limit=replay_limit), registry))
 
         c_exp1, c_exp2 = st.columns(2)
         with c_exp1:
-            payload = pandas.DataFrame(filtered).to_csv(index=False) if pandas is not None else ""
+            payload = _spreadsheet_safe_audit_csv(filtered)
             st.download_button("Download audit.csv", payload, "audit.csv", "text/csv", key="_radt_audit_csv")
         with c_exp2:
             st.download_button(
@@ -112,9 +154,138 @@ def render_audit_panel(
 
 
 
-def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any) -> None:
+def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
+    """Build a spreadsheet-oriented view without changing the audit evidence.
+
+    Quoting protects field boundaries; an apostrophe makes formula-like text
+    explicit text on initial import. NULs become visible backslash escapes for
+    CSV-reader compatibility. JSONL remains the lossless format and downstream
+    re-export needs its own policy.
+    """
+    def cell(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        probe = unicodedata.normalize("NFKC", value)
+        while probe and (probe[0].isspace() or unicodedata.category(probe[0]) in {"Cc", "Cf"}):
+            probe = probe[1:]
+        # Python 3.10's CSV reader rejects NULs even inside quoted fields.
+        # Inspect the original prefix first, preserving formula protection.
+        display = value.replace("\x00", "\\x00")
+        if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+            return "'" + display
+        return display
+
+    fields = list(dict.fromkeys(key for event in events for key in event))
+    output = StringIO(newline="")
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow([cell(str(key)) for key in fields])
+    for event in events:
+        writer.writerow([cell(event.get(key)) for key in fields])
+    return output.getvalue()
+
+
+def _sensitive_replacement(ctrl: ControlDef, value: str, registry: Any) -> Any:
+    """Validate blank-entry replacements without falling back to stored secrets."""
+    if ctrl.kind == "text":
+        return value
+    if ctrl.kind in {"number", "slider"}:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("Invalid replacement")
+        return registry.sanitize_value(ctrl.key, number)
+    if ctrl.kind == "toggle":
+        normalized = value.strip().lower()
+        if normalized not in {"true", "false"}:
+            raise ValueError("Invalid replacement")
+        return normalized == "true"
+    if ctrl.kind == "color":
+        if not _looks_like_hex_color(value.strip()):
+            raise ValueError("Invalid replacement")
+        return value.strip()
+    if ctrl.kind == "select":
+        # JSON keeps string/number/boolean/structured choices distinct without
+        # putting the private option list in any widget or error message.
+        candidate = strict_json_loads(value)
+        for option in ctrl.options or []:
+            if _same_typed_value(candidate, option):
+                return deepcopy(option)
+    raise ValueError("Invalid replacement")
+
+
+def _same_typed_value(candidate: Any, option: Any) -> bool:
+    if type(candidate) is not type(option):
+        return False
+    if isinstance(candidate, list):
+        return len(candidate) == len(option) and all(
+            _same_typed_value(left, right) for left, right in zip(candidate, option)
+        )
+    if isinstance(candidate, dict):
+        return candidate.keys() == option.keys() and all(
+            _same_typed_value(candidate[key], option[key]) for key in candidate
+        )
+    return candidate == option
+
+
+def _render_sensitive_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any) -> None:
+    """Keep stored values server-side; every kind uses explicit blank replacement."""
+    previous = _previous_control_values(st.session_state)
+    current = st.session_state.get(ctrl.key, ctrl.default)
     editable = can_write(ctx, ctrl.permission)
-    audit = config.audit
+    input_key = f"{_SENSITIVE_INPUT_PREFIX}{ctrl.key}"
+    # Capture only this submission, then clear BEFORE the widget is serialized.
+    # The input key is separate from the server-owned control key and no default,
+    # option, range or widget identity is derived from the stored value.
+    replacement = st.session_state.pop(input_key, "")
+    if not editable:
+        if ctx.authenticated:
+            current = last_authorized_control_value(st.session_state, ctrl.key, ctrl.default)
+        else:
+            current = previous.get(ctrl.key, current)
+        st.session_state[ctrl.key] = current
+        previous[ctrl.key] = deepcopy(current)
+        st.caption(f"{ctrl.name}: Hidden")
+        return
+
+    previous.setdefault(ctrl.key, deepcopy(current))
+    if ctx.authenticated:
+        remember_authorized_control_values(st.session_state, {ctrl.key: current})
+    st.session_state[input_key] = ""
+    with st.form(f"_radt_sensitive_form__{ctrl.key}", clear_on_submit=True):
+        st.text_input(
+            f"Replace {ctrl.name}", key=input_key, type="password",
+            help=("Stored value is never displayed. Submit an empty replacement to clear text."
+                  if ctrl.kind == "text" else
+                  "Stored value and choices are never displayed. Enter a valid replacement."),
+        )
+        submitted = st.form_submit_button(
+            f"Replace {ctrl.name}", key=f"_radt_sensitive_submit__{ctrl.key}",
+        )
+    if not submitted:
+        return
+    if not can_write(ctx, ctrl.permission):
+        st.warning("Replacement denied: current permission and writable state are required.")
+        return
+    try:
+        if not isinstance(replacement, str):
+            raise ValueError("Invalid replacement")
+        updated = _sensitive_replacement(ctrl, replacement, config.registry)
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        st.error("Replacement is invalid; the stored value was preserved.")
+        return
+    st.session_state[ctrl.key] = updated
+    previous[ctrl.key] = deepcopy(updated)
+    if ctx.authenticated:
+        remember_authorized_control_values(st.session_state, {ctrl.key: updated})
+    if not _same_typed_value(updated, current):
+        _record_control_change(st, ctrl, ctx, config, current, updated)
+    st.toast("Replacement saved.")
+
+
+def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any) -> None:
+    if ctrl.sensitive:
+        _render_sensitive_control(st, ctrl, ctx, config)
+        return
+    editable = can_write(ctx, ctrl.permission)
     previous_values = _previous_control_values(st.session_state)
     current_value = st.session_state.get(ctrl.key, ctrl.default)
     old_value = previous_values.get(ctrl.key, current_value)
@@ -137,9 +308,10 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
         has_widget_value = False
 
     if ctrl.kind == "slider":
+        minimum, maximum = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
         slider_kwargs = {
-            "min_value": float(ctrl.min_value if ctrl.min_value is not None else 0.0),
-            "max_value": float(ctrl.max_value if ctrl.max_value is not None else 1.0),
+            "min_value": minimum,
+            "max_value": maximum,
             "step": float(ctrl.step if ctrl.step is not None else 0.01),
             "key": widget_key,
             "disabled": not editable,
@@ -159,7 +331,7 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
         st.toggle(ctrl.name, **toggle_kwargs)
     elif ctrl.kind == "number":
         kwargs: dict[str, Any] = {}
-        integer_mode = all(_looks_like_int(candidate) for candidate in (ctrl.default, ctrl.step, ctrl.min_value, ctrl.max_value))
+        integer_mode = _integer_widget_mode(ctrl)
         cast = int if integer_mode else float
         if ctrl.min_value is not None:
             kwargs["min_value"] = cast(ctrl.min_value)
@@ -196,7 +368,7 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
             "key": widget_key,
             "disabled": not editable,
             "help": ctrl.help or None,
-            "type": "password" if ctrl.sensitive else "default",
+            "type": "default",
         }
         if not has_widget_value:
             text_kwargs["value"] = str(current_value)
@@ -228,28 +400,34 @@ def _render_control(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any
     if getattr(ctx, "authenticated", False):
         remember_authorized_control_values(st.session_state, {ctrl.key: new_value})
     if new_value != old_value:
-        config.registry.mark_user_set(ctrl.key, st.session_state)
-        audit.log_control_change(
-            ctrl.key,
-            old_value,
-            new_value,
-            role=ctx.role,
-            sensitive=ctrl.sensitive,
-        )
-        if ctrl.callback is not None:
-            try:
-                ctrl.callback(ctrl.key, new_value)
-            except Exception as exc:
-                detail = _callback_error_detail(exc)
-                st.error(f"Callback error on {ctrl.key}: {detail}")
-                audit.log("callback_error", key=ctrl.key, detail=detail, role=ctx.role)
-        if config.on_change is not None:
-            try:
-                config.on_change(ctrl.key, old_value, new_value)
-            except Exception as exc:
-                detail = _callback_error_detail(exc)
-                st.error(f"Global on_change error on {ctrl.key}: {detail}")
-                audit.log("callback_error", key=ctrl.key, detail=detail, role=ctx.role)
+        _record_control_change(st, ctrl, ctx, config, old_value, new_value)
+
+
+def _record_control_change(st: Any, ctrl: ControlDef, ctx: SecurityContext, config: Any,
+                           old_value: Any, new_value: Any) -> None:
+    audit = config.audit
+    config.registry.mark_user_set(ctrl.key, st.session_state)
+    audit.log_control_change(
+        ctrl.key,
+        old_value,
+        new_value,
+        role=ctx.role,
+        sensitive=ctrl.sensitive,
+    )
+    if ctrl.callback is not None:
+        try:
+            ctrl.callback(ctrl.key, new_value)
+        except Exception as exc:
+            detail = _callback_error_detail(exc)
+            st.error(f"Callback error on {ctrl.key}: {detail}")
+            audit.log("callback_error", key=ctrl.key, detail=detail, role=ctx.role)
+    if config.on_change is not None:
+        try:
+            config.on_change(ctrl.key, old_value, new_value)
+        except Exception as exc:
+            detail = _callback_error_detail(exc)
+            st.error(f"Global on_change error on {ctrl.key}: {detail}")
+            audit.log("callback_error", key=ctrl.key, detail=detail, role=ctx.role)
 
 
 

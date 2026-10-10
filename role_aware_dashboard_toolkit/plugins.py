@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import metadata
+from threading import Condition, local
 import warnings
 from typing import Any
 from collections.abc import Callable
@@ -13,6 +14,7 @@ from .path_redaction import redact_text_local_paths
 _PANEL_GROUP = "role_aware_dashboard_toolkit.panels"
 _SIDEBAR_GROUP = "role_aware_dashboard_toolkit.sidebar"
 _PLUGIN_CAPABILITIES = {"sidebar", "panel", "setup"}
+_SETUP_CONTEXT = local()
 
 
 @dataclass(frozen=True)
@@ -91,32 +93,47 @@ class DashboardPlugin:
         }
 
 
+@dataclass
+class _SetupAttempt:
+    finished: bool = False
+    succeeded: bool = False
+    error: PluginErrorRecord | None = None
+
+
+@dataclass
+class _PluginRegistration:
+    plugin: DashboardPlugin
+    source: PluginSourceRecord
+    initialized: bool = False
+    attempt: _SetupAttempt | None = None
+
+
 class PluginRegistry:
     """Own plugin registrations, with setup once per registration in this registry."""
 
     def __init__(self) -> None:
-        self._plugins: dict[str, DashboardPlugin] = {}
-        self._initialized_names: set[str] = set()
-        self._registration_tokens: dict[str, object] = {}
-        self._sources: dict[str, PluginSourceRecord] = {}
+        self._registrations: dict[str, _PluginRegistration] = {}
+        self._condition = Condition()
         self._discovery_errors: list[PluginErrorRecord] = []
 
     def register(self, plugin: DashboardPlugin, *, source: PluginSourceRecord | None = None) -> DashboardPlugin:
-        if not str(plugin.name).strip():
-            raise ValueError("Plugin name must be non-empty")
-        if plugin.name in self._plugins:
-            raise KeyError(f"Plugin '{plugin.name}' already registered")
-        invalid = [cap for cap in plugin.capabilities if cap not in _PLUGIN_CAPABILITIES]
-        if invalid:
-            raise ValueError(f"Plugin '{plugin.name}' has invalid capabilities: {invalid}")
-        self._plugins[plugin.name] = plugin
-        self._registration_tokens[plugin.name] = object()
-        self._sources[plugin.name] = source or PluginSourceRecord(
-            plugin_name=plugin.name,
-            source_type="manual",
-            source_ref="manual_registration",
-            trusted=True,
-        )
+        with self._condition:
+            if not str(plugin.name).strip():
+                raise ValueError("Plugin name must be non-empty")
+            if plugin.name in self._registrations:
+                raise KeyError(f"Plugin '{plugin.name}' already registered")
+            invalid = [cap for cap in plugin.capabilities if cap not in _PLUGIN_CAPABILITIES]
+            if invalid:
+                raise ValueError(f"Plugin '{plugin.name}' has invalid capabilities: {invalid}")
+            self._registrations[plugin.name] = _PluginRegistration(
+                plugin=plugin,
+                source=source or PluginSourceRecord(
+                    plugin_name=plugin.name,
+                    source_type="manual",
+                    source_ref="manual_registration",
+                    trusted=True,
+                ),
+            )
         return plugin
 
     def unregister(self, name: str) -> DashboardPlugin:
@@ -126,37 +143,42 @@ class PluginRegistry:
         records remain. Registering the plugin again runs setup again in this
         registry, without changing initialization in any other registry.
         """
-        plugin = self._plugins.pop(name)
-        self._sources.pop(name, None)
-        self._registration_tokens.pop(name, None)
-        self._initialized_names.discard(name)
-        return plugin
+        with self._condition:
+            registration = self._registrations.pop(name)
+            self._condition.notify_all()
+            return registration.plugin
+
+    def _snapshot(self) -> list[tuple[str, _PluginRegistration]]:
+        with self._condition:
+            return sorted(self._registrations.items())
 
     def all(self) -> list[DashboardPlugin]:
-        return [self._plugins[name] for name in sorted(self._plugins.keys())]
+        return [registration.plugin for _, registration in self._snapshot()]
 
     def describe(self) -> list[dict[str, Any]]:
         return [
             {
-                **plugin.metadata(),
-                "source": self._sources.get(plugin.name, PluginSourceRecord(plugin.name, "unknown", "", False)).to_dict(),
+                **registration.plugin.metadata(),
+                "source": registration.source.to_dict(),
             }
-            for plugin in self.all()
+            for _, registration in self._snapshot()
         ]
 
     def describe_sources(self) -> list[dict[str, Any]]:
-        return [self._sources[name].to_dict() for name in sorted(self._sources.keys())]
+        return [registration.source.to_dict() for _, registration in self._snapshot()]
 
     def discovery_errors(self) -> list[PluginErrorRecord]:
-        return list(self._discovery_errors)
+        with self._condition:
+            return list(self._discovery_errors)
 
     def clear_discovery_errors(self) -> None:
-        self._discovery_errors.clear()
+        with self._condition:
+            self._discovery_errors.clear()
 
     def initialize(self, context: Any) -> list[PluginErrorRecord]:
         errors: list[PluginErrorRecord] = []
-        for plugin in self.all():
-            self._initialize_plugin(plugin, context, errors)
+        for name, registration in self._snapshot():
+            self._initialize_plugin(name, registration, context, errors)
         return errors
 
     def render_sidebar(self, context: Any, *, initialize_plugins: bool = True) -> list[PluginErrorRecord]:
@@ -193,67 +215,99 @@ class PluginRegistry:
                         raise TypeError(
                             f"Entry point '{entry_point.name}' in group '{group}' did not produce a DashboardPlugin"
                         )
-                    if plugin.name not in self._plugins:
-                        self.register(
-                            plugin,
-                            source=_entry_point_source_record(
-                                plugin_name=plugin.name,
-                                group=group,
-                                entry_point=entry_point,
-                                trusted=allow_untrusted or source_ref in allowlist,
-                            ),
-                        )
-                        loaded.append(plugin.name)
+                    source = _entry_point_source_record(
+                        plugin_name=plugin.name,
+                        group=group,
+                        entry_point=entry_point,
+                        trusted=allow_untrusted or source_ref in allowlist,
+                    )
+                    with self._condition:
+                        if plugin.name not in self._registrations:
+                            self.register(plugin, source=source)
+                            loaded.append(plugin.name)
                 except Exception as exc:
                     self._record_discovery_error(entry_point, group, exc)
         return loaded
 
     def _render(self, attr: str, context: Any, *, initialize_plugins: bool) -> list[PluginErrorRecord]:
         errors: list[PluginErrorRecord] = []
-        for plugin in self.all():
-            if self._plugins.get(plugin.name) is not plugin:
+        for name, registration in self._snapshot():
+            if initialize_plugins and not self._initialize_plugin(name, registration, context, errors):
                 continue
-            if initialize_plugins and not self._initialize_plugin(plugin, context, errors):
-                continue
-            if not initialize_plugins and plugin.name not in self._initialized_names:
-                continue
-            fn = getattr(plugin, attr)
+            with self._condition:
+                if self._registrations.get(name) is not registration or not registration.initialized:
+                    continue
+                # Dispatch is claimed here. Removal cannot cancel a callback
+                # already selected, and host code must run outside the lock.
+                fn = getattr(registration.plugin, attr)
             if fn is None:
                 continue
             try:
                 fn(context)
             except Exception as exc:
-                errors.append(_plugin_error(plugin, attr, exc))
+                errors.append(_plugin_error(registration.plugin, attr, exc))
         return errors
 
-    def _initialize_plugin(self, plugin: DashboardPlugin, context: Any, errors: list[PluginErrorRecord]) -> bool:
-        if self._plugins.get(plugin.name) is not plugin:
-            return False
-        if plugin.name in self._initialized_names:
-            return True
-        registration = self._registration_tokens[plugin.name]
-        if plugin.setup is None:
-            self._initialized_names.add(plugin.name)
-            plugin._initialized = True
-            return True
+    def _initialize_plugin(
+        self, name: str, registration: _PluginRegistration,
+        context: Any, errors: list[PluginErrorRecord],
+    ) -> bool:
+        with self._condition:
+            if self._registrations.get(name) is not registration:
+                return False
+            if registration.initialized:
+                return True
+            attempt = registration.attempt
+            if attempt is not None and not attempt.finished:
+                # A setup callback may re-enter this or another registry. Do
+                # not wait from inside setup: reciprocal callbacks could wait
+                # on each other's registrations even on different threads.
+                if getattr(_SETUP_CONTEXT, "depth", 0):
+                    return False
+                self._condition.wait_for(
+                    lambda: attempt.finished or self._registrations.get(name) is not registration,
+                )
+                if self._registrations.get(name) is not registration:
+                    return False
+                if attempt.error is not None:
+                    errors.append(attempt.error)
+                return attempt.succeeded
+            plugin = registration.plugin
+            setup = plugin.setup
+            if setup is None:
+                registration.initialized = True
+                plugin._initialized = True
+                return True
+            attempt = _SetupAttempt()
+            registration.attempt = attempt
+        depth = getattr(_SETUP_CONTEXT, "depth", 0)
+        error = None
+        succeeded = False
         try:
-            plugin.setup(context)
+            _SETUP_CONTEXT.depth = depth + 1
+            setup(context)
+            succeeded = True
         except Exception as exc:
-            errors.append(_plugin_error(plugin, "setup", exc))
-            return False
-        # Setup may remove and re-register even the same plugin object.
-        # Completion belongs only to the registration that invoked this setup.
-        if self._registration_tokens.get(plugin.name) is not registration:
-            return False
-        self._initialized_names.add(plugin.name)
-        # Retain the historical informational flag, but a registry's own
-        # initialization state decides whether its setup has already run.
-        plugin._initialized = True
-        return True
+            error = _plugin_error(plugin, "setup", exc)
+            errors.append(error)
+        finally:
+            _SETUP_CONTEXT.depth = depth
+            with self._condition:
+                current = self._registrations.get(name) is registration
+                attempt.error = error
+                attempt.succeeded = succeeded and current
+                attempt.finished = True
+                if attempt.succeeded:
+                    registration.initialized = True
+                    # Historical informational flag; registry state owns setup.
+                    plugin._initialized = True
+                self._condition.notify_all()
+        return attempt.succeeded
 
     def _record_discovery_error(self, entry_point: Any, group: str, exc: Exception) -> None:
         error = _entry_point_error(entry_point=entry_point, group=group, exc=exc)
-        self._discovery_errors.append(error)
+        with self._condition:
+            self._discovery_errors.append(error)
         warnings.warn(
             (
                 "Role-Aware Dashboard Toolkit plugin discovery skipped "

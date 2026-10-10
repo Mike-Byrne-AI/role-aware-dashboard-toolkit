@@ -54,3 +54,14 @@ def test_generated_public_api_reference_is_product_neutral():
         "pack-sdk",
     ):
         assert forbidden not in lowered
+
+
+def test_generated_usage_recipes_install_from_source_or_local_wheel():
+    markdown = build_public_api_reference_markdown()
+    assert "GitHub-source release" in markdown
+    assert "From your reviewed toolkit source" in markdown
+    assert 'python -m pip install ".[workbench]"' in markdown
+    assert 'python -m pip install ".[api]"' in markdown
+    assert "absolute source path or reviewed local wheel" in markdown
+    assert "No package-index release is assumed" in markdown
+    assert "Install `role-aware-dashboard-toolkit[api]`" not in markdown

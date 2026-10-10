@@ -2,7 +2,9 @@
 # Optional REST API for Role-Aware Dashboard Toolkit dashboards.
 #
 # Exposes profile CRUD, control reads, and role info over HTTP with API-key
-# authentication.  Install with:  pip install role-aware-dashboard-toolkit[api]
+# authentication. From a reviewed toolkit source checkout, install the API extra:
+#     python -m pip install ".[api]"
+# Or install a reviewed local toolkit wheel with [api] appended to its filename.
 #
 # Usage:
 #     from role_aware_dashboard_toolkit.api import create_app
@@ -22,11 +24,16 @@ import hmac
 from typing import Any
 
 from .audit import AuditLog
+from ._record_projection import project_audit_events, project_record
 from .controls import ControlRegistry
 from .profile_store import BaseProfileStore
 from .profiles import (
+    _InvalidProfileError,
+    _public_profile_values as _profile_response_values,
+    _require_profile_shape,
+    _restore_profile_data,
     save_profile,
-    load_profile,
+    load_profile_data,
     list_profiles,
     delete_profile,
 )
@@ -98,7 +105,10 @@ def _require_fastapi() -> None:
         raise _FASTAPI_IMPORT_ERROR
     raise ImportError(
         "FastAPI is required for the Role-Aware Dashboard Toolkit API module. "
-        "Install with: pip install role-aware-dashboard-toolkit[api]"
+        'From your reviewed toolkit source checkout, run: python -m pip install ".[api]". '
+        "Or install an absolute source path or reviewed local wheel filename "
+        "with [api] appended. No package-index release is assumed. "
+        "Help: python -m role_aware_dashboard_toolkit guide api"
     )
 
 
@@ -130,7 +140,10 @@ def _resolve_api_context(app_state: _AppState, x_api_key: str) -> SecurityContex
     expected = str(os.getenv(_API_KEY_ENV, "") or "")
     supplied = str(x_api_key or "")
     if expected:
-        if not hmac.compare_digest(supplied, expected):
+        # String compare_digest accepts ASCII only. Reject malformed headers
+        # and unsupported host keys without exposing either or enabling the
+        # anonymous fallback; supported keys retain constant-time comparison.
+        if not supplied.isascii() or not expected.isascii() or not hmac.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="Unauthorized")
         return _context_for_role(app_state.api_role or _DEFAULT_AUTHENTICATED_ROLE, app_state.custom_roles)
     if app_state.allow_anonymous:
@@ -264,11 +277,23 @@ def _control_value(app_state: _AppState, key: str) -> ControlValue:
         raise HTTPException(status_code=404, detail=f"Control '{key}' not found")
     return ControlValue(
         key=ctrl.key,
-        value=REDACTED_SECRET if ctrl.sensitive else app_state.state.get(ctrl.key, ctrl.default),
+        value=REDACTED_SECRET if ctrl.sensitive else project_record(
+            {"controls": {ctrl.key: app_state.state.get(ctrl.key, ctrl.default)}},
+            app_state.registry,
+        )["controls"][ctrl.key],
         name=ctrl.name,
         kind=ctrl.kind,
         group=ctrl.group,
         sensitive=ctrl.sensitive,
+    )
+
+
+def _live_profile_response_values(app_state: _AppState, ctx: SecurityContext) -> dict[str, Any]:
+    # A save/load grant authorizes the operation, not disclosure of its snapshot.
+    if not has_perm(ctx, "can_view_metrics"):
+        return {}
+    return _profile_response_values(
+        app_state.registry, app_state.registry.persistable_snapshot(app_state.state),
     )
 
 
@@ -323,14 +348,34 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
         return updated
 
 
+def _load_api_profile(
+    profile_id: str, registry: ControlRegistry, session_state: dict[str, Any],
+    *, profile_dir: str, store: BaseProfileStore | None = None,
+) -> dict[str, Any] | None:
+    try:
+        data = load_profile_data(profile_id, profile_dir=profile_dir, store=store)
+        if data is None:
+            return None
+        _require_profile_shape(data)
+        # Project before restoration: coercing a mapping into a text control
+        # would otherwise discard the field names that identify nested secrets.
+        safe_data = {**data, "values": _profile_response_values(
+            registry, data.get("values"), data.get("control_meta"),
+        )}
+        return _restore_profile_data(safe_data, registry, session_state)
+    except _InvalidProfileError:
+        raise HTTPException(status_code=422, detail="Stored profile fields are invalid.") from None
+
+
 def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/profiles", response_model=list[str])
     async def get_profiles(_: SecurityContext = Depends(require_api_context("can_load_profiles"))):
         return list_profiles(app_state.profile_dir, store=app_state.profile_store)
 
     @app.get("/profiles/{profile_id}", response_model=ProfileResponse)
-    async def get_profile(profile_id: str, _: SecurityContext = Depends(require_api_context("can_load_profiles"))):
-        data = load_profile(
+    async def get_profile(profile_id: str, ctx: SecurityContext = Depends(require_api_context("can_load_profiles"))):
+        _require_permission(ctx, "can_view_metrics")
+        data = _load_api_profile(
             profile_id,
             app_state.registry,
             {},  # read-only: don't mutate app state
@@ -366,7 +411,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         return ProfileResponse(
             profile_id=profile_id,
             role=req.role,
-            values=app_state.registry.persistable_snapshot(app_state.state),
+            values=_live_profile_response_values(app_state, ctx),
         )
 
     @app.post("/profiles/{profile_id}/activate", response_model=ProfileResponse)
@@ -375,7 +420,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
         staged_state = dict(app_state.state)
-        data = load_profile(
+        data = _load_api_profile(
             profile_id,
             app_state.registry,
             staged_state,
@@ -401,7 +446,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             profile_id=data.get("profile_id", profile_id),
             saved_at=data.get("saved_at", ""),
             role=data.get("role", ""),
-            values=app_state.registry.persistable_snapshot(app_state.state),
+            values=_live_profile_response_values(app_state, ctx),
         )
 
     @app.delete("/profiles/{profile_id}")
@@ -434,7 +479,9 @@ def _register_audit_routes(app: FastAPI, app_state: _AppState, require_api_conte
         n: int = 50,
         _: SecurityContext = Depends(require_api_context("can_view_audit")),
     ):
-        return app_state.audit.recent(max(0, min(n, 500)))
+        return project_audit_events(
+            app_state.audit.recent(max(0, min(n, 500))), app_state.registry,
+        )
 
 
 # App factory

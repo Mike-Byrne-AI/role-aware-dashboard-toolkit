@@ -4,13 +4,13 @@ from collections.abc import Callable, Mapping
 from copy import copy
 from typing import Any
 
-from ._ui_state import retain_control_state, restore_unauthorized_control_state
+from ._ui_state import protect_native_controls, retain_control_state, restore_unauthorized_control_state
 from .appearance import validate_dashboard_appearance, validate_dashboard_colors
 from .audit import AuditLog
 from .controls import ControlRegistry
 from .dashboard_context import prepare_render_state
 from .diagnostics import attach_diagnostic, diagnostic_text
-from .dashboard_panels import render_audit_panel, render_groups
+from .dashboard_panels import _validate_control_widgets, render_audit_panel, render_groups
 from .observability import ObservabilityConfig, ObservabilityPanel
 from .run_store import BaseRunStore
 from .team_store import BaseTeamStore
@@ -127,7 +127,9 @@ def _require_streamlit() -> Any:
             raise
         raise attach_diagnostic(ModuleNotFoundError(
             "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-            'Install with: pip install "role-aware-dashboard-toolkit[workbench]"',
+            'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+            "From another directory, use the absolute source path or local wheel filename "
+            "with [workbench] appended. No package-index release is assumed.",
             name="streamlit",
         ), "RADT-STREAMLIT") from None
     st = streamlit_runtime
@@ -156,6 +158,8 @@ def prepare_access(config: DashboardConfig) -> SecurityContext:
 
 def render(config: DashboardConfig) -> SecurityContext:
     streamlit_runtime = _require_streamlit()
+    if section_visible(config, "controls"):
+        _validate_control_widgets(config.registry)
     if config.auth_mode == "authenticated":
         # Binding an actor must never mutate a config shared between sessions.
         config = copy(config)
@@ -171,6 +175,9 @@ def render(config: DashboardConfig) -> SecurityContext:
     if prepared_access is not None:
         restore_unauthorized_control_state(config.registry, streamlit_runtime.session_state, prepared_access)
     plugin_setup_errors = config.plugins.initialize({"st": streamlit_runtime, "config": config, "ctx": prepared_access})
+    if section_visible(config, "controls"):
+        # Setup can register controls; validate those before native widgets too.
+        _validate_control_widgets(config.registry)
     # Setup can register additional controls on every Streamlit script run.
     # Retain those values too before sidebar actions can trigger an early rerun.
     retain_control_state(config.registry, streamlit_runtime.session_state)
@@ -189,6 +196,12 @@ def render(config: DashboardConfig) -> SecurityContext:
             "check plugin setup configuration and retry. " + diagnostic_text("RADT-PLUGIN"),
         )
         raise
+    # Detect structured secrets before sanitation can turn them into ordinary
+    # text. The view is session-local; shared host definitions stay untouched.
+    protected_registry = protect_native_controls(config.registry, streamlit_runtime.session_state)
+    if protected_registry is not config.registry:
+        config = copy(config)
+        config.registry = protected_registry
     state = prepare_render_state(config, streamlit_runtime.session_state)
     sidebar = render_sidebar(streamlit_runtime, config)
     ctx = sidebar.ctx
@@ -215,6 +228,7 @@ def render(config: DashboardConfig) -> SecurityContext:
             panel = ObservabilityPanel(
                 config.observability, state.audit, streamlit_runtime.session_state,
                 can_read_audit=lambda: has_perm(ctx, "can_view_audit"),
+                registry=config.registry,
             )
             panel.render(streamlit_runtime)
 
@@ -238,7 +252,7 @@ def render(config: DashboardConfig) -> SecurityContext:
         streamlit_runtime.warning(f"Plugin panel error: {error}")
 
     if section_visible(config, "audit_log") and has_perm(ctx, "can_view_audit"):
-        render_audit_panel(streamlit_runtime, state.audit, ctx)
+        render_audit_panel(streamlit_runtime, state.audit, ctx, registry=config.registry)
 
     return ctx
 

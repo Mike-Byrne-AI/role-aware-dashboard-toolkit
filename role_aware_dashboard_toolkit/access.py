@@ -156,7 +156,8 @@ class AccessPolicy:
             if role_definition is None or role_definition.perms.get(permission) is not True:
                 return False
             freeze = self.store.read_freeze()
-            if not isinstance(freeze, FreezeState) or type(freeze.frozen) is not bool:
+            if (not isinstance(freeze, FreezeState) or type(freeze.frozen) is not bool
+                    or type(freeze.revision) is not int or freeze.revision < 0):
                 return False
             return not write or not freeze.frozen
         except Exception:

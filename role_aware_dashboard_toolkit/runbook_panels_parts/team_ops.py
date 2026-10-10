@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..security import can_mutate, has_perm
+from .._evidence_reads import EvidenceUnavailable, read_records, warn_incomplete_evidence
+from .._record_projection import preserve_sensitivity_metadata, project_record
 from ..team_ops import (
     build_handoff_summary,
     build_review_assignment,
@@ -78,6 +80,16 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
 
     can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
     if st.button("Create handoff", key="_radt_handoff_btn", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
+        try:
+            comments = read_records(team_store, "list_comments", str(active_run.get("run_id", "")),
+                                   record_type="comment", ctx=ctx, permission="can_view_team_ops")
+            assignments = read_records(team_store, "list_assignments", str(active_run.get("run_id", "")),
+                                      record_type="assignment", ctx=ctx, permission="can_view_team_ops")
+            signoffs = read_records(team_store, "list_signoffs", str(active_run.get("run_id", "")),
+                                   record_type="signoff", ctx=ctx, permission="can_view_team_ops")
+        except EvidenceUnavailable:
+            warn_incomplete_evidence(st)
+            return
         handoff = build_handoff_summary(
             active_run,
             handoff_to=str(st.session_state.get("_radt_handoff_to", "")),
@@ -85,10 +97,18 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
             actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
             notes=str(st.session_state.get("_radt_run_notes", "")),
-            comments=team_store.list_comments(str(active_run.get("run_id", ""))),
-            assignments=team_store.list_assignments(str(active_run.get("run_id", ""))),
-            signoffs=team_store.list_signoffs(str(active_run.get("run_id", ""))),
+            comments=comments,
+            assignments=assignments,
+            signoffs=signoffs,
         )
+        registry = getattr(config, "registry", None)
+        handoff = preserve_sensitivity_metadata(
+            handoff, active_run,
+            {"control_meta": registry.export_metadata()} if registry is not None else {},
+        )
+        if not can_mutate(ctx, "can_manage_runs"):
+            st.warning("Handoff creation is no longer permitted. Check access and freeze state, then retry.")
+            return
         team_store.save_handoff(handoff)
         config.audit.log("run_handoff", detail=handoff["handoff_id"], role=ctx.role, source="ui")
         st.toast(f"Handoff created: {handoff['handoff_id']}")
@@ -101,10 +121,18 @@ def _render_team_ops_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any]) 
         return
 
     run_id = str(run.get("run_id", ""))
-    comments = team_store.list_comments(run_id)
-    assignments = team_store.list_assignments(run_id)
-    signoffs = team_store.list_signoffs(run_id)
-    handoffs = team_store.list_handoffs(run_id)
+    try:
+        comments = read_records(team_store, "list_comments", run_id, record_type="comment", ctx=ctx,
+                               permission="can_view_team_ops")
+        assignments = read_records(team_store, "list_assignments", run_id, record_type="assignment", ctx=ctx,
+                                  permission="can_view_team_ops")
+        signoffs = read_records(team_store, "list_signoffs", run_id, record_type="signoff", ctx=ctx,
+                               permission="can_view_team_ops")
+        handoffs = read_records(team_store, "list_handoffs", run_id, record_type="handoff", ctx=ctx,
+                               permission="can_view_team_ops")
+    except EvidenceUnavailable:
+        warn_incomplete_evidence(st)
+        return
     summary = summarize_team_ops(assignments, comments, signoffs)
 
     st.subheader(getattr(config, "team_ops_title", "Team Ops"))
@@ -128,15 +156,15 @@ def _render_team_ops_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any]) 
 
     if comments:
         with st.expander("Comments", expanded=False):
-            st.json(comments[-10:])
+            st.json(project_record(comments[-10:], getattr(config, "registry", None)))
 
     if signoffs:
         with st.expander("Signoffs", expanded=False):
-            st.json(signoffs[-10:])
+            st.json(project_record(signoffs[-10:], getattr(config, "registry", None)))
 
     if handoffs:
         with st.expander("Latest handoff", expanded=False):
-            st.json(_record_summary_view(handoffs[-1], ctx))
+            st.json(_record_summary_view(handoffs[-1], ctx, getattr(config, "registry", None), source=run))
 
 
 __all__ = ["_render_team_ops_panel", "_render_team_ops_sidebar"]

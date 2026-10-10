@@ -1,29 +1,60 @@
 """Private Streamlit lifecycle support; never apply bulk edits after widgets exist."""
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Any
 
 from .diagnostics import diagnostic_text
 
 from .replay import apply_replay_packet
+from .profiles import _contains_secret_fields, _public_profile_values
 from .security import can_write
 
 _PENDING_REPLAY = "_radt_pending_replay"
 _ACCEPTED_CONTROL_VALUES = "_radt_accepted_control_values"
+_NESTED_SENSITIVE_CONTROLS = "_radt_nested_sensitive_controls"
+
+
+def protect_native_controls(registry: Any, session_state: Any) -> Any:
+    """Classify nested secrets before widget text coercion loses their field names.
+
+    This session-local registry view preserves shared host definitions. Remember
+    detected keys for subsequent reruns after sanitation has converted a value
+    to text; authentication clears this state on account change or sign-out.
+    """
+    protected = set(session_state.get(_NESTED_SENSITIVE_CONTROLS, ()))
+    protected.intersection_update(registry.keys())
+    for ctrl in registry.all():
+        if any(_contains_secret_fields(value) for value in (
+            ctrl.default, ctrl.options, session_state.get(ctrl.key),
+        )):
+            protected.add(ctrl.key)
+    if not protected:
+        return registry
+    session_state[_NESTED_SENSITIVE_CONTROLS] = sorted(protected)
+    view = copy(registry)
+    view._controls = dict(registry._controls)
+    for key in protected:
+        view._controls[key] = copy(registry.get(key))
+        view._controls[key].sensitive = True
+    return view
 
 
 def retain_control_state(registry: Any, session_state: Any) -> None:
-    """Detach registered values from widget cleanup before any early sidebar rerun.
+    """Detach control/profile inputs from cleanup before any early sidebar rerun.
 
     Streamlit deletes state for widgets omitted by a rerun. Explicit assignment
     before widget creation preserves values, including hidden and frozen controls.
+    Authentication clears a changed principal's state before this helper runs.
     """
     denied = session_state.pop("_radt_denied_control_restore", {})
     for key, value in denied.items():
         if key in registry:
             session_state[key] = value
-    for key in registry.keys():
+    # Native profile inputs also disappear when navigation hides their section.
+    # Keep only their current state; do not create a copy that could outlive auth
+    # cleanup. The sidebar rechecks retained selections against the current store.
+    for key in (*registry.keys(), "_radt_profile_choice", "_radt_profile_name"):
         if key in session_state:
             session_state[key] = session_state[key]
 
@@ -72,7 +103,12 @@ def stage_replay(config: Any, session_state: Any, ctx: Any, packet: dict) -> tup
     if not can_write(ctx, "can_replay_runs"):
         return None
     staged = dict(session_state)
-    result = apply_replay_packet(packet, config.registry, staged)
+    # Native replay is a browser boundary just like native profile loading.
+    # Omit complete structured values before text sanitation loses secret keys.
+    public_packet = {**packet, "controls": _public_profile_values(
+        config.registry, packet.get("controls"), packet.get("control_meta"),
+    )}
+    result = apply_replay_packet(public_packet, config.registry, staged)
     required = set(result["touched_keys"])
     required.update(
         ctrl.key for ctrl in config.registry.all()

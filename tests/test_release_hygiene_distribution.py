@@ -118,6 +118,10 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     sdist_members = _logical_members(built_release_artifacts["sdist"])
     assert "examples/dashboard_admin_controls_app.py" in sdist_members
     assert "examples/plugin_template.py" in sdist_members
+    assert {
+        f"examples/section_access/{name}"
+        for name in ("app.py", "demo.py", "policy.py", "provision.py", "README.md")
+    } <= sdist_members
     assert {"examples/studio_dispatch/app.py", "examples/studio_dispatch/README.md",
             "examples/studio_dispatch/.streamlit/config.toml", "AGENTS.md",
             "docs/development_handoff.md"} <= sdist_members
@@ -251,7 +255,7 @@ import role_aware_dashboard_toolkit as radt
 from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore
 from role_aware_dashboard_toolkit.access_cli import initialize_access
 from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
-from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
+from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop
 
 assert "wheel_site" in str(pathlib.Path(radt.__file__).resolve())
 assert importlib.util.find_spec("streamlit") is None
@@ -259,11 +263,12 @@ assert importlib.util.find_spec("pandas") is None
 assert importlib.util.find_spec("fastapi") is None
 assert "streamlit" not in sys.modules
 assert "authlib" not in sys.modules
-assert all(callable(api) for api in (AccessPolicy, InMemoryAccessStore, initialize_access, StreamlitIdentityResolver))
+assert all(callable(api) for api in (AccessPolicy, InMemoryAccessStore, initialize_access, StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop))
 starter = read_starter(authenticated=True)
 assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
 assert 'auth_mode="authenticated"' in starter["app.py"]
 assert "access_cli grant" in read_guide("authentication")["content"]
+assert "header_down Set-Cookie" in read_guide("deployment")["content"]
 config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
 run = radt.build_run({"temperature": 0.2}, actor="wheel-smoke")
 packet = radt.build_run_packet(run)
@@ -305,6 +310,8 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         sdist_root / "examples" / "dashboard_admin_controls_app.py",
         sdist_root / "examples" / "plugin_template.py",
         sdist_root / "examples" / "studio_dispatch" / "app.py",
+        *(sdist_root / "examples" / "section_access" / name
+          for name in ("app.py", "demo.py", "policy.py", "provision.py")),
     ]
 
     for script in scripts:
@@ -342,5 +349,9 @@ def test_sdist_configuration_is_an_explicit_public_allowlist():
         "/examples/operator_review/app.py",
         "/examples/operator_review/workflow.py",
         "/examples/operator_review/report.py",
+        "/examples/section_access/app.py",
+        "/examples/section_access/demo.py",
+        "/examples/section_access/policy.py",
+        "/examples/section_access/provision.py",
     }
     assert importlib.util.find_spec("role_aware_dashboard_toolkit") is not None

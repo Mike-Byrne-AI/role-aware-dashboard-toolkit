@@ -36,6 +36,50 @@ the diagnostics.
 Missing records remain normal `None`/empty results. Present but corrupt, unsafe,
 or unreadable records produce diagnostics.
 
+Store diagnostics describe file access and JSON parsing. They do not certify a
+record's application shape. Use `validate_record()` before consuming imported
+records. Native profile loading separately checks saved field shapes before
+restoring controls; invalid fields raise `ValueError` without changing live
+controls. The UI reports that failure and the HTTP API returns status 422.
+
+Native team, decision, case, governance and operator-memory reviews check each
+configured store read for new diagnostics and validate the records they consume.
+Incomplete or invalid evidence produces a generic notice and blocks dependent
+summaries and save actions. A successful empty read remains valid; a failed or
+unauthorized read is not silently converted into empty evidence. These adapters
+retain diagnostic history and allow recovery after the underlying records are
+repaired. Direct callers of the pure review builders remain responsible for
+supplying complete, authorized evidence.
+
+## Record identifiers
+
+Record stores trim surrounding whitespace from primary identifiers and use
+`default` for an empty identifier, matching the existing write policy. New
+records persist that canonical identifier in their payload. Listings, loads,
+deletes and path lookups use the same identity; for example, `" saved "` and
+`"saved"` address the same profile. The caller's input record is not mutated.
+
+Older records whose filename already uses the trimmed identifier remain
+readable even if their payload retains whitespace. Reads return a canonical
+identifier without rewriting the file. Identifiers referenced by another record
+(such as a comment's `run_id`) remain application data and are not rewritten.
+Saving aliases still replaces the same record; this is not a migration or a
+new conflict-resolution policy.
+
+New JSON filenames are bounded to 255 UTF-8 bytes, including the extension.
+Only their readable identifier prefix is shortened; the hash still covers the
+complete canonical identifier, which remains unchanged in records and API
+responses. Existing fitting filenames are unchanged. If an exact older hashed
+filename already exists (including longer Unicode names supported by NTFS),
+reads and updates reuse it under the same path safety checks without migrating
+or duplicating the record. If both the legacy and bounded names exist for the
+same identifier, reads omit that ambiguous record with `read_errors` diagnostics,
+and writes, deletes, and path resolution raise `StorePathSecurityError`. Both
+files remain unchanged for the host to reconcile explicitly.
+Atomic writes use a separate short temporary filename
+so updating an existing maximum-length filename also works. Hosts must still
+choose a root directory within their operating system's total path-length limit.
+
 ## Strict JSON boundary
 
 File-store reads and packet imports accept standards-compliant JSON only. They

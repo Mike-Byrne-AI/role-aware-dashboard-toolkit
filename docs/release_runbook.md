@@ -2,9 +2,9 @@
 
 This runbook prepares a GitHub-source release at
 [Mike-Byrne-AI/role-aware-dashboard-toolkit](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit).
-The URL is the planned destination until the repository exists. Completing
-local preparation does not authorize repository creation, network pushes,
-hosted CI, or publication.
+Use the existing private repository for staging and verify its identity and
+visibility before making changes. Completing local preparation does not authorize
+repository creation, network pushes, hosted CI, merging, or publication.
 
 ## Freeze the source identity
 
@@ -35,6 +35,12 @@ artifacts. Audit the wheel and source distribution independently as described
 in the release checklist: require complete, unique, regular members for each
 archive and reject any unexpected artifact.
 
+Use the checklist's fresh external `$releasePython` environment for source
+tests, build, and metadata validation. Install the declared `dev` tooling there
+before building; Twine 7 and its packaging dependency support the generated
+metadata. Record their versions rather than relying on tools inherited from
+the development workstation.
+
 ## Smoke the local artifacts
 
 A pre-publication smoke must use local artifacts, not a public-index install
@@ -61,17 +67,35 @@ All later lanes must reuse these exact bytes. The hosted build produces its
 own audited artifacts from the same frozen source commit; the hosted evidence
 job downloads those artifacts rather than rebuilding them. Verify artifact
 digests against the release candidate evidence for that run and attempt.
+The Windows job also downloads the same validated artifacts, rejects download
+digest mismatches, and checks per-file hashes before and after its install
+smokes. The evidence job requires the Windows receipt to match its source SHA,
+run identifier, run attempt, and artifact hashes before recording a candidate.
 
 ## Stage on a private GitHub repository
 
-After separate authorization, create a new private repository at the configured
-destination. Push the prepared local candidate commit to remote `main` only.
-Confirm the remote `main` SHA equals `$releaseCommit`, the repository is still
-private, and no inherited history or unexpected refs have been introduced.
-Do not create another metadata commit before the hosted run.
+After separate authorization, use the private repository at the configured
+destination. If it does not exist, creating it also requires authorization.
+Push the reviewed candidate branch and open a pull request targeting `main`.
+Require the protected-branch checks and an up-to-date branch before an authorized
+merge. Review the commits and refs being introduced; keep application data and
+unrelated history outside the public source.
 
-Check the intended branch protection and security settings using live GitHub
-evidence. GitHub private vulnerability reporting is a public-repository
+After merging, check out the final remote `main` commit in a clean release
+checkout. If the merge or rebase changed the SHA, capture that final SHA as
+`$releaseCommit` and repeat the local source checks, artifact build, audits, and
+install smokes above for that commit. Pull-request-head evidence does not certify
+a different merge commit. Confirm remote `main` equals `$releaseCommit` and the
+repository remains private. Do not add another metadata commit before the hosted run.
+
+Check branch protection using live GitHub evidence: require the stable
+`contributor-checks` status from `contributor-ci.yml`, require branches to be
+up to date before merging, and disable force pushes and branch deletions.
+Contributor CI runs on pull requests and pushes to `main` without the release
+approval variable. Keep the manually gated release jobs separate from required
+PR status checks. Verify the intended security settings as well.
+
+GitHub private vulnerability reporting is a public-repository
 feature: record the configured policy before the visibility change, then
 verify activation and the public form immediately afterward. Check the
 maintainer's notification configuration without describing it as proof of
@@ -83,7 +107,8 @@ Only after authorization to consume hosted CI, set the repository variable
 `XL422_CI_APPROVED_SHA` to the full `$releaseCommit` and manually dispatch the
 workflow on `main`. The workflow permits only `candidate` or `main`, an exact
 approved SHA, and `workflow_dispatch`; push and pull-request events do not
-start it. Leave the variable unset until the approved run is ready.
+start this release workflow. Leave the variable unset until the approved run
+is ready. The automatic contributor workflow is independent of this variable.
 
 Require every expected Linux Python 3.10-3.12, coverage, packaging, Windows,
 and release-evidence job and required step to succeed for the same run attempt

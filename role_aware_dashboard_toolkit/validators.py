@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .approvals import APPROVAL_SCHEMA_VERSION, VALID_APPROVAL_STATES
@@ -14,6 +15,7 @@ from .governance import (
     VALID_GOVERNANCE_STATES,
     VALID_POLICY_CHECK_RESULTS,
 )
+from .ledger import VALID_LEDGER_ENTRY_TYPES
 from .observability import TELEMETRY_SCHEMA_VERSION
 from .operator_memory import (
     OPERATOR_MEMORY_SCHEMA_VERSION,
@@ -36,6 +38,7 @@ from .validators_parts.common import (
     check_record_items as _check_record_items,
     finalize as _finalize,
     prefix_errors as _prefix_errors,
+    record_shape_errors as _record_shape_errors,
     validate_required_fields as _validate,
 )
 
@@ -61,6 +64,10 @@ VALID_RECORD_TYPES = (
     "narrative_handoff",
     "case",
     "governance",
+)
+
+_MISSING_FIELD_ERROR = re.compile(
+    r"(?:[a-z_][a-z0-9_]*(?:\[[0-9]+\])?\.)*Missing required field: [a-z_][a-z0-9_]*"
 )
 
 def validate_profile_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +97,11 @@ def validate_run_record(record: dict[str, Any]) -> dict[str, Any]:
     )
     _check_enum_field(result, record, "status", VALID_RUN_STATUSES, "Invalid run status")
     _check_list_field(result, record, "checkpoints")
+    if isinstance(record, dict) and isinstance(record.get("checkpoints"), list):
+        for index, checkpoint in enumerate(record["checkpoints"]):
+            if isinstance(checkpoint, dict):
+                checked = validate_checkpoint_record(checkpoint)
+                result["errors"].extend(_prefix_errors(f"checkpoints[{index}]", checked["errors"]))
     return _finalize(result)
 
 
@@ -229,7 +241,8 @@ def validate_governance_record(record: dict[str, Any]) -> dict[str, Any]:
     )
     _check_enum_field(result, record, "state", VALID_GOVERNANCE_STATES, "Invalid governance state")
     _check_enum_field(result, record, "escalation_level", VALID_ESCALATION_LEVELS, "Invalid escalation level")
-    _check_record_items(result, record, "policy_checks", value_field="result", valid_values=VALID_POLICY_CHECK_RESULTS)
+    _check_record_items(result, record, "policy_checks", value_field="result",
+                        valid_values=VALID_POLICY_CHECK_RESULTS, required=("check_id", "title", "result"))
     _check_record_items(result, record, "history", value_field="event_type", valid_values=VALID_GOVERNANCE_EVENT_TYPES)
     _check_mapping_field(result, record, "approval_requirements")
     _check_list_fields(result, record, ("blocked_actions", "allowed_next_actions"))
@@ -462,6 +475,16 @@ def validate_packet(record: dict[str, Any]) -> dict[str, Any]:
             "schema version compatibility was not verified."
         )
 
+    if not extension_packet and isinstance(payload, dict):
+        payload_type = {"replay": "replay_packet", "compare": "diff_packet"}.get(packet_type, packet_type)
+        if payload_type in VALID_RECORD_TYPES:
+            # Envelopes historically accept partial records. Check every present
+            # toolkit field without requiring absent metadata on those packets.
+            payload_errors = [error for error in validate_record(payload_type, payload)["errors"]
+                              if _MISSING_FIELD_ERROR.fullmatch(error) is None]
+        else:
+            payload_errors = _record_shape_errors(payload_type, payload)
+        result["errors"].extend(_prefix_errors("payload", payload_errors))
     result["warnings"] = warnings
     return _finalize(result)
 
@@ -474,7 +497,7 @@ def validate_ledger(record: dict[str, Any]) -> dict[str, Any]:
         required=("schema_version", "run_id", "generated_at", "entries", "latest_controls"),
         expected_schema_version=1,
     )
-    _check_list_field(result, record, "entries")
+    _check_record_items(result, record, "entries", value_field="entry_type", valid_values=VALID_LEDGER_ENTRY_TYPES)
     return _finalize(result)
 
 
@@ -533,7 +556,12 @@ def _coerce_int_schema_version(value: Any) -> int | None:
     if isinstance(value, str):
         text = value.strip()
         if text.isdigit():
-            return int(text)
+            try:
+                return int(text)
+            except ValueError:
+                # Some Unicode digits are not decimal integers; Python can
+                # also reject strings above its configured digit limit.
+                return None
     return None
 
 

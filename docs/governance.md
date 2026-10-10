@@ -10,6 +10,14 @@ Role-Aware Dashboard Toolkit governance records turn case state into explicit ad
 - blocked actions and allowed next actions
 - case-linked history over time
 
+Native incident statuses `open`, `monitoring`, and `mitigated` remain unresolved
+until explicitly marked `closed`, matching operator-memory summaries. They block
+case closure and remain subject to incident severity checks. Mitigation alone
+does not close an incident. Allowed next actions exclude every blocked action,
+including when an otherwise admissible case still has unresolved incidents or
+missing approvals. These records provide review guidance; hosts must enforce
+their actual action permissions.
+
 ## View and write model
 
 Governance is now preview-first.
@@ -23,6 +31,25 @@ Recommended permissions:
 
 Governance permissions are explicit. Missing permission keys fail closed; run
 and team permissions do not imply governance access.
+
+The native governance panel also requires `can_view_decisions`, including when
+the decision store has been removed: saved governance can still contain derived
+decision evidence. Denied, unreadable or invalid evidence blocks the preview
+and save action with a generic notice. It is not evaluated as an empty set of
+decisions or incidents. Restore permission or repair the evidence and retry;
+historical store diagnostics alone do not block a successful retry. Optional
+stores that were never configured retain their intentional empty-input behavior
+when the case does not require records from them. Explicit linked decisions,
+incidents, notes, narratives, checkpoints and runs must resolve to readable, valid records;
+an identifier alone is not evidence. Decision links work independently of run
+links, so a rejected decision linked only by its identifier still blocks review.
+
+Evidence links are additive. A run link includes its decision and signoff
+records; a checkpoint-only link includes those records for that checkpoint.
+Explicit decision links add records to that scope rather than replacing it.
+Adding an approved decision link therefore cannot conceal a rejected decision
+from an already linked run. To review a narrower scope, link the relevant
+checkpoints or decisions without linking the entire run.
 
 ## Common flow
 

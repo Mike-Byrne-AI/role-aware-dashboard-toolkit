@@ -6,6 +6,8 @@ verified identity receives server-owned role grants and can select only assigned
 roles. Shared freeze is checked again at protected writes. The legacy
 `DashboardConfig(auth_hook=...)` remains available for host-managed identity.
 Auth failure locks the context instead of falling back to Admin.
+The reserved `Unauthenticated` role always denies permission checks, including
+when host code supplies `default=True` to a permission helper.
 
 ```python
 roles = {
@@ -27,6 +29,17 @@ switch. Native profile loads and replays check every affected control before
 applying anything. Saved profile role metadata never grants permissions or
 overrides authenticated identity.
 
+Read permission for a panel does not override control sensitivity. Native
+historical views, comparisons, summaries, audit downloads and API responses
+filter sensitive values using the current registry and historical sensitivity
+metadata. The stored evidence remains unchanged. Custom output code must apply
+equivalent checks; raw record builders and stores are trusted host interfaces.
+
+Combined reviews also require access to the evidence they consume. For example,
+a governance panel needs decision-read permission as well as governance access,
+including saved reviews after a decision store is removed. Unreadable or denied evidence cannot
+be treated as an empty collection to produce an approval.
+
 For custom code:
 
 ```python
@@ -38,7 +51,11 @@ if radt.can_write(context["ctx"], "can_request_review"):
 ```
 
 Hiding a section is presentation only. Plugin callbacks must enforce their own
-data/action boundaries using the current context; setup has no user context.
+data/action boundaries using the current context. In authenticated mode, setup
+receives the prepared access context; other modes pass `ctx=None` to setup.
+Setup runs once per registration and can be shared across sessions: never cache
+user data, identities or authorization decisions there. Use the current render
+context and check permissions again at each protected read or action.
 
 Verify allowed and denied roles, freeze on/off, auth-hook failure, and mixed
 profiles containing a restricted field. Confirm denied changes create no success

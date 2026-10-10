@@ -397,8 +397,8 @@ def test_plugin_registered_controls_survive_start_checkpoint_and_end_reruns(styl
         app.toggle(key="plugin_enabled").set_value(values["plugin_enabled"])
         app.text_input(key="plugin_note").set_value(values["plugin_note"])
         app.color_picker(key="plugin_color").set_value(values["plugin_color"])
-        app.text_input(key="plugin_token").set_value(values["plugin_token"])
-        app.run()
+        app.text_input(key="_radt_sensitive_replacement__plugin_token").set_value(values["plugin_token"])
+        app.button(key="_radt_sensitive_submit__plugin_token").click().run()
         assert not app.exception, [item.message for item in app.exception]
         return values
 

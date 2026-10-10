@@ -9,9 +9,20 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `61`
+- Documented module-only public symbols: `63`
 
 ## Usage recipes
+
+These recipes use a GitHub-source release. From your reviewed toolkit source
+checkout, install the extra needed by your application in the same Python environment:
+
+```powershell
+python -m pip install ".[workbench]"  # Dashboard rendering
+python -m pip install ".[api]"        # Optional HTTP API
+```
+
+From another directory, pass the absolute source path or reviewed local wheel
+filename with `[workbench]` or `[api]` appended. No package-index release is assumed.
 
 ### Dashboard controls
 
@@ -49,7 +60,7 @@ registry.register("Page size", kind="number", key="page_size", min_value=1, defa
 app = radt.create_app(registry)
 ```
 
-Install `role-aware-dashboard-toolkit[api]` before constructing the FastAPI application.
+Install the `api` extra as shown above before constructing the FastAPI application.
 
 ## Dashboard app shell
 
@@ -70,7 +81,7 @@ Dashboard rendering and trusted plugin registration.
 
 Classification: `stable`
 
-Root exports: `0`; module-only symbols: `18`.
+Root exports: `0`; module-only symbols: `20`.
 
 - `Identity` (module-only)
 - `AccessDenied` (module-only)
@@ -85,13 +96,15 @@ Root exports: `0`; module-only symbols: `18`.
 - `prepare_access` (module-only)
 - `StreamlitIdentityResolver` (module-only)
 - `render_sign_in` (module-only)
+- `sign_out_and_stop` (module-only)
+- `clear_authenticated_state` (module-only)
 - `bind_audit_identity` (module-only)
 - `can_mutate` (module-only)
 - `read_identity_key` (module-only)
 - `initialize_access` (module-only)
 - `ProvisioningError` (module-only)
 
-Verified identities and server-owned grants from access and access_store; prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC; access_audit binds actors; security.can_mutate guards authenticated record writes; access_cli provides trusted local provisioning. Import from these modules; the root namespace stays unchanged.
+Verified identities and server-owned grants from access and access_store; prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC and fail-closed session cleanup/sign-out; access_audit binds actors; security.can_mutate guards authenticated record writes; access_cli provides trusted local provisioning. Import from these modules; the root namespace stays unchanged.
 
 ## Controls and security
 

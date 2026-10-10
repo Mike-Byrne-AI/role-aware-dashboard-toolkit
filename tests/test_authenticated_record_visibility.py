@@ -93,7 +93,7 @@ def test_decision_display_redaction_preserves_authorized_saved_evidence():
     config, run, checkpoint = _records()
     ctx = SecurityContext(
         role="Decision manager", authenticated=True, user_id="b" * 64,
-        perms={"can_view_decisions": True, "can_manage_decisions": True, "can_view_metrics": True},
+        perms={"can_view_team_ops": True, "can_view_decisions": True, "can_manage_decisions": True, "can_view_metrics": True},
         _authorize=lambda key, writing: key != "can_view_metrics",
     )
     key = f"_radt_decision_save::{run['run_id']}::{checkpoint['checkpoint_id']}"

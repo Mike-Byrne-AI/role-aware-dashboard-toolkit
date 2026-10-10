@@ -6,6 +6,7 @@ from typing import Any
 
 from .distribution import (
     ROLE_AWARE_DASHBOARD_TOOLKIT_DISTRIBUTION_STRATEGY,
+    _SOURCE_INSTALL_GUIDANCE,
     list_distribution_artifacts,
 )
 from .public_api import list_public_api_families, public_api_manifest
@@ -43,6 +44,8 @@ def build_release_audit_markdown() -> str:
         f"- Undocumented root exports: `{api['undocumented_export_count']}`",
         "",
         "## Artifact summary",
+        "",
+        *_SOURCE_INSTALL_GUIDANCE,
         "",
     ]
     for artifact in manifest["artifacts"]:
@@ -93,6 +96,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
         "role_aware_dashboard_toolkit/streamlit_auth.py",
         "role_aware_dashboard_toolkit/_access_ui.py",
         "role_aware_dashboard_toolkit/resources/guides/authentication.md",
+        "role_aware_dashboard_toolkit/resources/guides/deployment.md",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/app.py",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/config.toml",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/AGENTS.md",
@@ -114,9 +118,11 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
         "role_aware_dashboard_toolkit/resources/starter/AGENTS.md",
         "role_aware_dashboard_toolkit/resources/starter/README.md",
         "role_aware_dashboard_toolkit/_exports.py",
+        "role_aware_dashboard_toolkit/_evidence_reads.py",
         "role_aware_dashboard_toolkit/_json_safety.py",
         "role_aware_dashboard_toolkit/_optional_pandas.py",
         "role_aware_dashboard_toolkit/_profile_preview.py",
+        "role_aware_dashboard_toolkit/_record_projection.py",
         "role_aware_dashboard_toolkit/_record_utils.py",
         "role_aware_dashboard_toolkit/_ui_state.py",
         "role_aware_dashboard_toolkit/api.py",
@@ -192,6 +198,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
 _PUBLIC_SDIST_MEMBERS = frozenset(
     {
         ".github/workflows/ci.yml",
+        ".github/workflows/contributor-ci.yml",
         ".gitignore",
         "ARCHITECTURE_SCOPE.md",
         "CHANGELOG.md",
@@ -241,6 +248,11 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "examples/operator_review/workflow.py",
         "examples/operator_review/report.py",
         "examples/operator_review/README.md",
+        "examples/section_access/app.py",
+        "examples/section_access/demo.py",
+        "examples/section_access/policy.py",
+        "examples/section_access/provision.py",
+        "examples/section_access/README.md",
         "pyproject.toml",
         "schemas/case.schema.json",
         "schemas/checkpoint.schema.json",

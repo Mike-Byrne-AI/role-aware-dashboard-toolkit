@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from .._optional_pandas import load_optional_pandas
+from .._record_projection import project_record
 from ..security import has_perm
 
 pd = None
@@ -44,10 +45,16 @@ def _record_session(ctx: Any, session_state: Any) -> str:
     return str(session_state.get("_radt_session_id", ""))
 
 
-def _record_summary_view(record: dict[str, Any], ctx: Any) -> dict[str, Any]:
+def _record_summary_view(
+    record: dict[str, Any], ctx: Any, registry: Any = None, *, source: Any = None,
+) -> dict[str, Any]:
     """Filter native saved-control summaries at display time, without editing evidence."""
-    view = deepcopy(record)
-    if not has_perm(ctx, "can_view_metrics", default=False):
+    can_view_values = has_perm(ctx, "can_view_metrics", default=False)
+    view = project_record(
+        {"source": source, "record": record}, registry,
+        include_control_metadata_values=can_view_values,
+    )["record"]
+    if not can_view_values:
         summary = view.get("summary")
         if isinstance(summary, dict):
             summary.pop("latest_controls", None)

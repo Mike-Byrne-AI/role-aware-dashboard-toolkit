@@ -48,6 +48,12 @@ def _release_candidate_evidence_script(workflow: str) -> str:
     return textwrap.dedent(job[start:end])
 
 
+def _windows_artifact_script(workflow: str, step: str) -> str:
+    job = workflow.split("  windows-release-smoke:\n", 1)[1]
+    body = job.split(f"      - name: {step}\n        shell: python\n        run: |\n", 1)[1]
+    return textwrap.dedent(body.split("      - name:", 1)[0])
+
+
 def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     workflow = _read(".github/workflows/ci.yml")
     job = _release_candidate_job(workflow)
@@ -80,6 +86,9 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "uses: actions/download-artifact@" in job
     assert "name: role_aware_dashboard_toolkit-validated-dist" in job
     assert "path: dist" in job
+    assert "digest-mismatch: error" in job
+    assert "name: role_aware_dashboard_toolkit-windows-artifact-evidence" in job
+    assert "Windows smoke evidence must match this run, source, and exact artifact bytes" in job
     assert "uses: actions/upload-artifact@" in job
     assert "name: role_aware_dashboard_toolkit-release-candidate-dist" in job
     assert "name: role_aware_dashboard_toolkit-release-candidate-evidence" in job
@@ -148,6 +157,16 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
         text=True,
     ).stdout.strip()
 
+    runner_temp = tmp_path / "runner"
+    windows_evidence_dir = runner_temp / "windows-evidence"
+    windows_evidence_dir.mkdir(parents=True)
+    windows_evidence_path = windows_evidence_dir / "windows_artifact_evidence.json"
+    windows_evidence = {
+        "source_sha": source_sha, "run_id": 123456, "run_attempt": 2,
+        "artifact_sha256": {name: hashlib.sha256(content).hexdigest() for name, content in artifacts.items()},
+    }
+    windows_evidence_path.write_text(json.dumps(windows_evidence), encoding="utf-8")
+
     env = {
         **fixture_env,
         "GITHUB_SHA": source_sha,
@@ -155,6 +174,7 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
         "GITHUB_RUN_ID": "123456",
         "GITHUB_RUN_ATTEMPT": "2",
         "GITHUB_WORKSPACE": str(workspace),
+        "RUNNER_TEMP": str(runner_temp),
         "PYTHONPATH": str(REPO_ROOT),
     }
     result = subprocess.run(
@@ -178,6 +198,27 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     assert evidence["artifact_sha256"] == {
         name: hashlib.sha256(content).hexdigest() for name, content in artifacts.items()
     }
+    assert evidence["windows_artifact_sha256"] == evidence["artifact_sha256"]
+
+    for overrides in [
+        {"source_sha": "0" * 40}, {"run_id": 123457}, {"run_attempt": 3},
+        {"artifact_sha256": {name: "0" * 64 for name in artifacts}},
+    ]:
+        windows_evidence_path.write_text(json.dumps({**windows_evidence, **overrides}), encoding="utf-8")
+        rejected = subprocess.run(
+            [sys.executable, "-c", script], cwd=tmp_path, env=env,
+            capture_output=True, text=True, check=False,
+        )
+        assert rejected.returncode != 0, overrides
+        assert "Windows smoke evidence must match" in rejected.stderr
+    windows_evidence_path.unlink()
+    missing_receipt = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        capture_output=True, text=True, check=False,
+    )
+    assert missing_receipt.returncode != 0
+    assert "windows_artifact_evidence.json" in missing_receipt.stderr
+    windows_evidence_path.write_text(json.dumps(windows_evidence), encoding="utf-8")
 
     mismatch = subprocess.run(
         [sys.executable, "-c", script],
@@ -211,6 +252,71 @@ def test_release_candidate_evidence_hashes_exact_artifacts_and_checks_commit(tmp
     )
     assert rejected.returncode != 0
     assert "exactly two distribution artifacts" in rejected.stderr
+
+
+def test_windows_lane_installs_downloaded_artifacts_and_retains_verified_receipt():
+    workflow = _read(".github/workflows/ci.yml")
+    job = workflow.split("  windows-release-smoke:\n", 1)[1]
+    assert "needs: [packaging-release-smoke]" in job
+    assert "python -m build" not in job
+    assert "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in job
+    assert "name: role_aware_dashboard_toolkit-validated-dist" in job
+    assert "path: dist\n          digest-mismatch: error" in job
+    assert "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in job
+    assert "name: role_aware_dashboard_toolkit-windows-artifact-evidence" in job
+    assert "path: ${{ runner.temp }}/windows_artifact_evidence.json" in job
+    ordered_steps = [
+        "Download validated distribution artifacts", "Record Windows artifact hashes",
+        "Wheel install smoke (Windows)", "Auth wheel install smoke (Windows)",
+        "Verify Windows artifacts stayed unchanged", "Upload Windows artifact evidence",
+    ]
+    positions = [job.index("name: " + step) for step in ordered_steps]
+    assert positions == sorted(positions)
+
+
+@pytest.mark.parametrize("problem", [None, "missing_wheel", "missing_sdist", "extra_file", "directory"])
+def test_actual_windows_hash_receipt_requires_exact_pair_and_detects_changed_bytes(tmp_path, problem):
+    workflow = _read(".github/workflows/ci.yml")
+    record = _windows_artifact_script(workflow, "Record Windows artifact hashes")
+    verify = _windows_artifact_script(workflow, "Verify Windows artifacts stayed unchanged")
+    dist, runner = tmp_path / "dist", tmp_path / "runner"
+    dist.mkdir()
+    runner.mkdir()
+    names = {"fixture.whl": b"wheel bytes", "fixture.tar.gz": b"sdist bytes"}
+    for name, content in names.items():
+        (dist / name).write_bytes(content)
+    if problem == "missing_wheel":
+        (dist / "fixture.whl").unlink()
+    elif problem == "missing_sdist":
+        (dist / "fixture.tar.gz").unlink()
+    elif problem == "extra_file":
+        (dist / "extra.txt").write_text("extra", encoding="utf-8")
+    elif problem == "directory":
+        (dist / "fixture.whl").unlink()
+        (dist / "fixture.whl").mkdir()
+    env = {**os.environ, "RUNNER_TEMP": str(runner), "GITHUB_SHA": "a" * 40,
+           "GITHUB_RUN_ID": "123456", "GITHUB_RUN_ATTEMPT": "2"}
+    result = subprocess.run([sys.executable, "-c", record], cwd=tmp_path, env=env,
+                            capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) is (problem is None), result.stderr
+    receipt_path = runner / "windows_artifact_evidence.json"
+    if problem is not None:
+        assert "exactly one downloaded wheel and one sdist" in result.stderr
+        assert not receipt_path.exists()
+        return
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt == {
+        "source_sha": "a" * 40, "run_id": 123456, "run_attempt": 2,
+        "artifact_sha256": {name: hashlib.sha256(content).hexdigest() for name, content in names.items()},
+    }
+    success = subprocess.run([sys.executable, "-c", verify], cwd=tmp_path, env=env,
+                             capture_output=True, text=True, check=False)
+    assert success.returncode == 0, success.stderr
+    (dist / "fixture.whl").write_bytes(b"different wheel bytes")
+    changed = subprocess.run([sys.executable, "-c", verify], cwd=tmp_path, env=env,
+                             capture_output=True, text=True, check=False)
+    assert changed.returncode != 0
+    assert "changed during install smokes" in changed.stderr
 
 
 def _passing_local_report():
@@ -283,7 +389,12 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "digests against the release candidate evidence" in runbook
     assert "$releaseCommit = (git rev-parse HEAD).Trim()" in runbook
     assert "git status --porcelain" in runbook
-    assert "Push the prepared local candidate commit to remote `main` only." in runbook
+    staging = " ".join(runbook.split())
+    assert "Push the reviewed candidate branch and open a pull request targeting `main`." in staging
+    assert "Require the protected-branch checks and an up-to-date branch before an authorized merge." in staging
+    assert "check out the final remote `main` commit in a clean release checkout" in staging
+    assert "repeat the local source checks, artifact build, audits, and install smokes" in staging
+    assert "Pull-request-head evidence does not certify a different merge commit." in staging
     assert "public without changing `main` or adding a metadata commit" in runbook
     assert "No PyPI name ownership, reservation, or publishing authority is claimed." in runbook
     assert "live_validation_required" in runbook

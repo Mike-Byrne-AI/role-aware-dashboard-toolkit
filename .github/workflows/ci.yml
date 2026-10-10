@@ -199,7 +199,9 @@ jobs:
                       assert exc.name == "streamlit"
                       assert str(exc) == (
                           "Streamlit is required for Role-Aware Dashboard Toolkit dashboard rendering. "
-                          'Install with: pip install "role-aware-dashboard-toolkit[workbench]"'
+                          'From your reviewed toolkit source checkout, run: python -m pip install ".[workbench]". '
+                          "From another directory, use the absolute source path or local wheel filename "
+                          "with [workbench] appended. No package-index release is assumed."
                           " " + diagnostic_text("RADT-STREAMLIT")
                       )
                       assert exc.diagnostic == build_diagnostic("RADT-STREAMLIT")
@@ -282,6 +284,7 @@ jobs:
           (
             cd "$(mktemp -d "$RUNNER_TEMP/radt-smoke.XXXXXX")"
             "$RUNNER_TEMP/.wheel-api-smoke/bin/python" -I - <<'PY'
+          import importlib.util
           import os
           import pathlib
           import sys
@@ -296,10 +299,13 @@ jobs:
           import fastapi
           import pydantic
           import uvicorn
-          from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE
+          from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE, create_app
 
           assert pathlib.Path(role_aware_dashboard_toolkit.__file__).resolve().is_relative_to(environment)
           assert FASTAPI_AVAILABLE is True
+          assert importlib.util.find_spec("streamlit") is None
+          app = create_app(role_aware_dashboard_toolkit.ControlRegistry())
+          assert {"/health", "/controls"} <= {route.path for route in app.routes}
           assert fastapi.__name__ == "fastapi"
           assert pydantic.__name__ == "pydantic"
           assert uvicorn.__name__ == "uvicorn"
@@ -424,7 +430,9 @@ jobs:
                       radt.render(config)
                   except ModuleNotFoundError as exc:
                       assert exc.name == "streamlit"
-                      assert 'pip install "role-aware-dashboard-toolkit[workbench]"' in str(exc)
+                      assert 'python -m pip install ".[workbench]"' in str(exc)
+                      assert "absolute source path or local wheel filename" in str(exc)
+                      assert "No package-index release is assumed" in str(exc)
                   else:
                       raise AssertionError("core sdist render should require the workbench extra")
                   print(radt.__version__)
@@ -460,6 +468,12 @@ jobs:
         with:
           name: role_aware_dashboard_toolkit-validated-dist
           path: dist
+          digest-mismatch: error
+      - name: Download Windows artifact evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: role_aware_dashboard_toolkit-windows-artifact-evidence
+          path: ${{ runner.temp }}/windows-evidence
           digest-mismatch: error
       - name: Release-candidate publication hygiene
         run: |
@@ -576,6 +590,16 @@ jobs:
           if len(artifacts) != 2:
               raise SystemExit("release candidate requires exactly two distribution artifacts")
           artifact_sha256 = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}
+          windows_evidence = json.loads(
+              (pathlib.Path(os.environ["RUNNER_TEMP"]) / "windows-evidence" / "windows_artifact_evidence.json").read_text(encoding="utf-8")
+          )
+          if (
+              windows_evidence.get("source_sha") != source_sha
+              or windows_evidence.get("run_id") != run_id
+              or windows_evidence.get("run_attempt") != run_attempt
+              or windows_evidence.get("artifact_sha256") != artifact_sha256
+          ):
+              raise SystemExit("Windows smoke evidence must match this run, source, and exact artifact bytes")
           pre_release = json.loads(pathlib.Path("pre_release_report.json").read_text(encoding="utf-8"))
           evidence = {
               "version": radt.__version__,
@@ -585,6 +609,7 @@ jobs:
               "head_branch": ref.removeprefix("refs/heads/"),
               "workflow_path": ".github/workflows/ci.yml",
               "artifact_sha256": artifact_sha256,
+              "windows_artifact_sha256": windows_evidence["artifact_sha256"],
               "pre_release_status": pre_release.get("status"),
               "validation_scope": pre_release["validation_scope"],
               "release_channel": pre_release["release_channel"],
@@ -617,6 +642,7 @@ jobs:
   windows-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
     if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    needs: [packaging-release-smoke]
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -632,9 +658,40 @@ jobs:
           pip install -e .[dev]
       - name: Windows focused tests
         shell: powershell
-        run: python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py -q -p no:cacheprovider -o addopts=
-      - name: Build
-        run: python -m build
+        run: python -m pytest tests/test_path_redaction.py tests/test_permission_boundaries.py tests/test_review_identifier_regressions.py tests/test_store_identifier_contract.py -q -p no:cacheprovider -o addopts=
+      - name: Download validated distribution artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: role_aware_dashboard_toolkit-validated-dist
+          path: dist
+          digest-mismatch: error
+      - name: Record Windows artifact hashes
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          artifacts = sorted(pathlib.Path("dist").iterdir())
+          if (
+              len(artifacts) != 2
+              or sum(path.suffix == ".whl" for path in artifacts) != 1
+              or sum(path.name.endswith(".tar.gz") for path in artifacts) != 1
+              or any(not path.is_file() or path.is_symlink() for path in artifacts)
+          ):
+              raise SystemExit("Windows smoke requires exactly one downloaded wheel and one sdist")
+          evidence = {
+              "source_sha": os.environ["GITHUB_SHA"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "artifact_sha256": {
+                  path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts
+              },
+          }
+          (pathlib.Path(os.environ["RUNNER_TEMP"]) / "windows_artifact_evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+          )
       - name: Wheel install smoke (Windows)
         shell: powershell
         run: |
@@ -687,7 +744,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $authPython = Join-Path $authVenv "Scripts\python.exe"
           $wheels = @(Get-ChildItem -LiteralPath dist -Filter "role_aware_dashboard_toolkit-*.whl" -File)
-          if ($wheels.Count -ne 1) { throw "Expected exactly one built wheel." }
+          if ($wheels.Count -ne 1) { throw "Expected exactly one downloaded wheel." }
           & $authPython -m pip install "$($wheels[0].FullName)[auth]"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $authPython -m pip check
@@ -729,3 +786,27 @@ jobs:
           '@
           $authSmoke | & $authPython -I -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify Windows artifacts stayed unchanged
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          recorded = json.loads(
+              (pathlib.Path(os.environ["RUNNER_TEMP"]) / "windows_artifact_evidence.json").read_text(encoding="utf-8")
+          )
+          artifacts = sorted(pathlib.Path("dist").iterdir())
+          if any(not path.is_file() or path.is_symlink() for path in artifacts):
+              raise SystemExit("Windows distribution artifacts must remain regular files")
+          current = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}
+          if current != recorded["artifact_sha256"]:
+              raise SystemExit("Windows distribution artifacts changed during install smokes")
+      - name: Upload Windows artifact evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: role_aware_dashboard_toolkit-windows-artifact-evidence
+          path: ${{ runner.temp }}/windows_artifact_evidence.json
+          if-no-files-found: error
+          retention-days: 1

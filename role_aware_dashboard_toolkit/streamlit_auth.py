@@ -18,6 +18,20 @@ from typing import Any, NoReturn
 from .access import AccessDenied, Identity
 
 
+_ACCESS_DENIAL_NOTICE = "_radt_access_denial_notice"
+_SIGN_OUT_PENDING = "_radt_sign_out_pending"
+_SIGN_IN_PROMPT = "Sign in to open this dashboard."
+
+
+def _streamlit_login_state(st: Any) -> bool | None:
+    """Read provider session status for recovery UI, never as authorization."""
+    try:
+        logged_in = st.user.get("is_logged_in")
+        return logged_in if type(logged_in) is bool else None
+    except Exception:
+        return None
+
+
 def _nonempty_string(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -87,6 +101,11 @@ class StreamlitIdentityResolver:
         try:
             import streamlit as st
 
+            state = getattr(st, "session_state", None)
+            if state is not None and state.get(_SIGN_OUT_PENDING) is True:
+                # The provider cookie can survive a failed logout request.
+                # Old contexts must deny protected actions, not just UI reads.
+                raise AccessDenied()
             user = st.user
             if not isinstance(user, Mapping) or user.get("is_logged_in") is not True:
                 raise AccessDenied()
@@ -145,6 +164,55 @@ class StreamlitIdentityResolver:
             raise AccessDenied() from None
 
 
+def _clear_session_state(st: Any, preserve: tuple[str, ...] = ()) -> None:
+    state = getattr(st, "session_state", None)
+    if state is not None:
+        retained = set(preserve)
+        if state.get(_SIGN_OUT_PENDING) is True:
+            retained.add(_SIGN_OUT_PENDING)
+        # Streamlit button triggers cannot be assigned back after a clear.
+        # Preserve a recovery event in place when the access gate requests it.
+        for key in list(state):
+            if key not in retained:
+                del state[key]
+
+
+def clear_authenticated_state(st: Any) -> None:
+    """Clear application session state while preserving pending sign-out denial.
+
+    Use on an authenticated host's configuration failure before stopping its
+    render. This clears all application session values, not provider cookies or
+    other browser sessions. It neither signs out nor grants access.
+    """
+    _clear_session_state(st)
+
+
+def sign_out_and_stop(st: Any) -> NoReturn:
+    """Request provider logout and stop, retaining denial if logout fails.
+
+    Use for Streamlit OIDC hosts as a button callback before the next access gate. The denial
+    marker protects only this Streamlit session until signed-out state is
+    confirmed. It cannot revoke a provider cookie or another browser session.
+    Custom identity hosts must supply their own logout and new-session recovery;
+    unrelated Streamlit login status cannot release their pending denial.
+    """
+    try:
+        clear_authenticated_state(st)
+        state = getattr(st, "session_state", None)
+        if state is not None:
+            # A failed provider redirect must not let the next rerun reopen
+            # the same authenticated session. The gate retains this denial
+            # marker until Streamlit confirms the user is signed out.
+            state[_SIGN_OUT_PENDING] = True
+        st.logout()
+    except Exception:
+        st.error("Sign-out is unavailable. Refresh the page or contact the dashboard administrator.")
+    # Logout sends a redirect; it need not interrupt Python execution itself.
+    # A failed logout also must not fall through to newly authorized host reads.
+    st.stop()
+    raise AccessDenied()
+
+
 def render_sign_in(st: Any, *, provider: str | None = None) -> NoReturn:
     """Render recovery after denial and always stop before protected content.
 
@@ -155,19 +223,33 @@ def render_sign_in(st: Any, *, provider: str | None = None) -> NoReturn:
     affects the current session and cookie, not other already-open sessions.
     """
 
-    st.warning("Sign in with an authorized account to continue.")
+    logged_in = _streamlit_login_state(st)
+    # The access gate already rendered its notice in this same script run.
+    # Consume only this presentation marker; it never authorizes an operation.
+    notice = getattr(st, "session_state", {}).pop(_ACCESS_DENIAL_NOTICE, None)
+    if logged_in is True:
+        st.warning(
+            "Sign out, then sign in again with an assigned account. "
+            "If access is still unavailable, contact the dashboard administrator."
+        )
+    elif logged_in is False:
+        if notice != "signed_out":
+            st.info(_SIGN_IN_PROMPT)
+    else:
+        st.warning(
+            "Sign-in status could not be read. Try signing in again, "
+            "or contact the dashboard administrator."
+        )
     try:
-        logged_in = st.user.get("is_logged_in") is True
-    except Exception:
-        logged_in = False
-    try:
-        if logged_in:
-            if st.button("Sign out", key="_radt_sign_out"):
-                st.logout()
+        if logged_in is True:
+            # Run before the next script frame: restored grants must not skip a
+            # sign-out submitted from the previous frame's recovery page.
+            st.button("Sign out", key="_radt_sign_out", on_click=lambda: sign_out_and_stop(st))
         elif st.button("Sign in", key="_radt_sign_in"):
             st.login(provider)
     except Exception:
-        st.error("Sign-in is unavailable. Contact the dashboard administrator.")
+        action = "Sign-out" if logged_in is True else "Sign-in"
+        st.error(f"{action} is unavailable. Refresh the page or contact the dashboard administrator.")
     st.stop()
     # Real Streamlit raises its stop signal. Keep denial intact for host wrappers
     # or test doubles that incorrectly return instead.

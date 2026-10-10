@@ -11,6 +11,8 @@ from ..operator_memory import (
     build_operator_summary,
 )
 from ..security import can_mutate, has_perm
+from .._evidence_reads import EvidenceUnavailable, read_records, require_evidence_permissions, warn_incomplete_evidence
+from .._record_projection import project_record
 from .shared import _record_actor, _render_table
 
 
@@ -71,23 +73,33 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
     checkpoint_id = str(checkpoint.get("checkpoint_id", "") or run.get("last_checkpoint_id", ""))
     team_store = getattr(config, "team_store", None)
     decision_store = getattr(config, "decision_store", None)
-    notes = memory_store.list_notes(run_id, checkpoint_id=checkpoint_id)
-    incidents = memory_store.list_incidents(run_id)
-    narratives = memory_store.list_narratives(run_id)
-    decisions = (
-        decision_store.list_by_run(run_id)
-        if decision_store is not None and has_perm(ctx, "can_view_decisions", default=False)
-        else []
-    )
-    handoffs = team_store.list_handoffs(run_id) if team_store is not None else []
+    try:
+        notes = read_records(memory_store, "list_notes", run_id, checkpoint_id=checkpoint_id,
+                             record_type="operator_note", ctx=ctx, permission="can_view_team_ops")
+        incidents = read_records(memory_store, "list_incidents", run_id, record_type="incident", ctx=ctx,
+                                 permission="can_view_team_ops")
+        narratives = read_records(memory_store, "list_narratives", run_id, record_type="narrative_handoff", ctx=ctx,
+                                  permission="can_view_team_ops")
+        decisions = read_records(decision_store, "list_by_run", run_id, record_type="decision", ctx=ctx,
+                                 permission="can_view_decisions")
+        handoffs = read_records(team_store, "list_handoffs", run_id, record_type="handoff", ctx=ctx,
+                                permission="can_view_team_ops")
+        require_evidence_permissions(ctx, "can_view_team_ops")
+        if decision_store is not None:
+            require_evidence_permissions(ctx, "can_view_decisions")
+    except EvidenceUnavailable:
+        warn_incomplete_evidence(st)
+        return
+    can_view_metrics = has_perm(ctx, "can_view_metrics", default=False)
+    can_view_audit = has_perm(ctx, "can_view_audit", default=False)
     telemetry_history = (
         list(st.session_state.get("_radt_observability_history", []))
-        if has_perm(ctx, "can_view_metrics", default=False)
+        if can_view_metrics
         else []
     )
     audit_events = (
         config.audit.recent(50)
-        if has_perm(ctx, "can_view_audit", default=False)
+        if can_view_audit
         else []
     )
 
@@ -102,6 +114,16 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
         handoffs=handoffs,
     )
     summary = build_operator_summary(run, timeline=timeline, decisions=decisions, incidents=incidents)
+    try:
+        require_evidence_permissions(
+            ctx, "can_view_team_ops",
+            *(["can_view_decisions"] if decision_store is not None else []),
+            *(["can_view_metrics"] if can_view_metrics else []),
+            *(["can_view_audit"] if can_view_audit else []),
+        )
+    except EvidenceUnavailable:
+        warn_incomplete_evidence(st)
+        return
 
     st.subheader(getattr(config, "timeline_title", "Incident Timeline"))
     st.json(timeline.get("summary", {}))
@@ -123,11 +145,11 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
 
     if notes:
         with st.expander("Operator notes", expanded=False):
-            st.json(notes[-10:])
+            st.json(project_record(notes[-10:], getattr(config, "registry", None)))
 
     if incidents:
         with st.expander("Incidents", expanded=False):
-            st.json(incidents[-10:])
+            st.json(project_record(incidents[-10:], getattr(config, "registry", None)))
 
     if has_perm(ctx, "can_export_packets", default=False):
         narrative = build_narrative_handoff_packet(
@@ -142,7 +164,7 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
             source_version=getattr(config, "version", ""),
         )
         with st.expander("Narrative handoff packet", expanded=False):
-            st.json(narrative)
+            st.json(project_record(narrative, getattr(config, "registry", None)))
             can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
             if (
                 st.button(

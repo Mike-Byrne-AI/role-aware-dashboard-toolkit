@@ -34,6 +34,12 @@ Profile activation checks every affected field. Profile save/delete require
 `can_save_profiles`; audit reads require `can_view_audit`. Protected shared
 deployments also need trusted ingress and TLS.
 
+Reading profile values requires both `can_load_profiles` and `can_view_metrics`.
+Saving or activating a profile does not grant read authority: these actions
+return an empty `values` object when metrics access is denied. Profile metadata
+listings remain available with `can_load_profiles`. Audit reads
+also hide historical values for controls that are now sensitive.
+
 API profile names are trimmed. Empty names, `.`, `..`, nonprintable characters
 and `/ \\ % ? #` are rejected before writing. Use the returned canonical name,
 encoded as one path segment. Direct-store legacy identifiers are not migrated
@@ -42,3 +48,9 @@ automatically.
 Verify missing-key rejection, Viewer write denial, authorized writes and
 `source="api"` audit provenance. Sensitive control reads are redacted;
 profiles omit sensitive values. A successful profile deletion is audited.
+
+Existing profile reads expose only registered public controls. Historical
+sensitivity flags and nested secret-named fields also exclude a saved control
+from API responses and activation, preserving its current live value. This
+projection does not rewrite the saved record. Core profile helpers remain
+host-controlled; this additional projection belongs to the HTTP boundary.

@@ -58,9 +58,15 @@ assert api.FASTAPI_AVAILABLE is False
 try:
     api.create_app(None)
 except ImportError as exc:
-    assert "role-aware-dashboard-toolkit[api]" in str(exc)
+    message = str(exc)
+    assert 'python -m pip install ".[api]"' in message
+    assert "reviewed toolkit source checkout" in message
+    assert "absolute source path or reviewed local wheel filename" in message
+    assert "No package-index release is assumed" in message
+    assert "python -m role_aware_dashboard_toolkit guide api" in message
+    assert "pip install role-aware-dashboard-toolkit[api]" not in message
 else:
-    raise AssertionError("create_app should require role-aware-dashboard-toolkit[api] when FastAPI is missing")
+    raise AssertionError("create_app should require the API extra when FastAPI is missing")
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -237,6 +243,53 @@ def test_api_auth_uses_compare_digest_for_key_check(api_registry, monkeypatch):
     assert client.get("/controls", headers={"X-API-Key": "secret-key"}).status_code == 200
     assert ("wrong-key", "secret-key") in calls
     assert ("secret-key", "secret-key") in calls
+
+
+@requires_fastapi
+@pytest.mark.parametrize("header", [b"\xff", b"\x80", b"synthetic-\xc3\xa9"])
+def test_api_rejects_non_ascii_key_headers_without_server_errors(api_registry, monkeypatch, header):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", "synthetic-ascii-key")
+    audit = AuditLog()
+    client = TestClient(create_app(api_registry, api_role="Admin", audit=audit),
+                        raise_server_exceptions=False)
+    headers = {b"X-API-Key": header}
+
+    responses = [
+        client.get("/controls", headers=headers),
+        client.patch("/controls", headers=headers, json={"values": {"temp": 1.7}}),
+    ]
+    for response in responses:
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Unauthorized"}
+    assert len(audit) == 0
+    accepted = client.get("/controls/temp", headers={"X-API-Key": "synthetic-ascii-key"})
+    assert accepted.status_code == 200
+    assert accepted.json()["value"] == 0.5
+
+
+@requires_fastapi
+@pytest.mark.parametrize("allow_anonymous", [False, True])
+@pytest.mark.parametrize("configured,header", [("\u00ff", b"\xff"), ("synthetic-\u2603", b"synthetic-\xe2\x98\x83")])
+def test_api_non_ascii_configured_keys_fail_closed_until_corrected(
+    api_registry, monkeypatch, allow_anonymous, configured, header,
+):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", configured)
+    client = TestClient(create_app(api_registry, allow_anonymous=allow_anonymous),
+                        raise_server_exceptions=False)
+    for headers in ({}, {b"X-API-Key": header}, {"X-API-Key": "synthetic-ascii-key"}):
+        response = client.get("/controls", headers=headers)
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Unauthorized"}
+
+    # The key is resolved on every request, so correcting trusted configuration
+    # restores access without weakening the configured role or enabling a fallback.
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", "synthetic-ascii-key")
+    assert client.get("/controls", headers={"X-API-Key": "synthetic-ascii-key"}).status_code == 200
+    assert client.get("/controls", headers={"X-API-Key": "incorrect-key"}).status_code == 401
 
 
 @requires_fastapi

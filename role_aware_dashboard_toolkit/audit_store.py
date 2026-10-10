@@ -152,7 +152,7 @@ class FileAuditStore(StoreReadDiagnosticsMixin, BaseAuditStore):
                 continue
             try:
                 loaded = strict_json_loads(line)
-            except ValueError as exc:
+            except (ValueError, RecursionError) as exc:
                 self._read_errors.append(
                     build_read_error(path, exc, message=f"line {line_number}: {exc}")
                 )

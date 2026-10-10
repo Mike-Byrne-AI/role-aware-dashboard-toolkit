@@ -42,3 +42,9 @@ the action permission and every affected control permission. A denial cancels
 the whole operation with visible feedback and no success audit event. An auth
 failure also cancels a pending replay. Successful application records one
 `checkpoint_replay` event and preserves sensitive values.
+
+Native replay additionally omits historically sensitive controls and values
+containing nested secret-named fields before restoration can turn them into
+visible text. The staged operation retains the source classification and checks
+current sensitivity again at application time. This browser boundary does not
+change the trusted core `apply_replay_packet()` contract.

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..decisions import decision_summary
+from .._evidence_reads import EvidenceUnavailable, warn_incomplete_evidence
 from ..security import can_mutate, has_perm
 from .review_models import build_decision_panel_preview
 from .shared import _record_actor, _record_summary_view, _render_table
@@ -13,13 +14,13 @@ def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], 
     if decision_store is None or not has_perm(ctx, "can_view_decisions", default=False):
         return
 
-    preview = build_decision_panel_preview(
-        config,
-        run,
-        checkpoint,
-        actor=_record_actor(ctx, st.session_state),
-        role=ctx.role,
-    )
+    try:
+        preview = build_decision_panel_preview(
+            config, run, checkpoint, actor=_record_actor(ctx, st.session_state), role=ctx.role, ctx=ctx,
+        )
+    except EvidenceUnavailable:
+        warn_incomplete_evidence(st)
+        return
     if preview is None:
         return
 
@@ -40,7 +41,9 @@ def _render_decision_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any], 
         st.json(decision.get("blockers", []))
 
     with st.expander("Decision Case", expanded=False):
-        st.json(_record_summary_view(decision, ctx))
+        st.json(_record_summary_view(
+            decision, ctx, getattr(config, "registry", None), source=[run, checkpoint],
+        ))
 
     if decision.get("history"):
         rows = [
