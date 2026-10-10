@@ -67,6 +67,10 @@ All later lanes must reuse these exact bytes. The hosted build produces its
 own audited artifacts from the same frozen source commit; the hosted evidence
 job downloads those artifacts rather than rebuilding them. Verify artifact
 digests against the release candidate evidence for that run and attempt.
+The Windows job also downloads the same validated artifacts, rejects download
+digest mismatches, and checks per-file hashes before and after its install
+smokes. The evidence job requires the Windows receipt to match its source SHA,
+run identifier, run attempt, and artifact hashes before recording a candidate.
 
 ## Stage on a private GitHub repository
 

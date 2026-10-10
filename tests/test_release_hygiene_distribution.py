@@ -255,7 +255,7 @@ import role_aware_dashboard_toolkit as radt
 from role_aware_dashboard_toolkit.access import AccessPolicy, InMemoryAccessStore
 from role_aware_dashboard_toolkit.access_cli import initialize_access
 from role_aware_dashboard_toolkit.guidance import read_guide, read_starter
-from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver
+from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop
 
 assert "wheel_site" in str(pathlib.Path(radt.__file__).resolve())
 assert importlib.util.find_spec("streamlit") is None
@@ -263,11 +263,12 @@ assert importlib.util.find_spec("pandas") is None
 assert importlib.util.find_spec("fastapi") is None
 assert "streamlit" not in sys.modules
 assert "authlib" not in sys.modules
-assert all(callable(api) for api in (AccessPolicy, InMemoryAccessStore, initialize_access, StreamlitIdentityResolver))
+assert all(callable(api) for api in (AccessPolicy, InMemoryAccessStore, initialize_access, StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop))
 starter = read_starter(authenticated=True)
 assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README.md", ".gitignore"}
 assert 'auth_mode="authenticated"' in starter["app.py"]
 assert "access_cli grant" in read_guide("authentication")["content"]
+assert "header_down Set-Cookie" in read_guide("deployment")["content"]
 config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
 run = radt.build_run({"temperature": 0.2}, actor="wheel-smoke")
 packet = radt.build_run_packet(run)

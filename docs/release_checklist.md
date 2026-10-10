@@ -156,6 +156,10 @@ responsibilities described in the authentication guide.
   bounded timeouts, and artifacts have one-day retention
 - the release candidate reuses the exact audited artifacts rather than
   rebuilding them in the evidence job
+- Windows installs the same downloaded `validated-dist` wheel, fails on an
+  artifact download digest mismatch, and records per-file hashes before its
+  smokes; the release evidence requires matching Windows hashes and run identity
+- Windows verifies those downloaded files remain unchanged after its smokes
 - SHA-256 digests are recorded for every uploaded artifact, along with the
   source commit, branch, run identifier, and run attempt
 - live repository settings and evidence refer to that same final commit

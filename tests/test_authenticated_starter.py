@@ -14,6 +14,11 @@ from role_aware_dashboard_toolkit import cli
 from role_aware_dashboard_toolkit.access import AccessDenied, AccessPolicy, Identity, InMemoryAccessStore
 from role_aware_dashboard_toolkit.guidance import inspect_capabilities, read_guide, read_starter
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 
 def test_authenticated_scaffold_matches_readonly_example_and_contains_no_secrets(tmp_path, capsys):
     destination = tmp_path / "shared"
@@ -33,6 +38,14 @@ def test_authenticated_scaffold_matches_readonly_example_and_contains_no_secrets
     assert json.loads(capsys.readouterr().out)["result"]["files"] == files
     assert 'auth_mode="authenticated"' in files["app.py"]
     assert 'auth_mode="demo"' in read_starter()["app.py"]
+    generated_config = tomllib.loads(
+        (destination / ".streamlit/config.toml").read_text(encoding="utf-8")
+    )
+    assert generated_config["client"]["disableDataExport"] is True
+    assert generated_config["client"]["showErrorDetails"] == "none"
+    assert generated_config["server"]["address"] == "127.0.0.1"
+    demo_config = tomllib.loads(read_starter()[".streamlit/config.toml"])
+    assert demo_config.get("client", {}).get("disableDataExport", False) is False
 
 
 def test_authentication_guide_is_discoverable_offline(capsys):
@@ -80,8 +93,13 @@ class StopPage(BaseException):
     pass
 
 
-def test_missing_configuration_stops_before_identity_or_host_data(starter, monkeypatch):
+@pytest.mark.parametrize("sign_out_pending", [False, True])
+def test_missing_configuration_stops_before_identity_or_host_data(starter, monkeypatch, sign_out_pending):
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING
+
     events = []
+    state = {"private-cache": "synthetic-private-data", "_radt_pending_replay": {"weekly_target": 99}}
+    state[_SIGN_OUT_PENDING] = sign_out_pending
 
     def broken_configuration():
         raise RuntimeError("synthetic-private-secret")
@@ -94,11 +112,12 @@ def test_missing_configuration_stops_before_identity_or_host_data(starter, monke
     monkeypatch.setattr(starter, "session_resources", lambda: events.append("host data"))
     monkeypatch.setattr(starter, "st", SimpleNamespace(
         set_page_config=lambda **kwargs: None,
-        error=lambda message: events.append(message), stop=stop,
+        error=lambda message: events.append(message), stop=stop, session_state=state,
     ))
     with pytest.raises(StopPage):
         starter.main()
     assert events == ["Access configuration is unavailable. Contact the dashboard administrator."]
+    assert state == ({_SIGN_OUT_PENDING: True} if sign_out_pending else {})
 
 
 def test_denial_does_not_build_controls_or_load_host_data(starter, monkeypatch):
@@ -124,23 +143,29 @@ def test_denial_does_not_build_controls_or_load_host_data(starter, monkeypatch):
 
 
 def test_signout_stops_before_reloading_account_resources(starter, monkeypatch):
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING
+
     events = []
 
     def stop():
         raise StopPage()
+
+    def sign_out_button(*args, **kwargs):
+        kwargs["on_click"]()
 
     monkeypatch.setattr(starter, "build_access_policy", lambda: object())
     monkeypatch.setattr(starter, "prepare_access", lambda config: events.append("identity gate"))
     monkeypatch.setattr(starter, "session_resources", lambda: events.append("host data"))
     monkeypatch.setattr(starter, "st", SimpleNamespace(
         set_page_config=lambda **kwargs: None,
-        button=lambda *args, **kwargs: True,
+        button=sign_out_button,
         session_state={"synthetic-account-data": True},
         logout=lambda: events.append("logout"), stop=stop,
     ))
     with pytest.raises(StopPage):
         starter.main()
     assert events == ["identity gate", "logout"]
+    assert starter.st.session_state == {_SIGN_OUT_PENDING: True}
 
 
 def test_authorized_render_loads_host_resources_after_gate(starter, monkeypatch):
@@ -180,8 +205,111 @@ def _live_starter(host):
     spec = importlib.util.spec_from_file_location("synthetic_live_starter", path)
     starter = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(starter)
-    starter.build_access_policy = lambda: host.policy
+
+    def access_policy():
+        if getattr(host, "configuration_error", None):
+            raise RuntimeError(host.configuration_error)
+        return host.policy
+
+    starter.build_access_policy = access_policy
+    if hasattr(host, "calls"):
+        original_resources = starter.session_resources
+        original_controls = starter.build_controls
+
+        def resources(initial_audit):
+            host.calls.append("resources")
+            return original_resources(initial_audit)
+
+        def controls():
+            host.calls.append("controls")
+            return original_controls()
+
+        starter.session_resources = resources
+        starter.build_controls = controls
     starter.main()
+
+
+def test_configuration_failure_on_rerun_discards_private_state_without_reloading_resources():
+    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    identity = Identity("synthetic-starter", "configured-account", time.time() + 3600)
+    store = InMemoryAccessStore()
+    host = SimpleNamespace(calls=[], configuration_error=None)
+    host.policy = AccessPolicy(lambda: identity, store, b"synthetic-configuration-test-key-material")
+    store.replace_grants(host.policy.identify(), ("Viewer",))
+    app = AppTest.from_function(_live_starter, args=(host,), default_timeout=15).run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert app.metric
+    previous_resources = app.session_state["_authenticated_pulse_resources"]
+    app.session_state["private-cache"] = "synthetic-private-data"
+    app.session_state["_radt_pending_replay"] = {"weekly_target": 99}
+    previous_calls = list(host.calls)
+
+    host.configuration_error = "synthetic-secret-that-must-not-reach-the-browser"
+    app.run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert [item.value for item in app.error] == [
+        "Access configuration is unavailable. Contact the dashboard administrator.",
+    ]
+    assert host.calls == previous_calls
+    assert not app.metric and not app.number_input and not app.slider
+    for key in ("_authenticated_pulse_resources", "private-cache", "_radt_pending_replay"):
+        assert key not in app.session_state
+
+    host.configuration_error = None
+    app.run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert app.metric
+    assert app.session_state["_authenticated_pulse_resources"] is not previous_resources
+    assert host.calls == previous_calls + ["resources", "controls"]
+
+
+def test_authorized_signout_failure_stays_denied_through_configuration_outage(monkeypatch):
+    import streamlit as st
+    from role_aware_dashboard_toolkit import _access_ui, streamlit_auth
+
+    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    identity = Identity("synthetic-starter", "logout-account", time.time() + 3600)
+    store = InMemoryAccessStore()
+    host = SimpleNamespace(calls=[], configuration_error=None)
+    host.policy = AccessPolicy(lambda: identity, store, b"synthetic-logout-test-key-material")
+    store.replace_grants(host.policy.identify(), ("Viewer",))
+    logout_calls = []
+
+    def failed_logout():
+        logout_calls.append(True)
+        raise RuntimeError("synthetic-provider-secret")
+
+    monkeypatch.setattr(st, "logout", failed_logout)
+    monkeypatch.setattr(streamlit_auth, "_streamlit_login_state", lambda st: True)
+    monkeypatch.setattr(_access_ui, "_streamlit_login_state", lambda st: True)
+    app = AppTest.from_function(_live_starter, args=(host,), default_timeout=15).run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert app.metric
+    previous_calls = list(host.calls)
+
+    app.button(key="_authenticated_pulse_sign_out").click().run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert logout_calls == [True]
+    assert host.calls == previous_calls
+    assert "_authenticated_pulse_resources" not in app.session_state
+    assert app.session_state[streamlit_auth._SIGN_OUT_PENDING] is True
+    assert not app.metric
+
+    host.configuration_error = "synthetic-configuration-secret"
+    app.run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert app.session_state[streamlit_auth._SIGN_OUT_PENDING] is True
+    assert host.calls == previous_calls
+
+    host.configuration_error = None
+    app.run()
+    assert not app.exception, [item.message for item in app.exception]
+    assert app.session_state[streamlit_auth._SIGN_OUT_PENDING] is True
+    assert host.calls == previous_calls
+    assert "_authenticated_pulse_resources" not in app.session_state
+    assert not app.metric
+    assert app.button(key="_radt_sign_out")
+    assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
 
 
 def test_starter_retains_session_audit_across_reruns_and_replaces_it_on_account_change():

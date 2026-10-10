@@ -91,9 +91,23 @@ def test_profile_removed_while_hidden_resets_selection_without_losing_draft_or_l
 
 
 @pytest.mark.parametrize("change", ["role", "freeze"])
-def test_retained_profile_inputs_do_not_bypass_current_role_or_freeze(change):
+def test_retained_profile_inputs_do_not_bypass_current_role_or_freeze(change, monkeypatch):
     app, host = _app()
     _hide(app)
+    store = host.config.profile_store
+    original_list, original_load = store.list_ids, store.load
+    reads = []
+
+    def tracked_list():
+        reads.append("list")
+        return original_list()
+
+    def tracked_load(profile_id):
+        reads.append("load")
+        return original_load(profile_id)
+
+    monkeypatch.setattr(store, "list_ids", tracked_list)
+    monkeypatch.setattr(store, "load", tracked_load)
     if change == "role":
         host.store.replace_grants(host.principal, ("Viewer",))
     else:
@@ -101,26 +115,45 @@ def test_retained_profile_inputs_do_not_bypass_current_role_or_freeze(change):
         host.store.compare_and_set_freeze(True, freeze.revision, host.principal)
     _healthy(app.run())
     _show(app)
-    _assert_retained(app)
     assert next(widget for widget in app.number_input if widget.label == "Workers").disabled
     events = host.audit.all_events()
-    for key in ("_radt_profile_load", "_radt_profile_save", "_radt_profile_delete"):
-        assert app.button(key=key).disabled
+    if change == "role":
+        assert not reads
+        for key in ("_radt_profile_choice", "_radt_profile_name", "_radt_active_profile_id"):
+            assert key not in app.session_state
+        assert not any(widget.key == "_radt_profile_choice" for widget in app.selectbox)
+        assert not any(widget.key == "_radt_profile_name" for widget in app.text_input)
+        assert not any(widget.key in {"_radt_profile_load", "_radt_profile_save", "_radt_profile_delete"}
+                       for widget in app.button)
+    else:
+        _assert_retained(app)
+        for key in ("_radt_profile_load", "_radt_profile_save", "_radt_profile_delete"):
+            assert app.button(key=key).disabled
     _healthy(app.run())
-    _assert_retained(app)
+    if change == "role":
+        assert not reads
+        assert app.session_state["workers"] == 23
+    else:
+        _assert_retained(app)
     assert host.audit.all_events() == events
-    assert host.config.profile_store.list_ids() == ["baseline"]
-    assert host.config.profile_store.load("baseline")["values"] == {"workers": 20}
+    assert original_list() == ["baseline"]
+    assert original_load("baseline")["values"] == {"workers": 20}
     if change == "role":
         host.store.replace_grants(host.principal, ("Admin",))
     else:
         freeze = host.store.read_freeze()
         host.store.compare_and_set_freeze(False, freeze.revision, host.principal)
     _healthy(app.run())
+    if change == "role":
+        # Regranting access cannot resurrect metadata cleared on revocation.
+        assert app.selectbox(key="_radt_profile_choice").value == "(none)"
+        assert app.text_input(key="_radt_profile_name").value == "my_profile"
+        _healthy(app.selectbox(key="_radt_profile_choice").select("baseline").run())
     _healthy(app.button(key="_radt_profile_load").click().run())
     assert app.number_input(key="workers").value == 20
     assert app.selectbox(key="_radt_profile_choice").value == "baseline"
-    assert app.text_input(key="_radt_profile_name").value == "Next shift draft"
+    expected_name = "my_profile" if change == "role" else "Next shift draft"
+    assert app.text_input(key="_radt_profile_name").value == expected_name
 
 
 @pytest.mark.parametrize("hidden", [False, True])

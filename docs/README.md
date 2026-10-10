@@ -9,6 +9,7 @@ Start with the path closest to what you are building.
 - [Quickstart](quickstart.md) — dependency-free library walkthrough
 - [Dashboard tools](dashboard_tools.md) — controls, roles, profiles, and audit
 - [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze and private provisioning
+- [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — one-host HTTPS recipe, cookie handling and installed-artifact acceptance
 - [Examples](../examples/README.md) — runnable core and Streamlit examples
 - [What Role-Aware Dashboard Toolkit is and is not](what_role_aware_dashboard_toolkit_is_and_is_not.md) — scope
 

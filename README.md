@@ -11,6 +11,13 @@ for profiles, audit history, checkpoints, comparisons and replay previews.
 The core package has no required third-party dependencies. Streamlit, FastAPI,
 and pandas support are isolated behind optional extras.
 
+This is an early beta. The authenticated starter is intended for a single-host
+dashboard with an external sign-in provider and explicit role assignments.
+Evaluate it with synthetic data, then complete the deployment acceptance checks
+before admitting private data or real users. Tests and example deployments have
+limited scope; they do not establish a security certification or comparative
+advantage over other dashboard tools. See the [security and update policy](SECURITY.md).
+
 ## Why Role-Aware Dashboard Toolkit
 
 The toolkit is useful when several operator workflows need to follow the same
@@ -71,7 +78,10 @@ the toolkit's Python source, offline guides and starter; the source checkout is
 not needed to run the installed guide or create a consumer project. The supported
 Streamlit baseline is 1.65.0. For verified login, install `.[auth]` and follow the
 [authentication guide](role_aware_dashboard_toolkit/resources/guides/authentication.md),
-including isolated dependency and browser-session acceptance checks.
+then the [single-host deployment guide](role_aware_dashboard_toolkit/resources/guides/deployment.md),
+including isolated dependency and browser-session acceptance checks. The toolkit
+does not supply managed hosting or an identity provider. A source test run does
+not establish that a particular shared deployment is ready for private data.
 
 Only after a separate PyPI release:
 

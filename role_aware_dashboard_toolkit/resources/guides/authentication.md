@@ -1,5 +1,9 @@
 # Verified sign-in, assigned roles and shared freeze
 
+For the single-host HTTPS reference configuration and installed-artifact
+acceptance sequence, read `python -m role_aware_dashboard_toolkit guide deployment`
+after completing this identity and grant setup.
+
 For a shared dashboard, create the authenticated starter:
 
 ```powershell
@@ -170,7 +174,8 @@ or protected data, then renders assigned-role selection and shared freeze.
 Account changes clear session state before host resources are rebuilt. Admin
 has `can_manage_freeze`; other roles cannot change the shared switch. Freeze
 blocks protected mutations, including Admin mutations, while its administrator
-can still unfreeze. UI state, imported profiles and role-name inputs do not
+can still unfreeze. It does not block permitted reads and is not a maintenance
+access barrier. UI state, imported profiles and role-name inputs do not
 override server grants or freeze. Stale freeze submissions require a refresh.
 
 Use `has_perm(ctx, permission)` immediately before private reads and
@@ -207,6 +212,35 @@ before host data is loaded.
 Recovery sign-out runs before the next access check, so restoring a grant while
 the denied page is open does not discard the user's sign-out click.
 
+Custom Streamlit OIDC apps should use the same session boundaries as the starter:
+
+```python
+from role_aware_dashboard_toolkit.streamlit_auth import (
+    clear_authenticated_state, sign_out_and_stop,
+)
+
+# Render this after the access gate. The callback runs before the next gate.
+st.button("Sign out", on_click=sign_out_and_stop, args=(st,))
+
+# In an application configuration-failure handler, before stopping:
+# clear_authenticated_state(st)
+# st.error("Access configuration is unavailable. Contact the administrator.")
+# st.stop()
+```
+
+`clear_authenticated_state(st)` removes all application session values while
+retaining a pending sign-out denial. It does not clear provider cookies or grant
+access. `sign_out_and_stop(st)` clears application state, requests provider logout
+and stops execution. If provider logout fails, the current Streamlit session stays
+denied across reruns until signed-out state is confirmed. This cannot revoke a
+provider cookie, a new Streamlit session, or another browser's session. Treat an
+unconfirmed logout as an operational failure and resolve it with the provider;
+do not describe it as global revocation. Using a plain `session_state.clear()` in
+an error handler would erase this pending denial marker, so use the helper.
+Custom identity hosts own their provider logout and new-session recovery. An
+unrelated Streamlit signed-out status cannot release a custom host's pending
+denial.
+
 ## Data handling and acceptance checks
 
 The database stores keyed opaque principal IDs, role names, and current freeze
@@ -215,8 +249,13 @@ nor token is written to this database. Opaque IDs are still linkable personal da
 not anonymization. Protect the database, key and backups, retain them only as
 needed, and keep them out of profiles and exports. Key rotation changes every
 principal ID and requires reprovisioning. Backup restoration can restore revoked
-grants and old freeze state; review both before reopening access. The current
-freeze row is not a complete administrative audit history.
+grants and old freeze state. Keep the dashboard offline throughout restoration
+and grant reconciliation. Before reopening access, reconcile every restored
+grant against the current protected record of grants and revocations, enable
+freeze, and verify revoked accounts cannot read protected data. If that record
+is missing or incomplete, keep access closed until the intended grants can be
+established. Freeze alone still permits reads. The current freeze row is not a
+complete administrative audit history.
 
 Streamlit itself retains provider claims in a signed browser identity cookie and
 session memory. Version 1.65.0 also stores returned ID/access tokens in a separate

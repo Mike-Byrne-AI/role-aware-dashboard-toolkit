@@ -79,7 +79,8 @@ _ARTIFACTS: dict[str, DistributionArtifact] = {
         display_name="Role-Aware Dashboard Toolkit authenticated Streamlit UI",
         family="ui",
         extra_names=("auth",),
-        docs_paths=("role_aware_dashboard_toolkit/resources/guides/authentication.md",),
+        docs_paths=("role_aware_dashboard_toolkit/resources/guides/authentication.md",
+                    "role_aware_dashboard_toolkit/resources/guides/deployment.md"),
         description="Optional OIDC login with server-owned role grants and shared freeze.",
     ),
     "pandas": DistributionArtifact(

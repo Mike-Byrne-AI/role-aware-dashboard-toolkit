@@ -4,6 +4,21 @@
 
 Initial release candidate of Role-Aware Dashboard Toolkit.
 
+- Authenticated starter failures clear private session data without discarding a
+  pending logout denial. Shared sign-out and cleanup helpers keep failed provider
+  logout from resuming the same session on a later rerun.
+- Access initialization and role-switch audit failures deny with generic messages;
+  freeze updates whose audit write fails retain the committed state and report
+  unconfirmed audit recording. Malformed freeze revisions deny protected writes.
+- Authenticated profile menus require profile authority before reading metadata,
+  and saved-value previews recheck their separate permissions before display.
+- Authenticated scaffolds disable detailed browser errors and native exports;
+  project creation explains demo versus authenticated setup. An installed
+  deployment guide covers one-host HTTPS, cookie handling and actual-provider
+  acceptance without claiming that local source tests establish deployment safety.
+- Windows release validation consumes the same audited wheel and source archive
+  as the release candidate, with source/run-bound SHA-256 receipts.
+
 - Typed dashboard controls with explicit roles, per-control permissions,
   write policy, finite numeric validation, and sensitive-value handling.
 - Profiles and audit history with detached records, strict JSON persistence,

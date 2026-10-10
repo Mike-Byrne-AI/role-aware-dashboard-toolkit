@@ -96,6 +96,7 @@ _PUBLIC_PACKAGE_MEMBERS = frozenset(
         "role_aware_dashboard_toolkit/streamlit_auth.py",
         "role_aware_dashboard_toolkit/_access_ui.py",
         "role_aware_dashboard_toolkit/resources/guides/authentication.md",
+        "role_aware_dashboard_toolkit/resources/guides/deployment.md",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/app.py",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/config.toml",
         "role_aware_dashboard_toolkit/resources/authenticated_starter/AGENTS.md",

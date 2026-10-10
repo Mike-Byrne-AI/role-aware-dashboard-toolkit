@@ -63,11 +63,13 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
                 "Identity", "AccessDenied", "AccessPolicy", "principal_id",
                 "AccessStore", "AccessStoreError", "FreezeConflict", "FreezeState",
                 "InMemoryAccessStore", "SQLiteAccessStore", "prepare_access",
-                "StreamlitIdentityResolver", "render_sign_in", "bind_audit_identity",
+                "StreamlitIdentityResolver", "render_sign_in", "sign_out_and_stop",
+                "clear_authenticated_state", "bind_audit_identity",
                 "can_mutate", "read_identity_key", "initialize_access", "ProvisioningError",
             ),
             description="Verified identities and server-owned grants from access and access_store; "
-            "prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC; "
+            "prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC "
+            "and fail-closed session cleanup/sign-out; "
             "access_audit binds actors; security.can_mutate guards authenticated record writes; "
             "access_cli provides trusted local provisioning. "
             "Import from these modules; the root namespace stays unchanged.",

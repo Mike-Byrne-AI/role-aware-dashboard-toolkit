@@ -41,7 +41,7 @@ def test_catalog_and_every_topic_are_available_from_unrelated_directory(tmp_path
     topics = catalog["result"]["topics"]
     assert [item["id"] for item in topics] == [
         "start", "controls", "appearance", "sections", "plugins", "permissions",
-        "authentication", "profiles", "runs", "telemetry", "api", "troubleshooting",
+        "authentication", "deployment", "profiles", "runs", "telemetry", "api", "troubleshooting",
     ]
     for item in topics:
         code, response = _command("guide", item["id"], cwd=tmp_path)
@@ -107,6 +107,29 @@ def test_init_dry_run_and_creation_match_readonly_example(tmp_path):
     assert refused["error"]["code"] == "DESTINATION_EXISTS"
     assert before == {item.relative_to(destination).as_posix(): item.read_bytes()
                       for item in destination.rglob("*") if item.is_file()}
+
+
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_init_reports_auth_boundary_and_setup_before_launch(tmp_path, capsys, authenticated):
+    destination = tmp_path / "dashboard"
+    args = ["init", str(destination), "--dry-run", *(["--auth"] if authenticated else [])]
+    assert cli.main([*args, "--format", "json"]) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["auth_mode"] == ("authenticated" if authenticated else "demo")
+    assert result["setup_required"] is authenticated
+    assert cli.main(args) == 0
+    output = capsys.readouterr().out
+    if authenticated:
+        assert result["setup_command"] == "python -m role_aware_dashboard_toolkit guide authentication"
+        assert result["setup_command"] in output
+        assert "access stays locked until setup is complete" in output
+        assert "protected secrets and explicit account grants" in output
+        assert result["run_command"] not in output
+    else:
+        assert "self-selected roles do not authenticate users" in output
+        assert "init --auth" in output
+        assert result["run_command"] in output
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize("kind", ["empty_directory", "project", "file"])
@@ -210,7 +233,7 @@ def test_module_helpers_do_not_expand_root_exports():
     assert "read_guide" not in radt.__all__
     assert {topic["id"] for topic in list_guide_topics()} == {
         "start", "controls", "appearance", "sections", "plugins", "permissions",
-        "authentication", "profiles", "runs", "telemetry", "api", "troubleshooting",
+        "authentication", "deployment", "profiles", "runs", "telemetry", "api", "troubleshooting",
     }
 
 

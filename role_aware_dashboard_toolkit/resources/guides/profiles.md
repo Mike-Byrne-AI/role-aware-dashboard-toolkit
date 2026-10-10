@@ -15,6 +15,16 @@ These core helpers operate on dictionaries; a host using them directly owns
 authorization. The native dashboard profile menu enforces its action and
 per-control permissions.
 
+In authenticated mode, opening the profile menu requires `can_load_profiles` or
+`can_save_profiles`. Without either permission, it does not create or read a
+profile store, and clears stale profile selection and replacement state. Access
+is rechecked after reads and before showing their results. Save permission also
+allows viewing existing profile names and metadata needed to select parents,
+replace profiles and delete them; it does not permit loading or previewing saved
+values. Value previews still require both metrics-view and profile-load
+permission. Scope shared stores to the intended accounts or tenants in the host:
+these permissions do not provide row-level ownership or tenant filtering.
+
 In the native menu, **Save** creates a new name immediately. Reusing an existing
 name first offers **Replace saved profile** and **Cancel replacement**; the
 stored profile changes only after confirmation. Changing the name, selection,

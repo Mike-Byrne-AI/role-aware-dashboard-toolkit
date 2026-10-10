@@ -28,12 +28,12 @@ ACTION_PINS = {
     "actions/upload-artifact": (
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
         "v7.0.1",
-        3,
+        4,
     ),
     "actions/download-artifact": (
         "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "v8.0.1",
-        1,
+        3,
     ),
 }
 
@@ -79,7 +79,12 @@ def test_ci_actions_are_pinned_to_reviewed_full_revisions():
     assert len(candidate_uses) == sum(expected_uses.values())
     assert all_uses == expected_refs
     assert not re.search(r"uses\s*:\s+actions/[^@\s]+@v\d", workflow)
-    assert "digest-mismatch: error" in workflow
+    downloads = [
+        step for step in re.split(r"\n      - ", workflow)
+        if "uses: actions/download-artifact@" in step
+    ]
+    assert len(downloads) == ACTION_PINS["actions/download-artifact"][2]
+    assert all("digest-mismatch: error" in step for step in downloads)
 
 
 def test_ci_checkouts_do_not_persist_credentials():
