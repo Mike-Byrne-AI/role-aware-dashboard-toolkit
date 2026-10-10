@@ -43,6 +43,10 @@ reject the non-standard `NaN`, `Infinity`, and `-Infinity` constants, as well as
 numeric exponents too large to remain finite (for example, `1e9999`). Rejected
 store records are skipped and reported through `read_errors`.
 
+Audit JSONL records are separated by physical LF newlines (including CRLF).
+Unicode line separators inside JSON strings remain part of the event text and
+do not create extra records or change diagnostic line numbers.
+
 Ordinary file and in-memory store writes also reject non-finite numbers. A file
 record is serialized successfully before its existing path is replaced, so a
 rejected write leaves the prior good record intact. Diagnostic and telemetry

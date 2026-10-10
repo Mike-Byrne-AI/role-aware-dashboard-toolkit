@@ -4,6 +4,12 @@
 
 Initial release candidate of Role-Aware Dashboard Toolkit.
 
+- Audit JSONL reads preserve Unicode separators inside event text and report
+  corrupt records using physical line numbers.
+- Run comparisons preserve explicitly empty latest snapshots, and profile,
+  run and ledger diffs include additions/removals of null-valued controls while
+  retaining the existing `from`/`to` result format.
+
 - Typed dashboard controls with explicit roles, per-control permissions,
   write policy, finite numeric validation, and sensitive-value handling.
 - Profiles and audit history with detached records, strict JSON persistence,

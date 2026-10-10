@@ -124,6 +124,48 @@ def test_audit_log_export_jsonl_emits_strict_json_for_non_finite_values():
     assert "Infinity" not in exported
 
 
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029", "\n", "\r\n"])
+def test_file_audit_store_round_trips_string_line_separators(tmp_path, separator):
+    path = tmp_path / "audit.jsonl"
+    store = FileAuditStore(str(path))
+    events = [
+        {"type": "before", "detail": "ordinary text"},
+        {"type": "multiline", "detail": {"message": f"first{separator}second"}},
+        {"type": "after", "detail": "more ordinary text"},
+    ]
+
+    store.append_many(events)
+
+    assert store.read_all() == events
+    assert store.read_errors == []
+
+
+@pytest.mark.parametrize("record_separator", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_file_audit_store_reports_physical_line_after_unicode_text(
+    tmp_path, record_separator
+):
+    path = tmp_path / "audit.jsonl"
+    before = {"type": "before", "detail": "first\u0085second\u2028third\u2029fourth\nlast"}
+    after = {"type": "after", "detail": "healthy neighboring record"}
+    path.write_bytes(
+        record_separator.join(
+            [
+                json.dumps(before, ensure_ascii=False),
+                "",
+                "{not json",
+                json.dumps(after),
+                "",
+            ]
+        ).encode("utf-8")
+    )
+    store = FileAuditStore(str(path))
+
+    assert store.read_all() == [before, after]
+    assert len(store.read_errors) == 1
+    assert store.read_errors[0]["error_type"] == "JSONDecodeError"
+    assert store.read_errors[0]["message"].startswith("line 3:")
+
+
 def test_file_audit_store_records_corrupt_jsonl_read_errors(tmp_path):
     path = tmp_path / "audit.jsonl"
     valid = {"schema_version": AUDIT_EVENT_SCHEMA_VERSION, "type": "good", "ts": "now"}

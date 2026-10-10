@@ -46,6 +46,11 @@ Builders return new dictionaries. Recorded checkpoints can be compared,
 converted to replay previews, stored, exported as packets, or assembled into a
 ledger.
 
+Run comparisons use the latest control snapshot even when it is empty. An empty
+snapshot records the removal of every control; it does not fall back to the
+initial settings. Direct callers passing older/partial records retain the
+initial-control fallback when `latest_controls` is missing or `None`.
+
 ## Guardrails
 
 - replay data comes from explicit recorded state

@@ -28,6 +28,12 @@ values and values from removed controls are hidden. Previewing does not change
 live state, run callbacks, save records or add audit events. Load rereads the
 profile and checks current permissions before applying it.
 
+`profile_diff(before, after)` includes value changes and added or removed keys,
+including keys whose value is `None`. Its existing `{"from": ..., "to": ...}`
+format uses `None` for an absent side. Adding or removing a null-valued key
+therefore produces `{"from": None, "to": None}`; use the source mappings to
+determine direction. A key present with `None` on both sides is unchanged.
+
 `InMemoryProfileStore` is session-local when retained by the host.
 `FileProfileStore(profile_dir)` enables durable local JSON only when the host
 explicitly chooses it. Profiles are not a credential store. Preserve corrupt

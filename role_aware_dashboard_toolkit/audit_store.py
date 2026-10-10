@@ -146,7 +146,8 @@ class FileAuditStore(StoreReadDiagnosticsMixin, BaseAuditStore):
         if rendered is None:
             return []
         rows: list[dict[str, Any]] = []
-        for line_number, line in enumerate(rendered.splitlines(), start=1):
+        # JSONL records end at LF; Unicode line separators can occur in strings.
+        for line_number, line in enumerate(rendered.split("\n"), start=1):
             if not line.strip():
                 continue
             try:

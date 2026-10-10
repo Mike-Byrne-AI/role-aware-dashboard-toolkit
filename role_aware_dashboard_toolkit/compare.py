@@ -45,13 +45,15 @@ def compare_runs(
 ) -> dict[str, Any]:
     """Compare runs, optionally using telemetry from each final checkpoint.
 
-    An empty final checkpoint is not replaced by an older sample. Sample
-    timestamps and checkpoint IDs identify which observations were compared.
+    An empty latest control snapshot is authoritative. Initial controls are
+    used only when the latest snapshot is missing or None. An empty final
+    checkpoint is not replaced by an older telemetry sample. Sample timestamps
+    and checkpoint IDs identify which observations were compared.
     """
     left_summary = run_summary(left)
     right_summary = run_summary(right)
-    left_controls = dict(left.get("latest_controls") or left.get("initial_controls") or {})
-    right_controls = dict(right.get("latest_controls") or right.get("initial_controls") or {})
+    left_controls = _run_controls(left)
+    right_controls = _run_controls(right)
     comparison = {
         "left_run": left_summary,
         "right_run": right_summary,
@@ -71,6 +73,13 @@ def compare_runs(
             **_compare_telemetry(left_checkpoint, right_checkpoint),
         }
     return comparison
+
+
+def _run_controls(run: Mapping[str, Any]) -> dict[str, Any]:
+    controls = run.get("latest_controls")
+    if controls is None:
+        controls = run.get("initial_controls")
+    return dict(controls or {})
 
 
 def _final_checkpoint(run: Mapping[str, Any]) -> dict[str, Any]:
