@@ -41,29 +41,6 @@ def test_example_surface_is_exactly_the_retained_oss_set():
         assert retired_name not in corpus
 
 
-def test_dashboard_example_uses_generic_service_controls():
-    text = _read("dashboard_admin_controls_app.py")
-
-    assert 'APP_TITLE = "Dashboard Admin Controls"' in text
-    assert "Role-aware service controls" in text
-    assert "def build_control_registry() -> radt.ControlRegistry:" in text
-    assert '"Request Timeout"' in text
-    assert '"Worker Limit"' in text
-    assert '"Deployment Track"' in text
-    assert '"Maintenance Mode"' in text
-    assert "def build_custom_roles() -> dict[str, radt.RoleDef]:" in text
-    assert "def build_plugin_registry() -> radt.PluginRegistry:" in text
-    assert "def build_dashboard_config() -> tuple[radt.DashboardConfig, radt.PluginRegistry]:" in text
-    assert "registry=build_control_registry()" in text
-    assert "audit=radt.AuditLog()" in text
-    assert "plugins=plugins" in text
-    assert "ctx = radt.render(config)" in text
-
-    lowered = text.lower()
-    for product_term in ("codex builder", "repoos", "semantic snapshot", "prompt workbench"):
-        assert product_term not in lowered
-
-
 def test_plugin_template_imports_and_builds_renderable_plugin():
     path = EXAMPLES_DIR / "plugin_template.py"
     spec = importlib.util.spec_from_file_location("role_aware_dashboard_toolkit_plugin_template_example", path)

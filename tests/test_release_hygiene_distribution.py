@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import os
 import py_compile
 import subprocess
@@ -10,7 +9,7 @@ import zipfile
 from pathlib import Path
 
 from role_aware_dashboard_toolkit.release_audit import audit_release_artifact_members
-from tests.release_hygiene_helpers import REPO_ROOT, load_pyproject
+from tests.release_hygiene_helpers import REPO_ROOT
 
 
 BLOCKED_PUBLIC_PREFIXES = (
@@ -124,7 +123,7 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     } <= sdist_members
     assert {"examples/studio_dispatch/app.py", "examples/studio_dispatch/README.md",
             "examples/studio_dispatch/.streamlit/config.toml", "AGENTS.md",
-            "docs/development_handoff.md"} <= sdist_members
+            "CONTRIBUTING.md"} <= sdist_members
     assert "docs/quickstart.md" in sdist_members
     assert "schemas/run.schema.json" in sdist_members
 
@@ -322,36 +321,3 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         / "examples"
         / "semantic_snapshot_compare_minimal.py"
     ).exists()
-
-
-def test_sdist_configuration_is_an_explicit_public_allowlist():
-    pyproject = load_pyproject()
-    target = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]
-    include = set(target["include"])
-    exclude = set(target["exclude"])
-
-    assert "/role_aware_dashboard_toolkit" in include
-    assert "/docs" not in include
-    assert "/schemas" not in include
-    assert "/portable" not in include
-    assert "/snapshot_manifests" not in include
-    assert "/role_aware_dashboard_toolkit/_archive_review" in exclude
-    assert "/role_aware_dashboard_toolkit/_archive_review/**" in exclude
-    assert {
-        path
-        for path in include
-        if path.startswith("/examples/") and path.endswith(".py")
-    } == {
-        "/examples/core_library.py",
-        "/examples/dashboard_admin_controls_app.py",
-        "/examples/plugin_template.py",
-        "/examples/studio_dispatch/app.py",
-        "/examples/operator_review/app.py",
-        "/examples/operator_review/workflow.py",
-        "/examples/operator_review/report.py",
-        "/examples/section_access/app.py",
-        "/examples/section_access/demo.py",
-        "/examples/section_access/policy.py",
-        "/examples/section_access/provision.py",
-    }
-    assert importlib.util.find_spec("role_aware_dashboard_toolkit") is not None

@@ -1,17 +1,40 @@
 # Role-Aware Dashboard Toolkit documentation
 
-Start with the path closest to what you are building.
+You can use the dashboard without learning every record type or release tool.
+Start with the main workflow, then consult the reference pages as needed.
 
-## Get started
+## First reading path
 
-- [Root README](../README.md) — project overview and first dashboard
-- [Installed assistant guidance](../role_aware_dashboard_toolkit/resources/guides/start.md) — offline handbook and starter commands
-- [Quickstart](quickstart.md) — dependency-free library walkthrough
-- [Dashboard tools](dashboard_tools.md) — controls, roles, profiles, and audit
-- [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze and private provisioning
-- [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — one-host HTTPS recipe, cookie handling and installed-artifact acceptance
-- [Examples](../examples/README.md) — runnable core and Streamlit examples
-- [What Role-Aware Dashboard Toolkit is and is not](what_role_aware_dashboard_toolkit_is_and_is_not.md) — scope
+1. [Root README](../README.md) — what the toolkit does and a first dashboard.
+2. [Dashboard tools](dashboard_tools.md) — controls, roles, profiles, and audit.
+3. [Operator Review Lab](../examples/operator_review/README.md) — follow a run from
+   baseline through comparison, human review, and export using synthetic data.
+4. [Architecture scope](../ARCHITECTURE_SCOPE.md) — how the layers fit together
+   and what the host application owns.
+
+For use without a UI, start with the [core quickstart](quickstart.md) instead.
+The [examples index](../examples/README.md) also covers Studio Dispatch for UI
+customization and the Access Lab for section permissions.
+
+## Repository map
+
+| Location | Purpose |
+| --- | --- |
+| `role_aware_dashboard_toolkit/` | Library source: controls and state, optional UI/API adapters, records and stores |
+| `role_aware_dashboard_toolkit/resources/` | Offline guides and starter apps included in an installed package |
+| `examples/` | Runnable applications with synthetic data |
+| `tests/` | Regression coverage for the library and examples |
+| `docs/` | Usage and contract references, plus maintainer release instructions |
+| `tools/` and `.github/workflows/` | Local release checks and continuous integration |
+
+The offline guides support installed users who do not have this source tree.
+Discover them with `python -m role_aware_dashboard_toolkit guide start`.
+
+## Build and deploy an application
+
+- [Installed guidance](../role_aware_dashboard_toolkit/resources/guides/start.md) — capability discovery and starter commands
+- [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze, and private provisioning
+- [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS setup and deployment acceptance
 
 ## API and extension points
 
@@ -21,37 +44,36 @@ Start with the path closest to what you are building.
 - [Telemetry contract](telemetry_contract.md)
 - [Shared store patterns](shared_store_patterns.md)
 
-## Operational records
+## Runs and exported evidence
 
 - [Run model](run_model.md)
-- [Replay](replay.md)
-- [Replay contract](replay_contract.md)
-- [Team operations](team_ops.md)
-- [Decision model](decision_model.md)
-- [Operator memory](operator_memory.md)
-- [Caseboard](caseboard.md)
-- [Governance](governance.md)
-
-## Protocol
-
+- [Replay and its application contract](replay.md)
 - [Protocol overview](protocol/overview.md)
 - [Packets](protocol/packets.md)
 - [Ledgers](protocol/ledger.md)
 
-## Development
+## Optional review workflows
 
-- [Development handoff](development_handoff.md) — current checkout, example and release status
+Read these when your application needs the corresponding records or store-backed
+panels. They are not prerequisites for a basic dashboard.
 
-## Release
+- [Team operations](team_ops.md) — comments, assignments, signoffs, and handoffs
+- [Decision model](decision_model.md) — derive review state from recorded evidence
+- [Operator memory](operator_memory.md) — notes and incident timelines
+- [Caseboard](caseboard.md) — group related evidence into a case
+- [Governance](governance.md) — review policy checks and blocked actions
 
-- [Distribution reference](distribution.md)
-- [Release strategy](release_strategy.md)
-- [Release audit](release_audit.md)
+## Contributing and releasing
+
+Start with [CONTRIBUTING.md](../CONTRIBUTING.md) to work on the library.
+The following references are for maintainers preparing a release:
+
+- [Distribution reference](distribution.md) — generated package and extras metadata
+- [Release audit](release_audit.md) — generated release manifest summary
 - [OSS boundary](oss_boundary.md)
-- [Release checklist](release_checklist.md)
-- [Publication runbook](release_runbook.md)
+- [Release checklist](release_checklist.md) — source, build, and installation checks
+- [Publication runbook](release_runbook.md) — staging, hosted verification, and publication order
 
-## Architecture boundary
-
-Architecture decisions live in
-[ARCHITECTURE_SCOPE.md](../ARCHITECTURE_SCOPE.md).
+The [public API reference](public_api.md), distribution reference, and release
+audit are generated from code and checked for synchronization; edit their
+generators when changing those contracts.

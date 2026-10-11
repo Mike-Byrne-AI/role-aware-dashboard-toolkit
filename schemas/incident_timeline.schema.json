@@ -4,8 +4,8 @@
   "type": "object",
   "required": ["schema_version", "event_type", "timeline_id", "run_id", "generated_at", "events", "summary"],
   "properties": {
-    "schema_version": {"type": "integer"},
-    "event_type": {"const": "incident_timeline"},
+    "schema_version": {"type": "integer", "const": 1},
+    "event_type": {"const": "incident_timeline", "type": "string"},
     "timeline_id": {"type": "string"},
     "run_id": {"type": "string"},
     "generated_at": {"type": "string"},

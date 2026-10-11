@@ -74,4 +74,6 @@ It captures:
 - `allowed_next_actions`
 - `history`
 
-See `schemas/governance.schema.json` for the workbench schema snapshot.
+See the [governance JSON schema](../schemas/governance.schema.json) for the record
+contract and the [protocol overview](protocol/overview.md#json-schemas) for its
+validation scope and runtime compatibility differences.

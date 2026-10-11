@@ -9,6 +9,8 @@ import sys
 import tarfile
 import zipfile
 
+from role_aware_dashboard_toolkit import __version__
+
 
 TOPICS = ("start", "controls", "appearance", "sections", "plugins", "permissions",
           "profiles", "runs", "telemetry", "api", "troubleshooting")
@@ -60,4 +62,4 @@ print(json.dumps({'version': radt.__version__, 'ok': True}))
                             encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert json.loads(result.stdout) == {"version": "0.1.0", "ok": True}
+    assert json.loads(result.stdout) == {"version": __version__, "ok": True}

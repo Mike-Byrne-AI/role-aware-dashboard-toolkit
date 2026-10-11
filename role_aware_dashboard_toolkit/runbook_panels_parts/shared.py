@@ -16,7 +16,7 @@ def _render_table(st: Any, rows: Any) -> None:
     if pandas is None:
         st.json(rows)
         return
-    st.dataframe(pandas.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pandas.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def _parse_tags(raw: Any) -> list[str]:

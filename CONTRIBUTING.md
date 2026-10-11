@@ -2,8 +2,8 @@
 
 Contributions should keep the dashboard library usable across applications.
 
-See the [development handoff](docs/development_handoff.md) for the active
-checkout and the Studio Dispatch example.
+Use the [documentation map](docs/README.md) to find the relevant guide or example,
+and [architecture scope](ARCHITECTURE_SCOPE.md) for the library's boundaries.
 
 ## Development setup
 
@@ -14,13 +14,19 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -c "import role_aware_dashboard_toolkit as r; print(r.__file__)"
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache
 ```
 
-Create `.venv` only when it does not already exist. On Linux or macOS, use
-`.venv/bin/python` for the same commands. Do not enable system site packages in
-a new environment. Reinstall `.[dev]` after dependency changes; this upgrades
+The printed package path must resolve inside this checkout; an older installed
+wheel can otherwise give misleading test results.
+
+Create `.venv` only when it does not already exist. On Linux or macOS with bash
+or zsh, use `export PYTHONDONTWRITEBYTECODE=1` instead of the PowerShell
+environment assignment, and `.venv/bin/python` instead of
+`.\.venv\Scripts\python.exe`. Do not enable system site packages in a new
+environment. Reinstall `.[dev]` after dependency changes; this upgrades
 tools that no longer meet the declared floors, including Twine 7's metadata
 reader. For a release, use the fresh environment in the release checklist.
 

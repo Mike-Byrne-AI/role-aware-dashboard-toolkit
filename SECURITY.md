@@ -46,6 +46,10 @@ public issues. In a private vulnerability report, include:
 Security fixes should include a regression test and coordinated disclosure
 appropriate to the affected users.
 
+If you have a fix for a suspected vulnerability, report it privately first.
+Coordinate with maintainers before opening a public pull request or publishing
+reproduction details.
+
 ## Deployment responsibilities
 
 Demo dashboard roles do not authenticate users. The optional authenticated mode

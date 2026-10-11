@@ -22,7 +22,7 @@ permissions come from the active role, rather than a union of all assigned roles
 
 ## Explore the local mock
 
-Use the [development setup](../../docs/development_handoff.md), then run from
+Use the [development setup](../../CONTRIBUTING.md#development-setup), then run from
 the repository root:
 
 ```powershell

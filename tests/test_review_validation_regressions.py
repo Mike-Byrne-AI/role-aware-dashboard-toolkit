@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
 import pytest
 
 import role_aware_dashboard_toolkit as radt
@@ -25,9 +26,8 @@ def _skewed_ledger():
 
 
 def _schema_errors(record_type, record):
-    jsonschema = pytest.importorskip("jsonschema")
     path = Path(__file__).parents[1] / "schemas" / f"{record_type}.schema.json"
-    return list(jsonschema.Draft202012Validator(json.loads(path.read_text())).iter_errors(record))
+    return list(Draft202012Validator(json.loads(path.read_text())).iter_errors(record))
 
 
 @pytest.mark.parametrize("field,invalid", [

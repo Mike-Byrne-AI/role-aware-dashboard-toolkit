@@ -134,7 +134,7 @@ def render_audit_panel(
             ]
             radt = pandas.DataFrame(display_events)
             display_cols = [c for c in ["ts", "type", "key", "old", "new", "role", "detail", "source"] if c in radt.columns]
-            st.dataframe(radt[display_cols], use_container_width=True, hide_index=True)
+            st.dataframe(radt[display_cols], width="stretch", hide_index=True)
 
         st.subheader("Replay Preview")
         st.json(project_record(audit.replay_plan(limit=replay_limit), registry))

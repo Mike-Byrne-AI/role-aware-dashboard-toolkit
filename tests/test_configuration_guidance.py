@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from role_aware_dashboard_toolkit import ControlRegistry, DashboardConfig, DashboardSections
+from role_aware_dashboard_toolkit import ControlRegistry, DashboardConfig, DashboardSections, __version__
 from role_aware_dashboard_toolkit.appearance import build_streamlit_theme_toml, validate_dashboard_appearance
 from role_aware_dashboard_toolkit.guidance import read_guide
 from role_aware_dashboard_toolkit.sections import section_visible
@@ -15,7 +15,7 @@ def assert_guided(exc, code, topic):
     record = exc.diagnostic
     assert record["code"] == code
     assert record["guide_topic"] == topic
-    assert record["toolkit_version"] == "0.1.0"
+    assert record["toolkit_version"] == __version__
     assert record["operation"] and record["effect"]
     assert record["guide_command"] in str(exc)
     assert read_guide(topic)["content"]

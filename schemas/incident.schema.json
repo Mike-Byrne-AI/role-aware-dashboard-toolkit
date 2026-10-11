@@ -4,14 +4,14 @@
   "type": "object",
   "required": ["schema_version", "event_type", "incident_id", "ts", "run_id", "title", "severity", "status"],
   "properties": {
-    "schema_version": {"type": "integer"},
-    "event_type": {"const": "incident"},
+    "schema_version": {"type": "integer", "const": 1},
+    "event_type": {"const": "incident", "type": "string"},
     "incident_id": {"type": "string"},
     "ts": {"type": "string"},
     "run_id": {"type": "string"},
     "title": {"type": "string"},
     "summary": {"type": "string"},
-    "severity": {"type": "string"},
-    "status": {"type": "string"}
+    "severity": {"type": "string", "enum": ["info", "low", "medium", "high", "critical"]},
+    "status": {"type": "string", "enum": ["open", "monitoring", "mitigated", "closed"]}
   }
 }

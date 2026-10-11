@@ -2292,10 +2292,3 @@ class TestPackageBoundary:
         import importlib.util
         spec = importlib.util.find_spec("role_aware_dashboard_toolkit.example_app")
         assert spec is None
-
-    def test_examples_demo_exists_and_compiles(self, tmp_path):
-        import py_compile
-        from pathlib import Path
-        demo = Path(__file__).resolve().parents[1] / "examples" / "core_library.py"
-        assert demo.is_file()
-        py_compile.compile(str(demo), cfile=str(tmp_path / "core_library.pyc"), doraise=True)

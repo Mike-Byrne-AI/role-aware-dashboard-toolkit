@@ -299,7 +299,8 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
                 "Load profile", options=profile_options, key="_radt_profile_choice"
             )
             st.text_input(
-                "Profile name", value="my_profile", key="_radt_profile_name",
+                "Profile name", key="_radt_profile_name",
+                **({"value": "my_profile"} if "_radt_profile_name" not in st.session_state else {}),
                 disabled=not can_mutate(ctx, "can_save_profiles"),
                 help="Name for saving the current settings. Replacing an existing profile requires confirmation.",
             )
@@ -344,7 +345,7 @@ def _render_profile_preview(
                 and has_perm(ctx, "can_load_profiles")):
             st.caption("Effective values show the proposed result after correction. Load rechecks permissions.")
             if preview.rows:
-                st.dataframe(preview.rows, use_container_width=True, hide_index=True)
+                st.dataframe(preview.rows, width="stretch", hide_index=True)
             else:
                 st.caption("No registered controls to restore.")
         else:

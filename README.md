@@ -1,137 +1,136 @@
 # Role-Aware Dashboard Toolkit
 
-Role-Aware Dashboard Toolkit is a Python toolkit for building AI operator
-dashboards with consistent permissions, saved configurations and traceable runs.
+**Python building blocks for operator controls, recorded runs, human review, and investigation workflows.**
 
-Use it to give people controls for an AI application: adjust settings, restore
-named configurations, inspect what changed, and review recorded runs. Define
-your controls and role policy once, then reuse the supplied dashboard workflows
-for profiles, audit history, checkpoints, comparisons and replay previews.
+Build applications where people can change settings, compare recorded outcomes,
+review decisions, and hand off the evidence. The library connects controls and
+permissions with saved profiles, audit history, checkpoints, review records,
+incident timelines, and cases that span multiple runs.
 
-The core package has no required third-party dependencies. Streamlit, FastAPI,
-and pandas support are isolated behind optional extras.
+Use the supplied Streamlit dashboard, integrate the optional FastAPI routes, or
+use the dependency-free Python core in your own application. Your application
+supplies the data, measurements, model calls, and business actions.
 
-This is an early beta. The authenticated starter is intended for a single-host
-dashboard with an external sign-in provider and explicit role assignments.
-Evaluate it with synthetic data, then complete the deployment acceptance checks
-before admitting private data or real users. Tests and example deployments have
-limited scope; they do not establish a security certification or comparative
-advantage over other dashboard tools. See the [security and update policy](SECURITY.md).
+**Early beta · Python 3.10+ · MIT license · Distributed as GitHub source**
 
-## Why Role-Aware Dashboard Toolkit
+[Quick start](#quick-start) · [Examples](examples/README.md) ·
+[Documentation](docs/README.md) ·
+[Issues](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
 
-The toolkit is useful when several operator workflows need to follow the same
-rules. Its supplied UI and API check permissions before applying a whole profile;
-a denied restore leaves controls unchanged. Sensitive controls are omitted from
-saved profiles and masked in audit history. Deferred UI replay checks current
-permissions again before applying recorded settings.
+![Dashboard Admin Controls example with grouped service settings, a role selector, saved profiles, and audit controls](docs/assets/dashboard_admin_controls_app.png)
 
-The reusable building blocks include:
+*The [Dashboard Admin Controls example](examples/dashboard_admin_controls_app.py)
+shows the control interface. The review and investigation layers below can also
+be used independently of this dashboard.*
 
-- validated control definitions and predictable state defaults
-- explicit role and write-permission checks
-- profile save, load, diff, and redaction behavior
-- append-only audit history with visible persistence diagnostics
-- trusted in-process plugin hooks
-- inspectable runs, checkpoints, comparisons, ledgers, and replay previews
-- a stable packet envelope for exporting application evidence
+## What you can build
 
-The installed package also includes a capability report, offline guides, a
-starter and diagnostics that help a coding assistant discover the available
-APIs. These provide reusable implementation and technical guidance; they do not
-add model reasoning or connect external services automatically.
+- **AI application review tools:** save a baseline configuration, capture a
+  candidate with application-supplied measurements, compare checkpoints, and
+  record a human decision. Try the [Operator Review Lab](examples/operator_review/README.md).
+- **Service and operations consoles:** expose settings such as worker limits,
+  timeouts, and maintenance mode with role checks, saved profiles, and a history
+  of changes. Connect the controls to your own service logic.
+- **Investigation and handoff tools:** collect notes and incidents, assemble a
+  timeline, link evidence across runs, and preserve findings and handoff summaries.
+- **Review workflows inside existing Python applications:** create, store,
+  compare, and export the same records without running a dashboard.
 
-Your application supplies the data, calculations, model calls and actions behind
-the controls. Images and charts use the renderer's existing capabilities. A
-simple card with a few sliders may need only Streamlit; this toolkit is intended
-for applications that also need the shared control and review workflows above.
+## What is included
 
-There is no established development-time speedup claim. The value to evaluate
-is how much repeated implementation and verification these workflows remove
-from your own applications.
+| Capability | What it lets your application do |
+| --- | --- |
+| **Controls and access** | Define validated controls, role permissions, and write freezes. The authenticated adapter connects verified sign-in to server-owned role grants. |
+| **Profiles and audit history** | Save named configurations, preview differences, restore settings, and record changes. Values of controls marked sensitive are omitted from saved profiles and redacted in supplied UI/API control-change events. |
+| **Runs, checkpoints, and comparisons** | Capture explicit snapshots of settings, audit events, and telemetry; compare recorded settings and measurements; build replay previews and run ledgers. |
+| **Human review and decisions** | Attach comments, assignments, signoffs, and handoffs to runs or checkpoints. Derive decision state, blockers, and transition history from those records. |
+| **Operator notes, incidents, and cases** | Assemble incident timelines and descriptive handoff summaries. Link evidence from multiple runs into investigation cases with findings, hypotheses, and history. |
+| **Governance review** | Preview policy-check results, approval requirements, and blocked or allowed action summaries from supplied evidence; explicitly save review snapshots. Applications enforce the actual actions. |
+| **Portable evidence** | Export records in a common JSON envelope, with checks on the envelope and supported payload fields. The Operator Review Lab also produces a standalone, readable HTML report. |
+| **Interfaces and extension points** | Compose Streamlit sections, themes, and navigation; add trusted plugins; use optional FastAPI routes; normalize application telemetry and inspect runtime diagnostics. |
 
-## Project links
+The supplied UI and API check permissions before applying a whole profile; a
+denied restore leaves controls unchanged. Deferred UI replay checks current
+permissions again before applying recorded settings. Optional review panels use
+explicitly configured stores, so a small dashboard need not include every layer.
 
-- [Source repository](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit)
-- [Issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
-- [Documentation](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/blob/main/docs/README.md)
+## Quick start
 
-This release is distributed as GitHub source. Package-index publication is a
-separate release decision.
+Try a complete review workflow with synthetic data. No model account, identity
+provider, or external service is needed for this local example.
 
-## Install
-
-From an unpacked source release or source checkout:
-
-```powershell
-python -m pip install .
-```
-
-For the styled starter, install the renderer in the same environment:
+Clone or download the [source repository](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit)
+and open PowerShell in its root directory. With Python 3.10 or later:
 
 ```powershell
-python -m pip install ".[workbench]"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install ".[workbench]"
+.\.venv\Scripts\python.exe -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
 ```
 
-Then work in your own application directory. A regular installation includes
-the toolkit's Python source, offline guides and starter; the source checkout is
-not needed to run the installed guide or create a consumer project. The supported
-Streamlit baseline is 1.65.0. For verified login, install `.[auth]` and follow the
-[authentication guide](role_aware_dashboard_toolkit/resources/guides/authentication.md),
-then the [single-host deployment guide](role_aware_dashboard_toolkit/resources/guides/deployment.md),
-including isolated dependency and browser-session acceptance checks. The toolkit
-does not supply managed hosting or an identity provider. A source test run does
-not establish that a particular shared deployment is ready for private data.
+If `.venv` already exists, reuse it and skip the first command. On macOS or
+Linux, use `.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
 
-Only after a separate PyPI release:
+In the browser:
 
-```bash
-python -m pip install role-aware-dashboard-toolkit
+1. Choose Admin or Operator and **Save baseline and start run**.
+2. Change the synthetic AI settings, then **Capture candidate for review**.
+   Compare the captured settings and outcomes.
+3. Choose Approver and record an approval, requested changes, or rejection
+   with a reason.
+4. Download the JSON evidence or a standalone HTML report for another reader.
+
+The metrics are deterministic teaching formulas, not model performance
+measurements. Records last for the browser session unless downloaded. The role
+selector demonstrates permissions; it is not authentication. Keep this demo local.
+The [Operator Review Lab guide](examples/operator_review/README.md) explains the
+workflow, report reader, and persistence boundaries.
+
+## Build your own application
+
+If you followed the quick start, stop the demo with `Ctrl+C` and activate the
+same environment from the repository root before changing directories:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 ```
 
-Only after a separate PyPI release, choose the optional capability you need:
+The commands below use `python` from that active environment. You can also use
+the absolute path to its Python executable if you do not activate environments.
 
-```bash
-python -m pip install "role-aware-dashboard-toolkit[workbench]"  # Streamlit rendering
-python -m pip install "role-aware-dashboard-toolkit[auth]"       # OIDC login and role grants
-python -m pip install "role-aware-dashboard-toolkit[api]"        # FastAPI routes
-python -m pip install "role-aware-dashboard-toolkit[pandas]"     # Tabular history views
-python -m pip install "role-aware-dashboard-toolkit[full]"       # All supported runtime extras
+For a new application, use the installed starter. From your own application
+directory, with the toolkit's `workbench` extra installed in the active Python
+environment:
+
+```powershell
+python -m role_aware_dashboard_toolkit init my-dashboard --dry-run
+python -m role_aware_dashboard_toolkit init my-dashboard
+Set-Location my-dashboard
+python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
-## Build with your assistant
+The starter creates editable application code, a theme, a README, and an
+`AGENTS.md` pointer to the installed handbook. It refuses an existing destination.
+For an existing application, adapt the [core quickstart](docs/quickstart.md) or
+inspect `python -m role_aware_dashboard_toolkit example starter --format json`.
 
-The installed package includes offline guidance and a complete starter. After
-installing the toolkit, use the same Python environment for these commands:
+When working with a coding assistant, have it discover this installed version
+before changing your application:
 
 ```powershell
 python -m role_aware_dashboard_toolkit inspect --format json
 python -m role_aware_dashboard_toolkit guide start
-python -m role_aware_dashboard_toolkit init my-dashboard --dry-run
-python -m role_aware_dashboard_toolkit init my-dashboard
-Set-Location my-dashboard
-python -m streamlit run app.py
 ```
 
-The starter uses the supported Streamlit baseline, 1.65.0 or later.
-The guide and inspection commands work with the dependency-free core.
-`init` creates a new directory containing editable application code, a theme,
-a README and an `AGENTS.md` pointer to the installed handbook. It refuses an
-existing destination. For an existing project, read `guide` and
-`example starter --format json`, then integrate the pieces you need.
+The offline guides cover controls, appearance, permissions, profiles, runs,
+telemetry, and API setup. Discovery commands do not create project files; your
+instructions and project policy remain authoritative.
 
-Ask your assistant to read the project's instructions and run `inspect` and
-`guide start` before customizing the dashboard. The shipped guidance describes
-this installed version; your instructions and project policy remain authoritative.
-The package does not assume an assistant automatically reads files inside
-site-packages. Imports stay quiet, and only the explicit `init` command creates
-project files. Guide topics cover controls, appearance, sections, plugins,
-permissions, profiles, runs, telemetry, API configuration and troubleshooting.
-Runtime diagnostics include stable codes, operation/effect information and a
-command for the matching installed guide. `inspect --format json` lists the
-complete diagnostic catalog.
+## Minimal dashboard
 
-## Five-minute dashboard
+For a minimal application, save this as `app.py` and run
+`python -m streamlit run app.py --server.address 127.0.0.1` in the environment
+where you installed `workbench`:
 
 ```python
 import streamlit as st
@@ -165,90 +164,97 @@ config = radt.DashboardConfig(
 radt.render(config)
 ```
 
-The audit object stays in this browser session across reruns; a new session or
-server restart starts a new in-memory history. Control definitions can rebuild
-on each rerun. Choose a persistent audit store when records must survive restarts.
+The audit object survives reruns in this browser session. A new session or
+server restart starts a new in-memory history; choose a persistent audit store
+when records must survive restarts.
 
-Save the file as `app.py`, install the workbench extra, and run:
-
-```bash
-python -m streamlit run app.py
-```
-
-For a complete dashboard with custom roles and a plugin panel:
-
-```bash
-python -m streamlit run examples/dashboard_admin_controls_app.py
-```
-
-To try a complete operator review, run [Operator Review Lab](examples/operator_review/README.md)
-from the repository root:
+For controls, profiles, runs, checkpoints, and packet export **without a UI**,
+follow the [core quickstart](docs/quickstart.md) or run this example from the
+repository root:
 
 ```powershell
-python -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
-```
-
-Save a baseline, adjust synthetic AI settings, compare recorded outcomes, record
-a human decision and export a standalone readable report. The example uses
-deterministic teaching formulas and session-local stores; it makes no model
-calls or performance claims.
-
-The dependency-free library example exercises controls, profiles, runs, and
-packet export:
-
-```bash
 python -m examples.core_library
 ```
 
-## Public surface
+## Installation options
 
-The package root intentionally stays small. Stable dashboard, control, profile,
-audit, security, runtime, packet, and runbook APIs are available from
-`role_aware_dashboard_toolkit`. Less common operator-record and release helpers remain explicit
-module imports.
+The core has no required third-party dependencies. From a source checkout or
+unpacked source release, install only the capabilities you need in your chosen
+Python environment:
 
-See:
+| Install command | Capability |
+| --- | --- |
+| `python -m pip install .` | Core controls, records, stores, packets, and offline guides |
+| `python -m pip install ".[workbench]"` | Streamlit dashboard and starter |
+| `python -m pip install ".[auth]"` | Streamlit sign-in integration and role-grant support |
+| `python -m pip install ".[api]"` | FastAPI routes |
+| `python -m pip install ".[pandas]"` | Dataframe-backed history views |
+| `python -m pip install ".[full]"` | All supported runtime extras |
 
-- [Documentation index](docs/README.md)
-- [Quickstart](docs/quickstart.md)
-- [Dashboard tools](docs/dashboard_tools.md)
-- [Public API reference](docs/public_api.md)
-- [Plugin contract](docs/plugins.md)
-- [API security](docs/api_security.md)
-- [Protocol overview](docs/protocol/overview.md)
-- [Distribution model](docs/distribution.md)
-- [Architecture scope](ARCHITECTURE_SCOPE.md)
+Distribution name: `role-aware-dashboard-toolkit`. Python import:
+`role_aware_dashboard_toolkit`. This release uses GitHub source; package-index
+publication is a separate release decision. The supported Streamlit baseline
+is 1.65.0. See [distribution details](docs/distribution.md) for package contents.
 
-## Design boundaries
+## Find the right guide
 
-- Default/demo roles are self-selected workflow context. For shared dashboards,
-  use `init my-dashboard --auth` and the [authentication guide](role_aware_dashboard_toolkit/resources/guides/authentication.md).
-  Authenticated mode binds verified identity to server-owned grants, permits only
-  assigned role choices, and checks the shared freeze before protected writes.
-- Plugins run in-process and must be treated as trusted code.
-- Custom callbacks and direct use of core state helpers require the host to
-  enforce authorization; the supplied UI/API checks do not cover arbitrary code.
-- Replay helpers build previews from recorded state; they do not perform
-  external mutations.
-- File-backed stores are intended for trusted local or mounted storage, not
-  distributed consensus.
-- Custom packet types must use the `x_` namespace.
+- **Customize the interface:** [dashboard tools](docs/dashboard_tools.md),
+  [Studio Dispatch example](examples/studio_dispatch/README.md), and
+  [plugin contract](docs/plugins.md).
+- **Add verified access:** [authentication](role_aware_dashboard_toolkit/resources/guides/authentication.md),
+  [A/B/C Access Lab](examples/section_access/README.md), and
+  [single-host deployment](role_aware_dashboard_toolkit/resources/guides/deployment.md).
+- **Record and compare work:** [runs](docs/run_model.md),
+  [telemetry](docs/telemetry_contract.md), [replay](docs/replay.md), and
+  [packets and ledgers](docs/protocol/overview.md).
+- **Build review and investigation workflows:** [team operations](docs/team_ops.md),
+  [decisions](docs/decision_model.md), [operator memory](docs/operator_memory.md),
+  [caseboard](docs/caseboard.md), and [governance](docs/governance.md).
+- **Integrate the library:** [public API](docs/public_api.md),
+  [API security](docs/api_security.md), [storage](docs/shared_store_patterns.md),
+  and [architecture](ARCHITECTURE_SCOPE.md).
 
-These boundaries are deliberate. Product-specific adapters and application
-integrations belong outside the OSS core.
+The [documentation index](docs/README.md) maps the full guide set; the
+[examples index](examples/README.md) describes each runnable application.
+
+## Scope and deployment
+
+- **Identity and authorization:** demo roles are self-selected. For shared use,
+  choose `init my-dashboard --auth`, configure an external sign-in provider, and
+  provision roles using the authentication guide. The FastAPI adapter has its
+  own authentication configuration. Custom callbacks and direct core calls must
+  enforce the host application's authorization policy.
+- **Review and execution:** decisions, governance summaries, timelines, and
+  replay previews describe recorded evidence. They do not execute business
+  actions, prove causation, or establish that external mutations occurred.
+  The host supplies integrations and enforces its actual action permissions.
+  The native governance panel resolves linked evidence from configured stores;
+  direct Python callers must load, validate, and supply the evidence records.
+  Linked IDs alone do not make the core governance builder fetch their contents.
+- **Persistence and collaboration:** in-memory records last only as long as
+  their owning session or process. File stores use trusted local storage;
+  SQLite access storage coordinates grants and freeze state on one host.
+  These do not provide distributed coordination or hosted team collaboration.
+- **Extensions and evidence:** plugins run as trusted code. Packet validation
+  checks the common envelope and supported payload fields. Applications validate
+  their own extension payloads and the truth of supplied evidence; custom packet
+  types use the `x_` namespace. Partial payloads can pass packet validation; use
+  the record validators when complete records are required. The host owns
+  sensitive-data handling, including redaction in custom audit calls.
+
+Evaluate this beta with synthetic data, then complete the deployment acceptance
+checks before admitting private data or real users. Tests and examples have
+limited scope; they establish neither security certification nor a measured
+development-time advantage. See the [security and update policy](SECURITY.md).
 
 ## Development
 
-```bash
-python -m pip install -e ".[dev]"
-python -m pytest -q
-python -m ruff check role_aware_dashboard_toolkit examples tests --no-cache
-```
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for environment setup and checks.
+Use the [release checklist](docs/release_checklist.md) and
+[publication runbook](docs/release_runbook.md) when preparing a release.
 
-Before a release, follow [the release checklist](docs/release_checklist.md) and
-[publication runbook](docs/release_runbook.md).
-
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md),
-[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Contributions are welcome through the
+[issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
+and pull requests. Read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Role-Aware Dashboard Toolkit is licensed under the [MIT License](LICENSE).

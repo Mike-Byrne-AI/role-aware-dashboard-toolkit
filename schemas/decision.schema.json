@@ -22,7 +22,22 @@
     "checkpoint_id": {"type": "string"},
     "created_at": {"type": "string"},
     "updated_at": {"type": "string"},
-    "state": {"type": "string"},
+    "state": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "review_requested",
+        "in_review",
+        "changes_requested",
+        "approved",
+        "rejected",
+        "frozen",
+        "replay_only",
+        "handoff_pending",
+        "handed_off",
+        "closed"
+      ]
+    },
     "approval_state": {"type": "string"},
     "latest_signoff_decision": {"type": "string"},
     "latest_handoff_status": {"type": "string"},
@@ -31,8 +46,31 @@
     "signoff_count": {"type": "integer"},
     "handoff_count": {"type": "integer"},
     "blockers": {"type": "array", "items": {"type": "object"}},
-    "allowed_actions": {"type": "array"},
-    "history": {"type": "array"},
-    "summary": {"type": "object"}
+    "allowed_actions": {"type": "array", "items": {"type": "string"}},
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "decision_created",
+              "approval_synced",
+              "review_requested",
+              "review_started",
+              "signoff_recorded",
+              "handoff_created",
+              "handoff_accepted",
+              "handoff_closed",
+              "decision_closed",
+              "decision_reopened"
+            ]
+          }
+        }
+      }
+    },
+    "summary": {"type": "object"},
+    "tags": {"type": "array", "items": {"type": "string"}}
   }
 }

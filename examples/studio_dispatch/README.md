@@ -5,9 +5,9 @@ types, grouped cards, profiles, roles and a session freeze switch.
 
 ## Run
 
-Install the project using the [development environment setup](../../docs/development_handoff.md).
-This example's sidebar theme requires Streamlit 1.44 or newer; update the
-workbench environment if needed. Then, from the repository root:
+Install the project using the [development environment setup](../../CONTRIBUTING.md#development-setup).
+This installs the supported Streamlit baseline, 1.65.0 or newer. Then, from the
+repository root:
 
 ```powershell
 Push-Location examples\studio_dispatch

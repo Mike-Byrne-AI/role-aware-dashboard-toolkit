@@ -281,7 +281,6 @@ Merge that snippet into your project's `.streamlit/config.toml` before starting
 Streamlit. Preserve unrelated existing settings. Color changes can also be
 applied while the app is running by saving the config and rerunning the app;
 see [Streamlit configuration](https://docs.streamlit.io/develop/concepts/configuration/options).
-Independent sidebar colors require Streamlit 1.44 or newer.
 `build_streamlit_theme_toml` returns text only; imports never change theme files.
 
 Group cards have explicit Python options:
@@ -299,9 +298,11 @@ Use six-digit hexadecimal colors (`#RRGGBB`). Per-group fills override the
 shared card fill; unknown group names fail before widget rendering. Hidden
 registered groups are valid override targets. Plugin setup may register groups
 before the names are checked. Card fills use Streamlit's documented keyed
-containers and require Streamlit 1.39 or newer. Both stacked and column layouts
-support them. With no fill options, the existing unstyled layout and the
-Streamlit 1.30 minimum remain unchanged.
+containers in both stacked and column layouts. With no fill options, default
+rendering is preserved. All workbench layouts use the supported Streamlit
+baseline, 1.65.0 or newer. See the
+[appearance guide](../role_aware_dashboard_toolkit/resources/guides/appearance.md)
+for theme setup and visual checks.
 
 ## Choose built-in panels and menus
 

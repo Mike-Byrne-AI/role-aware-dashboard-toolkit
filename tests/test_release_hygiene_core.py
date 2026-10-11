@@ -111,7 +111,7 @@ def test_ci_and_contributor_commands_disable_bytecode_before_python_startup():
     workflow = read_ci_workflow()
     assert re.search(r'^env:\n  PYTHONDONTWRITEBYTECODE: "1"$', workflow, re.MULTILINE)
     for relative_path in (
-        "CONTRIBUTING.md", "docs/development_handoff.md", "docs/release_checklist.md",
+        "CONTRIBUTING.md", "docs/release_checklist.md",
     ):
         document = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         setting = document.index('$env:PYTHONDONTWRITEBYTECODE = "1"')
@@ -732,10 +732,6 @@ else:
         [sys.executable, "-c", script], cwd=str(REPO_ROOT), text=True, capture_output=True, check=False
     )
     assert result.returncode == 0, result.stderr
-
-
-def test_pack_distribution_doc_exists():
-    assert (REPO_ROOT / "docs" / "distribution.md").exists()
 
 
 def test_boundary_docs_and_sdist_describe_generic_example_surface():

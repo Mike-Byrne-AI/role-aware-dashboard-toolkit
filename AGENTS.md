@@ -1,9 +1,9 @@
 # Working on Role-Aware Dashboard Toolkit
 
 This checkout is the active source for the library. Start with
-[the development handoff](docs/development_handoff.md) and
-[CONTRIBUTING.md](CONTRIBUTING.md), then inspect the files relevant to the user's
-request. User instructions take precedence over these repository defaults.
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [documentation map](docs/README.md),
+then inspect the files relevant to the user's request. User instructions take
+precedence over these repository defaults.
 
 - Keep changes small and preserve public APIs unless their change is requested.
 - Keep application-specific integrations, private data, credentials, historical

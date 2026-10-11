@@ -140,7 +140,7 @@ class ObservabilityPanel:
                 st.subheader("History")
                 radt = history_as_dataframe(project_record(history, self._registry))
                 if radt is not None:
-                    st.dataframe(radt, use_container_width=True, hide_index=True)
+                    st.dataframe(radt, width="stretch", hide_index=True)
             elif history:
                 st.subheader("History")
                 st.json(project_record(history[-10:], self._registry))

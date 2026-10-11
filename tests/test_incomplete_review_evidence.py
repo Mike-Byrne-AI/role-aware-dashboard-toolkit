@@ -23,8 +23,6 @@ from role_aware_dashboard_toolkit.security import RoleDef, SecurityContext, get_
 from role_aware_dashboard_toolkit.team_ops import build_signoff_record, build_team_comment
 from role_aware_dashboard_toolkit.team_store import FileTeamStore
 
-AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-
 
 def _render(host, panel):
     import streamlit as st
@@ -54,6 +52,7 @@ def _healthy(app):
 
 
 def _app(host, panel):
+    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
     return _healthy(AppTest.from_function(_render, args=(host, panel), default_timeout=15).run())
 
 
