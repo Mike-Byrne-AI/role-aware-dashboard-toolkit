@@ -342,3 +342,39 @@ def test_sign_in_does_not_continue_if_host_stop_wrapper_returns():
     st.stop = lambda: None
     with pytest.raises(AccessDenied):
         render_sign_in(st)
+
+
+@pytest.mark.parametrize("pending", [True, False, None, "true"])
+def test_authenticated_cleanup_preserves_only_a_real_pending_signout_marker(pending):
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING, clear_authenticated_state
+
+    st = SimpleNamespace(session_state={
+        "private-host-data": "synthetic-only", "_radt_role": "Admin",
+        "_radt_pending_replay": {"synthetic": "write"}, _SIGN_OUT_PENDING: pending,
+    })
+    clear_authenticated_state(st)
+    assert st.session_state == ({_SIGN_OUT_PENDING: True} if pending is True else {})
+
+
+def test_pending_signout_blocks_direct_provider_resolver_checks(runtime):
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING
+
+    current = resolver()
+    assert current().subject == "synthetic-subject"
+    runtime.session_state = {_SIGN_OUT_PENDING: True}
+    with pytest.raises(AccessDenied):
+        current()
+
+
+@pytest.mark.parametrize("failed_logout", [False, True])
+def test_public_signout_callback_clears_private_state_and_stops_even_when_provider_fails(failed_logout):
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING, sign_out_and_stop
+
+    st = LoginPage({"is_logged_in": True}, fail=failed_logout)
+    st.session_state = {"private-host-data": "synthetic-only", "_radt_role": "Admin"}
+    with pytest.raises(StopRendering):
+        sign_out_and_stop(st)
+    assert st.session_state == {_SIGN_OUT_PENDING: True}
+    assert ("logout",) in st.calls
+    assert st.calls[-1] == ("stop",)
+    assert "synthetic-private-provider-detail" not in repr(st.calls)

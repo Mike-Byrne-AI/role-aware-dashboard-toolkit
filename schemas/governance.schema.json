@@ -2,9 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Role-Aware Dashboard Toolkit Governance Record",
   "type": "object",
-  "required": ["schema_version", "governance_id", "case_id", "state", "policy_checks"],
+  "required": [
+    "schema_version",
+    "governance_id",
+    "case_id",
+    "state",
+    "policy_checks",
+    "created_at",
+    "updated_at",
+    "severity",
+    "escalation_level",
+    "approval_requirements",
+    "blocked_actions",
+    "allowed_next_actions",
+    "history"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "minimum": 1},
+    "schema_version": {"type": "integer", "const": 1},
     "governance_id": {"type": "string"},
     "case_id": {"type": "string"},
     "state": {"type": "string", "enum": ["admissible", "needs_review", "escalated", "blocked", "replay_only"]},
@@ -38,6 +52,20 @@
     "warning_count": {"type": "integer"},
     "blocked_actions": {"type": "array", "items": {"type": "string"}},
     "allowed_next_actions": {"type": "array", "items": {"type": "string"}},
-    "history": {"type": "array"}
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "enum": ["governance_created", "policy_evaluated", "state_changed", "escalation_changed", "case_synced"]
+          }
+        }
+      }
+    },
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "linked_run_ids": {"type": "array", "items": {"type": "string"}}
   }
 }

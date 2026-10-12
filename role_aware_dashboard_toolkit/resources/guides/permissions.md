@@ -29,6 +29,17 @@ switch. Native profile loads and replays check every affected control before
 applying anything. Saved profile role metadata never grants permissions or
 overrides authenticated identity.
 
+Read permission for a panel does not override control sensitivity. Native
+historical views, comparisons, summaries, audit downloads and API responses
+filter sensitive values using the current registry and historical sensitivity
+metadata. The stored evidence remains unchanged. Custom output code must apply
+equivalent checks; raw record builders and stores are trusted host interfaces.
+
+Combined reviews also require access to the evidence they consume. For example,
+a governance panel needs decision-read permission as well as governance access,
+including saved reviews after a decision store is removed. Unreadable or denied evidence cannot
+be treated as an empty collection to produce an approval.
+
 For custom code:
 
 ```python

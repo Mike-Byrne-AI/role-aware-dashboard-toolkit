@@ -10,7 +10,9 @@ import role_aware_dashboard_toolkit as radt
 from role_aware_dashboard_toolkit.access import AccessDenied, AccessPolicy, SQLiteAccessStore
 from role_aware_dashboard_toolkit.access_cli import read_identity_key
 from role_aware_dashboard_toolkit.dashboard import prepare_access
-from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver, render_sign_in
+from role_aware_dashboard_toolkit.streamlit_auth import (
+    StreamlitIdentityResolver, render_sign_in, sign_out_and_stop,
+)
 
 from examples.section_access.policy import (
     ROLE_SECTIONS, build_roles, read_section, run_admin_action, visible_sections,
@@ -94,11 +96,11 @@ def main(access: AccessPolicy | None = None, *, simulation: bool = False) -> Non
             return
         render_sign_in(st, provider=os.environ.get("RADT_OIDC_PROVIDER"))
 
-    if not simulation and st.sidebar.button("Sign out", key="section_access_sign_out"):
-        st.session_state.clear()
-        st.logout()
-        st.stop()
-        return
+    if not simulation:
+        st.sidebar.button(
+            "Sign out", key="section_access_sign_out",
+            on_click=lambda: sign_out_and_stop(st),
+        )
 
     ctx = radt.render(config)
     allowed = visible_sections(ctx)

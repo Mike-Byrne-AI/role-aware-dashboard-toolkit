@@ -5,7 +5,7 @@ exports uniform; they do not grant permission or execute work.
 
 ## Envelope
 
-Every packet contains:
+Toolkit packet builders include:
 
 - `schema_version`
 - `packet_type`
@@ -16,6 +16,11 @@ Every packet contains:
 - `payload_schema_version`
 - `payload`
 - `meta`
+
+Validation requires `schema_version`, `packet_type`, `packet_id`, `exported_at`,
+`payload_schema_version`, and `payload`. Source metadata and `meta` may be absent
+on imported packets; when present, their types are checked. Additional application
+fields are accepted and retained.
 
 ## Built-in types
 
@@ -87,3 +92,19 @@ Present ledger entry fields are also checked, so malformed entry kinds, control
 mappings and source sequences cannot pass import and alter reconstruction.
 Optional legacy sequence metadata may remain absent; incomplete or duplicate
 nonnegative sequences retain the existing list-order behavior.
+
+The self-contained [packet JSON schema](../../schemas/packet.schema.json) covers
+all eight built-in payload types with these same partial-record rules. Its
+portable contract requires canonical lowercase packet names and numeric
+`payload_schema_version` values. Runtime validation additionally accepts legacy
+digit strings such as `"1"` for `payload_schema_version`. Import and export can
+retain those strings, so successful export alone does not guarantee schema
+conformance. Use integer versions when creating portable packets.
+
+For `x_` extensions, runtime validation also compares `payload_schema_version`
+with `payload.schema_version` when both can be interpreted as integers, including
+legacy digit strings. A mismatch is rejected. That comparison between arbitrary
+application versions is not expressed by the JSON schema; extension consumers
+must perform it themselves or use `validate_packet()`. Other payload fields
+remain application-owned. See the [protocol overview](overview.md#json-schemas)
+for the JSON Schema versus Python integer distinction.

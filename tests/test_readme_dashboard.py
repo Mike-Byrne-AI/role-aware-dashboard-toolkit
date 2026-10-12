@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_readme_dashboard_retains_audit_history_per_browser_session():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("## Five-minute dashboard", 1)[1]
+    section = readme.split("## Minimal dashboard", 1)[1]
     match = re.search(r"```python\n(.*?)\n```", section, re.DOTALL)
     assert match is not None
     # Capture the object created by the actual documented snippet, without

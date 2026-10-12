@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `61`
+- Documented module-only public symbols: `63`
 
 ## Usage recipes
 
@@ -81,7 +81,7 @@ Dashboard rendering and trusted plugin registration.
 
 Classification: `stable`
 
-Root exports: `0`; module-only symbols: `18`.
+Root exports: `0`; module-only symbols: `20`.
 
 - `Identity` (module-only)
 - `AccessDenied` (module-only)
@@ -96,13 +96,15 @@ Root exports: `0`; module-only symbols: `18`.
 - `prepare_access` (module-only)
 - `StreamlitIdentityResolver` (module-only)
 - `render_sign_in` (module-only)
+- `sign_out_and_stop` (module-only)
+- `clear_authenticated_state` (module-only)
 - `bind_audit_identity` (module-only)
 - `can_mutate` (module-only)
 - `read_identity_key` (module-only)
 - `initialize_access` (module-only)
 - `ProvisioningError` (module-only)
 
-Verified identities and server-owned grants from access and access_store; prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC; access_audit binds actors; security.can_mutate guards authenticated record writes; access_cli provides trusted local provisioning. Import from these modules; the root namespace stays unchanged.
+Verified identities and server-owned grants from access and access_store; prepare_access from dashboard gates host reads; streamlit_auth supplies optional OIDC and fail-closed session cleanup/sign-out; access_audit binds actors; security.can_mutate guards authenticated record writes; access_cli provides trusted local provisioning. Import from these modules; the root namespace stays unchanged.
 
 ## Controls and security
 

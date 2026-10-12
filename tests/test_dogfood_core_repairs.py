@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 
+from jsonschema import Draft202012Validator
 import pytest
 
 import role_aware_dashboard_toolkit as radt
@@ -274,9 +275,7 @@ def test_ledger_schema_keeps_source_sequence_optional_and_nonnegative():
 
 @pytest.fixture
 def protocol_schema_validator():
-    # Optional independent proof using an existing environment dependency.
-    # The structural contract tests above require only the standard library.
-    return pytest.importorskip("jsonschema").Draft202012Validator
+    return Draft202012Validator
 
 
 @pytest.mark.parametrize("packet_type", ["run", "x_custom", "x_" + "a" * 62])

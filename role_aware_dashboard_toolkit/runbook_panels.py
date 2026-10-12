@@ -5,6 +5,7 @@ from typing import Any
 from .diagnostics import diagnostic_text
 
 from ._ui_state import queue_replay, stage_replay
+from ._record_projection import project_record
 from .checkpoints import checkpoint_summary
 from .compare import compare_checkpoints, compare_runs
 from .ledger import build_run_ledger, ledger_summary
@@ -22,12 +23,14 @@ from .runbook_panels_parts.shared import (
     _record_actor,
     _record_session,
     _render_table,
+    _save_record,
     _selected_profile_id,
 )
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
 from .security import can_mutate, can_write, has_perm
 from .sections import section_visible
 from .store_diagnostics import StorePathSecurityError
+from .validators import validate_record
 
 
 _RUN_READ_HELP = "Help: python -m role_aware_dashboard_toolkit guide runs"
@@ -39,7 +42,7 @@ _RUN_SIDEBAR_DRAFT_KEYS = (
 )
 
 
-def _read_run_store(store: Any, operation: Any, *args: Any) -> tuple[Any, bool]:
+def _read_run_store(store: Any, operation: Any, *args: Any, validate_run: bool = False) -> tuple[Any, bool]:
     """Separate a missing record from a failed read without consuming diagnostics.
 
     File stores retain their read-error history across successful operations.
@@ -48,6 +51,13 @@ def _read_run_store(store: Any, operation: Any, *args: Any) -> tuple[Any, bool]:
     errors_before = len(getattr(store, "read_errors", ()) or ())
     try:
         result = operation(*args)
+        if validate_run:
+            if result is not None and (
+                not isinstance(result, dict) or not validate_record("run", result)["ok"]
+            ):
+                return None, True
+        elif not isinstance(result, list) or any(not isinstance(item, str) for item in result):
+            return None, True
     except (OSError, ValueError, StorePathSecurityError):
         # Store exceptions and diagnostic records can contain paths or secrets.
         # UI messages below never copy those payloads.
@@ -73,7 +83,7 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
     st.subheader(getattr(config, "runbook_title", "Runbook"))
     active_run_id = str(st.session_state.get("_radt_active_run_id", "") or "")
     active_run, read_failed = (
-        _read_run_store(store, store.load, active_run_id) if active_run_id else (None, False)
+        _read_run_store(store, store.load, active_run_id, validate_run=True) if active_run_id else (None, False)
     )
     if not read_failed and active_run is None and active_run_id:
         st.session_state["_radt_active_run_id"] = ""
@@ -118,11 +128,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 session_id=_record_session(ctx, st.session_state),
                 source="ui",
             )
-            store.save(started)
-            st.session_state["_radt_active_run_id"] = started["run_id"]
-            config.audit.log("run_start", detail=started["run_id"], role=ctx.role, source="ui")
-            st.toast(f"Started run: {started['run_id']}")
-            st.rerun()
+            if _save_record(st, store.save, started):
+                st.session_state["_radt_active_run_id"] = started["run_id"]
+                config.audit.log("run_start", detail=started["run_id"], role=ctx.role, source="ui")
+                st.toast(f"Started run: {started['run_id']}")
+                st.rerun()
         return
 
     summary = run_summary(active_run)
@@ -153,11 +163,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 ),
             )
             updated["active_profile_id"] = _selected_profile_id(st.session_state)
-            store.save(updated)
-            checkpoint_id = str(updated.get("last_checkpoint_id", ""))
-            config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
-            st.toast(f"Saved checkpoint: {checkpoint_id}")
-            st.rerun()
+            if _save_record(st, store.save, updated):
+                checkpoint_id = str(updated.get("last_checkpoint_id", ""))
+                config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
+                st.toast(f"Saved checkpoint: {checkpoint_id}")
+                st.rerun()
     with c2:
         if st.button("End run", key="_radt_run_end", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
             finished = end_run(
@@ -167,11 +177,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 status="completed",
             )
             finished["active_profile_id"] = _selected_profile_id(st.session_state)
-            store.save(finished)
-            st.session_state["_radt_active_run_id"] = ""
-            config.audit.log("run_end", detail=finished["run_id"], role=ctx.role, source="ui")
-            st.toast(f"Ended run: {finished['run_id']}")
-            st.rerun()
+            if _save_record(st, store.save, finished):
+                st.session_state["_radt_active_run_id"] = ""
+                config.audit.log("run_end", detail=finished["run_id"], role=ctx.role, source="ui")
+                st.toast(f"Ended run: {finished['run_id']}")
+                st.rerun()
 
     if section_visible(config, "team_ops"):
         _render_team_ops_sidebar(st, config, ctx, active_run)
@@ -197,7 +207,7 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
 
     runs = []
     for run_id in run_ids:
-        run, load_failed = _read_run_store(store, store.load, run_id)
+        run, load_failed = _read_run_store(store, store.load, run_id, validate_run=True)
         read_failed = read_failed or load_failed
         if not load_failed:
             runs.append(run)
@@ -227,18 +237,24 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
             selected_default = selected_options[0]
         selected_run_id = st.selectbox("Run detail", options=selected_options, index=selected_options.index(selected_default), key="_radt_selected_run_id")
         selected_run = next((run for run in runs if run.get("run_id") == selected_run_id), runs[0])
+        can_view_metrics = has_perm(ctx, "can_view_metrics", default=False)
+        # Keep original evidence for authorized mutations. All browser-bound
+        # derived views start from a detached projection so comparisons cannot
+        # lose a historical sensitivity flag before the output is checked.
+        selected_run_view = project_record(
+            selected_run, config.registry, include_control_metadata_values=can_view_metrics,
+        )
 
         st.subheader("Selected Run")
         st.json(run_summary(selected_run))
 
         can_export_packets = has_perm(ctx, "can_export_packets", default=False)
-        can_view_metrics = has_perm(ctx, "can_view_metrics", default=False)
         can_view_audit = has_perm(ctx, "can_view_audit", default=False)
         can_export_run_evidence = can_export_packets and can_view_metrics and can_view_audit
         if can_export_run_evidence:
             with st.expander("Protocol Preview", expanded=False):
-                run_packet = build_run_packet(selected_run, source_version=getattr(config, "version", ""))
-                run_ledger = build_run_ledger(selected_run)
+                run_packet = build_run_packet(selected_run_view, source_version=getattr(config, "version", ""))
+                run_ledger = build_run_ledger(selected_run_view)
                 st.json({"run_packet": run_packet, "ledger_summary": ledger_summary(run_ledger)})
 
         checkpoints = list(selected_run.get("checkpoints") or [])
@@ -260,7 +276,11 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 (checkpoint for checkpoint in checkpoints if checkpoint.get("checkpoint_id") == selected_checkpoint_id),
                 checkpoints[-1],
             )
-            checkpoint_view = dict(selected_checkpoint)
+            checkpoint_view = next(
+                checkpoint for checkpoint in selected_run_view["checkpoints"]
+                if checkpoint.get("checkpoint_id") == selected_checkpoint.get("checkpoint_id")
+            )
+            checkpoint_view = dict(checkpoint_view)
             if not can_view_metrics:
                 checkpoint_view.pop("controls", None)
                 checkpoint_view.pop("telemetry_slice", None)
@@ -270,7 +290,7 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
 
             if can_export_run_evidence:
                 with st.expander("Checkpoint Packet", expanded=False):
-                    st.json(build_checkpoint_packet(selected_checkpoint, run_id=selected_run.get("run_id", ""), source_version=getattr(config, "version", "")))
+                    st.json(build_checkpoint_packet(checkpoint_view, run_id=selected_run.get("run_id", ""), source_version=getattr(config, "version", "")))
 
             can_replay = has_perm(ctx, "can_replay_runs", default=False)
             can_apply_replay = can_write(ctx, "can_replay_runs")
@@ -279,9 +299,14 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 if can_export_packets or can_replay
                 else None
             )
+            if replay_packet is not None:
+                replay_packet["control_meta"] = [
+                    *(selected_run.get("control_meta") or []),
+                    *(selected_checkpoint.get("control_meta") or []),
+                ]
             if can_export_packets and can_view_metrics:
                 st.subheader("Replay Preview")
-                st.json(replay_packet)
+                st.json(build_replay_packet_from_checkpoint(checkpoint_view))
             if can_replay and st.button(
                 "Replay checkpoint into live controls",
                 key="_radt_checkpoint_replay_btn",
@@ -302,7 +327,8 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
                 right_id = st.selectbox("Right checkpoint", options=ids, index=len(ids) - 1, key="_radt_compare_checkpoint_right")
                 left = next(cp for cp in checkpoints if cp.get("checkpoint_id") == left_id)
                 right = next(cp for cp in checkpoints if cp.get("checkpoint_id") == right_id)
-                comparison = compare_checkpoints(left, right, include_telemetry=True)
+                safe_pair = project_record({"control_meta": selected_run.get("control_meta", []), "left": left, "right": right}, config.registry)
+                comparison = compare_checkpoints(safe_pair["left"], safe_pair["right"], include_telemetry=True)
                 st.json({key: value for key, value in comparison.items() if key != "telemetry_comparison"})
                 _render_telemetry_comparison(st, comparison["telemetry_comparison"])
 
@@ -313,7 +339,8 @@ def render_runbook_panel(st: Any, config: Any, ctx: Any) -> None:
             right_run_id = st.selectbox("Right run", options=options, index=min(1, len(options) - 1), key="_radt_compare_run_right")
             left_run = next(run for run in runs if run.get("run_id") == left_run_id)
             right_run = next(run for run in runs if run.get("run_id") == right_run_id)
-            comparison = compare_runs(left_run, right_run, include_telemetry=True)
+            safe_pair = project_record([left_run, right_run], config.registry)
+            comparison = compare_runs(*safe_pair, include_telemetry=True)
             st.json({key: value for key, value in comparison.items() if key != "telemetry_comparison"})
             st.caption("Run measurements come from each run's final checkpoint.")
             _render_telemetry_comparison(st, comparison["telemetry_comparison"])

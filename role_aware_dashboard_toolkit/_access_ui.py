@@ -8,8 +8,8 @@ from .access import AccessDenied, AccessPolicy, FreezeConflict, FreezeState
 from .access_audit import bind_audit_identity
 from .security import SecurityContext, get_role, has_perm
 from .streamlit_auth import (
-    StreamlitIdentityResolver, _ACCESS_DENIAL_NOTICE, _SIGN_IN_PROMPT,
-    _streamlit_login_state,
+    StreamlitIdentityResolver, _ACCESS_DENIAL_NOTICE, _SIGN_IN_PROMPT, _SIGN_OUT_PENDING,
+    _clear_session_state, _streamlit_login_state, clear_authenticated_state,
 )
 
 _PRINCIPAL = "_radt_authenticated_principal"
@@ -38,11 +38,9 @@ def _deny(st: Any, policy: AccessPolicy | None = None) -> None:
     )
     # Authentication failure must not leave another account's data or queued
     # writes in session state. Provider cookies/claims are not stored here.
-    for key in list(st.session_state):
-        # Login/logout button triggers must survive until render_sign_in reads
-        # them on this rerun. These booleans cannot grant roles or data access.
-        if key not in {"_radt_sign_in", "_radt_sign_out"}:
-            del st.session_state[key]
+    # Login/logout button triggers must survive until render_sign_in reads them
+    # on this rerun. These booleans cannot grant roles or data access.
+    _clear_session_state(st, ("_radt_sign_in", "_radt_sign_out"))
     st.session_state[_ACCESS_DENIAL_NOTICE] = "signed_out" if signed_out else "denied"
     if signed_out:
         st.info(_SIGN_IN_PROMPT)
@@ -55,6 +53,15 @@ def prepare_authenticated_access(st: Any, config: Any) -> SecurityContext | None
     if not isinstance(policy, AccessPolicy):
         _deny(st, policy)
         return None
+    if st.session_state.get(_SIGN_OUT_PENDING) is True:
+        if (type(policy.identity_resolver) is StreamlitIdentityResolver
+                and _streamlit_login_state(st) is False):
+            st.session_state.pop(_SIGN_OUT_PENDING, None)
+        else:
+            # Successful logout normally creates a new Streamlit session. If
+            # its redirect failed, retain denial across reruns and allow retry.
+            _deny(st, policy)
+            return None
     try:
         principal = policy.identify()
         roles = policy.assigned_roles(principal)
@@ -69,8 +76,7 @@ def prepare_authenticated_access(st: Any, config: Any) -> SecurityContext | None
     if st.session_state.get(_PRINCIPAL) != principal:
         # A rerun is essential: host code may hold references to resources
         # constructed before render. Do not execute that frame for a new user.
-        for key in list(st.session_state):
-            del st.session_state[key]
+        clear_authenticated_state(st)
         st.session_state[_PRINCIPAL] = principal
         st.session_state[_SESSION] = uuid4().hex
         st.session_state[_ROLE] = roles[0]
@@ -83,23 +89,32 @@ def prepare_authenticated_access(st: Any, config: Any) -> SecurityContext | None
         role = roles[0]
         st.session_state[_ROLE] = role
         st.session_state.pop("_radt_pending_replay", None)
-    role_def = get_role(role, config.custom_roles)
-    session_id = st.session_state[_SESSION]
-    ctx = SecurityContext(
-        role=role, perms=dict(role_def.perms), controls_writable=not freeze.frozen,
-        authenticated=True, user_id=principal, session_id=session_id,
-        _authorize=lambda permission, write: policy.authorize(
-            principal, role, permission, custom_roles=config.custom_roles, write=write,
-        ),
-    )
-    # Native records and audit events share a verified, pseudonymous actor.
-    # Always overwrite descriptive session fields; they never grant access.
-    st.session_state["_radt_user_id"] = principal
-    st.session_state["_radt_session_id"] = session_id
-    config.audit = bind_audit_identity(config.audit, principal, session_id)
-    if st.session_state.get("_radt_auth_audited_session") != session_id:
-        config.audit.log("access_session_started", role=ctx.role)
-        st.session_state["_radt_auth_audited_session"] = session_id
+    try:
+        role_def = get_role(role, config.custom_roles)
+        session_id = st.session_state[_SESSION]
+        ctx = SecurityContext(
+            role=role, perms=dict(role_def.perms), controls_writable=not freeze.frozen,
+            authenticated=True, user_id=principal, session_id=session_id,
+            _authorize=lambda permission, write: (
+                st.session_state.get(_SIGN_OUT_PENDING) is not True
+                and policy.authorize(
+                    principal, role, permission, custom_roles=config.custom_roles, write=write,
+                )
+            ),
+        )
+        # Native records and audit events share a verified, pseudonymous actor.
+        # Always overwrite descriptive session fields; they never grant access.
+        st.session_state["_radt_user_id"] = principal
+        st.session_state["_radt_session_id"] = session_id
+        config.audit = bind_audit_identity(config.audit, principal, session_id)
+        if st.session_state.get("_radt_auth_audited_session") != session_id:
+            config.audit.log("access_session_started", role=ctx.role)
+            st.session_state["_radt_auth_audited_session"] = session_id
+    except Exception:
+        # Trusted role/audit adapters can still fail with private details. A
+        # partial authentication setup must clear state and expose safe denial.
+        _deny(st, policy)
+        return None
     return ctx
 
 
@@ -127,7 +142,11 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
             st.rerun()
     previous_role = st.session_state.get("_radt_previous_role")
     if previous_role and previous_role != ctx.role:
-        config.audit.log_role_switch(previous_role, ctx.role)
+        try:
+            config.audit.log_role_switch(previous_role, ctx.role)
+        except Exception:
+            _deny(st, policy)
+            return None
     st.session_state["_radt_previous_role"] = ctx.role
 
     def set_shared_freeze() -> None:
@@ -147,9 +166,15 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
                 expected_revision=st.session_state[_FREEZE_REVISION],
                 custom_roles=config.custom_roles,
             )
-            config.audit.log("shared_freeze_changed", new_value=changed.frozen, role=ctx.role)
         except (AccessDenied, FreezeConflict, KeyError):
             st.session_state["_radt_freeze_denied"] = True
+            return
+        try:
+            config.audit.log("shared_freeze_changed", new_value=changed.frozen, role=ctx.role)
+        except Exception:
+            # The store update already committed. Do not imply denial or
+            # rollback, and never display the audit adapter's private error.
+            st.session_state["_radt_freeze_audit_failed"] = True
 
     # Refresh the display from authoritative server state, not a previous tab's
     # cached toggle. Callback above runs before the next render.
@@ -160,5 +185,7 @@ def render_authenticated_sidebar(st: Any, config: Any) -> SecurityContext | None
               help="Shared server lock. Only assigned freeze administrators can change it.")
     if st.session_state.pop("_radt_freeze_denied", False):
         st.warning("Freeze change denied or superseded. The current server state is shown.")
+    if st.session_state.pop("_radt_freeze_audit_failed", False):
+        st.warning("Freeze changed, but audit recording could not be confirmed.")
     st.caption("Changes are frozen." if freeze.frozen else "Changes are enabled.")
     return ctx

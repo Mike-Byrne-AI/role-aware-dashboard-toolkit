@@ -19,6 +19,7 @@ _GUIDE_TITLES = {
     "plugins": "Add custom panels and sidebar callbacks",
     "permissions": "Roles, permissions and frozen controls",
     "authentication": "Verified sign-in, role grants and shared freeze",
+    "deployment": "Deploy and verify one shared authenticated dashboard",
     "profiles": "Save and load profiles",
     "runs": "Runs, checkpoints and replay",
     "telemetry": "Sample and capture telemetry",
@@ -67,7 +68,7 @@ def inspect_capabilities() -> dict[str, Any]:
     from .plugins import DashboardPlugin, PluginRegistry
     from .public_api import public_api_manifest
     from .sections import DashboardSections
-    from .streamlit_auth import StreamlitIdentityResolver
+    from .streamlit_auth import StreamlitIdentityResolver, clear_authenticated_state, sign_out_and_stop
 
     symbols = {
         "DashboardConfig": DashboardConfig,
@@ -75,6 +76,8 @@ def inspect_capabilities() -> dict[str, Any]:
         "SQLiteAccessStore.create": SQLiteAccessStore.create,
         "prepare_access": prepare_access,
         "StreamlitIdentityResolver": StreamlitIdentityResolver,
+        "clear_authenticated_state": clear_authenticated_state,
+        "sign_out_and_stop": sign_out_and_stop,
         "DashboardSections": DashboardSections,
         "ControlDef": ControlDef,
         "ControlRegistry.register": ControlRegistry.register,

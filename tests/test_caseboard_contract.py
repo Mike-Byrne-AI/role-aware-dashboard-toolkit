@@ -310,7 +310,8 @@ def test_shared_json_reader_does_not_open_non_regular_files(tmp_path, monkeypatc
     monkeypatch.setattr(store_diagnostics.os, "open", guarded_open)
 
     assert store_diagnostics.read_json_record(path, errors, root_dir=tmp_path) is None
-    assert errors == []
+    assert len(errors) == 1
+    assert errors[0]["error_type"] == "StorePathSecurityError"
 
 
 def test_shared_json_reader_rejects_opened_file_substitution(tmp_path, monkeypatch):
@@ -656,7 +657,8 @@ def test_file_case_store_records_directory_enumeration_errors(tmp_path, monkeypa
     file_root.write_text("not a store", encoding="utf-8")
     file_store = case_store.FileCaseStore(str(file_root))
     assert file_store.list_cases() == []
-    assert file_store.read_errors == []
+    assert len(file_store.read_errors) == 1
+    assert file_store.read_errors[0]["error_type"] == "NotADirectoryError"
 
     invalid_store = case_store.FileCaseStore(chr(0))
     assert invalid_store.list_cases() == []

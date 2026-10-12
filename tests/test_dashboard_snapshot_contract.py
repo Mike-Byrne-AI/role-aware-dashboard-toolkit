@@ -4,6 +4,8 @@ from role_aware_dashboard_toolkit.checkpoints import (
 )
 from role_aware_dashboard_toolkit.compare import compare_dashboard_snapshots
 
+import pytest
+
 
 def test_build_dashboard_snapshot_captures_dashboard_state_shape():
     snapshot = build_dashboard_snapshot(
@@ -85,3 +87,17 @@ def test_compare_dashboard_snapshots_reports_control_and_state_deltas():
     assert compare["plugin_diff"]["added"] == ["ops-notes"]
     assert compare["plugin_diff"]["removed"] == []
     assert compare["audit_event_delta"] == 1
+
+
+def test_compare_dashboard_snapshots_keeps_empty_restore_controls_authoritative():
+    left = build_dashboard_snapshot({"api_key": "same", "size": 1}, redact_keys=["api_key"])
+    right = build_dashboard_snapshot({"api_key": "same"}, redact_keys=["api_key"])
+    assert compare_dashboard_snapshots(left, right)["control_diff"] == {"size": {"from": 1, "to": None}}
+    assert compare_dashboard_snapshots(right, left)["control_diff"] == {"size": {"from": None, "to": 1}}
+
+
+@pytest.mark.parametrize("restore", [None, {}, {"controls": None}])
+def test_compare_dashboard_snapshots_preserves_legacy_fallback(restore):
+    left = {"controls": {"size": 1}, "restore_payload": restore}
+    right = build_dashboard_snapshot({"size": 2})
+    assert compare_dashboard_snapshots(left, right)["control_diff"] == {"size": {"from": 1, "to": 2}}

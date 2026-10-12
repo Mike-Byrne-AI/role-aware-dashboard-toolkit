@@ -28,6 +28,10 @@ from role_aware_dashboard_toolkit.access import (
     principal_id,
 )
 from role_aware_dashboard_toolkit.security import SecurityContext
+from role_aware_dashboard_toolkit.streamlit_auth import (
+    StreamlitIdentityResolver,
+    _SIGN_OUT_PENDING,
+)
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 EXPECTED_SECTIONS = {
@@ -105,6 +109,110 @@ def _app(host, monkeypatch):
     return _healthy(AppTest.from_function(
         _consumer, args=(host,), default_timeout=15,
     ).run())
+
+
+@pytest.fixture
+def oidc_host(monkeypatch):
+    import streamlit as st
+    from streamlit import user_info
+
+    host = _host()
+    now = time.time()
+    host.claims = {
+        "is_logged_in": True, "iss": ISSUER, "sub": "synthetic-account",
+        "aud": "section-test-client", "iat": now - 60, "exp": now + 600,
+    }
+    host.policy = AccessPolicy(
+        StreamlitIdentityResolver(
+            trusted_issuer=ISSUER, expected_audience="section-test-client",
+        ),
+        host.store, KEY,
+    )
+    host.logout_calls = 0
+    host.logout_fails = False
+
+    def logout():
+        assert "private_previous_account_canary" not in st.session_state
+        assert "_radt_pending_replay" not in st.session_state
+        assert "section_access_admin_runs" not in st.session_state
+        host.logout_calls += 1
+        if host.logout_fails:
+            raise RuntimeError("synthetic-private-provider-detail")
+        host.claims = {"is_logged_in": False}
+
+    monkeypatch.setattr(user_info, "_get_user_info", lambda: host.claims)
+    monkeypatch.setattr(st, "logout", logout)
+    return host
+
+
+def _seed_private_sign_out_state(app):
+    app.session_state["private_previous_account_canary"] = "must disappear"
+    app.session_state["_radt_pending_replay"] = {"queued_write": "synthetic-only"}
+    app.session_state["section_access_admin_runs"] = 3
+
+
+def _assert_sign_out_stopped_private_work(app, host, previous_reads):
+    assert host.reads == previous_reads
+    assert not app.metric and not app.radio
+    for key in (
+        "private_previous_account_canary", "_radt_pending_replay",
+        "section_access_admin_runs", "_radt_role",
+    ):
+        assert key not in app.session_state
+
+
+def test_failed_sign_out_remains_denied_on_rerun_and_supports_recovery(oidc_host, monkeypatch):
+    host = oidc_host
+    app = _app(host, monkeypatch)
+    assert app.metric
+    previous_reads = list(host.reads)
+    _seed_private_sign_out_state(app)
+    host.logout_fails = True
+
+    _healthy(app.button(key="section_access_sign_out").click().run())
+
+    assert host.logout_calls == 1
+    assert any("Sign-out is unavailable" in item.value for item in app.error)
+    assert "synthetic-private-provider-detail" not in repr(app.error)
+    _assert_sign_out_stopped_private_work(app, host, previous_reads)
+    for _ in range(2):
+        _healthy(app.run())
+        _assert_sign_out_stopped_private_work(app, host, previous_reads)
+        assert app.session_state[_SIGN_OUT_PENDING] is True
+        assert app.button(key="_radt_sign_out").label == "Sign out"
+        assert host.logout_calls == 1
+
+    host.logout_fails = False
+    _healthy(app.button(key="_radt_sign_out").click().run())
+    _healthy(app.run())
+    _assert_sign_out_stopped_private_work(app, host, previous_reads)
+    assert host.logout_calls == 2
+    assert app.button(key="_radt_sign_in").label == "Sign in"
+    assert _SIGN_OUT_PENDING not in app.session_state
+
+
+@pytest.mark.parametrize("access_change", ("none", "revoked", "expired"))
+def test_sign_out_click_runs_before_rechecking_access_and_stops_reads(
+    oidc_host, monkeypatch, access_change,
+):
+    host = oidc_host
+    app = _app(host, monkeypatch)
+    assert app.metric
+    previous_reads = list(host.reads)
+    _seed_private_sign_out_state(app)
+    if access_change == "revoked":
+        host.store.replace_grants(host.principal, ())
+    elif access_change == "expired":
+        host.claims["exp"] = time.time() - 1
+
+    _healthy(app.button(key="section_access_sign_out").click().run())
+
+    assert host.logout_calls == 1
+    _assert_sign_out_stopped_private_work(app, host, previous_reads)
+    _healthy(app.run())
+    _assert_sign_out_stopped_private_work(app, host, previous_reads)
+    assert app.button(key="_radt_sign_in").label == "Sign in"
+    assert host.logout_calls == 1
 
 
 @pytest.mark.parametrize("role,sections", EXPECTED_SECTIONS.items())

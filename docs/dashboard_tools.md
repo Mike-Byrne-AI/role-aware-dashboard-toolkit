@@ -155,6 +155,11 @@ Selecting a profile previews it; only a successful load marks it active. Runs
 record the loaded profile as their source at start and refresh the active
 profile identifier at checkpoint capture and completion.
 
+Native profile saves use the selected profile as a parent. Before deriving the
+parent diff, they omit historically sensitive fields and values containing nested
+secret fields, as well as currently sensitive controls. The parent record is
+unchanged unless the operator explicitly confirms replacing it.
+
 Profile store I/O and path-security failures appear inline without resetting
 controls or recording a successful load/save/delete. File-store read diagnostics
 also remain visible; unreadable records are not silently overwritten.
@@ -171,6 +176,9 @@ hidden, and frozen controls.
 Packet export does not override visibility permissions. Full run and checkpoint
 packet previews require `can_export_packets`, `can_view_metrics`, and
 `can_view_audit`; replay previews require export and metrics access.
+Native historical output also reapplies current and recorded control sensitivity
+before building summaries or comparisons. Read/export permission never makes a
+sensitive historical value public, and projection does not rewrite the evidence.
 
 ## Audit
 
@@ -184,8 +192,9 @@ JSONL writer lifecycle. The built-in `Admin` role is the only role granted
 
 The audit CSV download is a spreadsheet-oriented view: fields are quoted and
 formula-like text is prefixed with an apostrophe, including formula prefixes
-after whitespace or Unicode formatting characters. This changes only the CSV
-view; stored audit events and the JSONL download retain their original values.
+after whitespace or Unicode formatting characters. This formula escaping changes
+only the CSV view. Both native downloads first redact currently sensitive
+historical values; the stored audit events remain unchanged.
 NUL characters are displayed as literal `\x00` text so CSV readers, including
 Python 3.10's reader, can import the download. Use JSONL for faithful
 machine-readable evidence. Spreadsheet applications and
@@ -277,7 +286,6 @@ Merge that snippet into your project's `.streamlit/config.toml` before starting
 Streamlit. Preserve unrelated existing settings. Color changes can also be
 applied while the app is running by saving the config and rerunning the app;
 see [Streamlit configuration](https://docs.streamlit.io/develop/concepts/configuration/options).
-Independent sidebar colors require Streamlit 1.44 or newer.
 `build_streamlit_theme_toml` returns text only; imports never change theme files.
 
 Group cards have explicit Python options:
@@ -295,9 +303,11 @@ Use six-digit hexadecimal colors (`#RRGGBB`). Per-group fills override the
 shared card fill; unknown group names fail before widget rendering. Hidden
 registered groups are valid override targets. Plugin setup may register groups
 before the names are checked. Card fills use Streamlit's documented keyed
-containers and require Streamlit 1.39 or newer. Both stacked and column layouts
-support them. With no fill options, the existing unstyled layout and the
-Streamlit 1.30 minimum remain unchanged.
+containers in both stacked and column layouts. With no fill options, default
+rendering is preserved. All workbench layouts use the supported Streamlit
+baseline, 1.65.0 or newer. See the
+[appearance guide](../role_aware_dashboard_toolkit/resources/guides/appearance.md)
+for theme setup and visual checks.
 
 ## Choose built-in panels and menus
 

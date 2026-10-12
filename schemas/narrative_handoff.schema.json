@@ -4,8 +4,8 @@
   "type": "object",
   "required": ["schema_version", "event_type", "narrative_id", "exported_at", "run_id", "headline", "narrative", "summary"],
   "properties": {
-    "schema_version": {"type": "integer"},
-    "event_type": {"const": "narrative_handoff"},
+    "schema_version": {"type": "integer", "const": 1},
+    "event_type": {"const": "narrative_handoff", "type": "string"},
     "narrative_id": {"type": "string"},
     "exported_at": {"type": "string"},
     "run_id": {"type": "string"},

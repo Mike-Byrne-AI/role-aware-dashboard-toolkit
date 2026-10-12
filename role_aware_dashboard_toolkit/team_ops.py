@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from uuid import uuid4
 
 from ._record_utils import normalize_string_list as _normalize_string_list_shared
+from ._record_utils import _record_timestamp_key
 
 TEAM_SCHEMA_VERSION = 1
 VALID_TEAM_EVENT_TYPES = (
@@ -162,7 +163,7 @@ def build_handoff_summary(
     signoff_list = list(signoffs or [])
     summary = summarize_team_ops(assignment_list, comment_list, signoff_list)
     recent_comments: list[dict[str, Any]] = []
-    for record in sorted(comment_list, key=lambda item: str(item.get("ts", "")), reverse=True)[: max(1, int(max_items))]:
+    for record in sorted(comment_list, key=lambda item: _record_timestamp_key(item.get("ts")), reverse=True)[: max(1, int(max_items))]:
         recent_comments.append(
             {
                 "ts": record.get("ts", ""),
@@ -172,7 +173,7 @@ def build_handoff_summary(
             }
         )
     recent_signoffs: list[dict[str, Any]] = []
-    for record in sorted(signoff_list, key=lambda item: str(item.get("ts", "")), reverse=True)[: max(1, int(max_items))]:
+    for record in sorted(signoff_list, key=lambda item: _record_timestamp_key(item.get("ts")), reverse=True)[: max(1, int(max_items))]:
         recent_signoffs.append(
             {
                 "ts": record.get("ts", ""),
@@ -228,7 +229,7 @@ def summarize_team_ops(
             open_assignments += 1
     latest_signoff = ""
     if signoff_list:
-        latest = sorted(signoff_list, key=lambda item: str(item.get("ts", "")))[-1]
+        latest = sorted(signoff_list, key=lambda item: _record_timestamp_key(item.get("ts")))[-1]
         latest_signoff = str(latest.get("decision") or "")
     roles = set()
     for collection in (assignment_list, comment_list, signoff_list):

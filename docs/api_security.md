@@ -17,7 +17,15 @@ configure its API-key and role policy independently.
 
 Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
-`<redacted-secret>` and mark the control as `sensitive: true`. Profile endpoints
+`<redacted-secret>` and mark the control as `sensitive: true`. Structured public
+control responses also redact nested secret-named fields, preserving ordinary
+siblings and the original live values. A public text/color update that would
+stringify a nested secret field receives HTTP 422 before any batch state or
+audit changes. This includes a nested default selected by sanitation. Profile
+activation applies the same check to values it would sanitize. Replace the
+value with an ordinary public value or explicitly configure a write-only
+sensitive control; structured select values retain their existing redacted
+responses. Profile endpoints
 omit sensitive values. Reads of existing profiles expose only currently registered
 public controls, and honor historical sensitivity flags. A control containing
 nested secret-named fields is omitted as a whole, before any text coercion.
@@ -44,12 +52,29 @@ Route permissions follow the existing role map:
 - control reads require `can_view_metrics`
 - control updates require both `can_edit_controls` and the target control's
   declared permission
-- profile reads require `can_load_profiles`; activation also requires each
+- profile value reads require both `can_load_profiles` and `can_view_metrics`;
+  profile metadata listings require `can_load_profiles`.
+  Activation requires `can_load_profiles` and each
   restored control's declared permission, including controls changed by
   sanitization. Permission checks complete before any live values or audit
   events change. Unknown and sensitive profile values are not restored.
 - profile save/delete require `can_save_profiles`
 - audit reads require `can_view_audit`
+
+Control update responses retain their normal fields but contain
+`value: "<redacted-secret>"` when the caller lacks `can_view_metrics`, including
+when sanitation chooses a default or clamps the submitted value. The
+`sensitive` flag continues to describe the control definition; a false flag
+does not grant read permission. The authorized update still completes.
+
+Profile save and activation responses contain `values: {}` when the caller lacks
+`can_view_metrics`; the authorized action still completes. This prevents a
+save/load combination from exposing live controls through a newly saved profile.
+Existing clients that read profile values with a custom load-only role must
+receive an explicit metrics grant or use only metadata and action responses.
+Audit responses reapply current control sensitivity to historical events, so
+marking a control sensitive also hides its earlier values. Stored evidence is
+not rewritten by these response filters.
 
 Plugin loading is a separate trust boundary from API auth. Dashboard plugins are
 in-process trusted code, not sandboxed extensions. When using entry-point
@@ -68,6 +93,13 @@ A host that needs shared UI/API state or external actions must supply its own
 integration and enforce authorization at the action boundary. Shared profile or
 audit stores do not synchronize live controls. The toolkit does not provide a
 shared-state adapter or cross-process coordination.
+
+## Control keys
+
+Single-control reads accept slash-containing keys, including a key derived from
+a label such as `Requests/second`. URL-encode the complete key when appending it
+to `/controls/`, for example `urllib.parse.quote(key, safe="")`. Registration
+does not need a different key to use the API.
 
 ## Profile identifiers and audit provenance
 

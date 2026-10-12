@@ -40,17 +40,22 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ts", "event_type"],
         "properties": {
-          "ts": {"type": "string"},
-          "event_type": {"type": "string"},
-          "detail": {"type": "string"},
-          "actor": {"type": "string"},
-          "role": {"type": "string"},
-          "source": {"type": "string"},
-          "refs": {"type": "object"},
-          "from_state": {"type": "string"},
-          "to_state": {"type": "string"}
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "case_created",
+              "run_linked",
+              "incident_linked",
+              "narrative_linked",
+              "decision_linked",
+              "checkpoint_linked",
+              "note_added",
+              "status_changed",
+              "reopened",
+              "closed"
+            ]
+          }
         }
       }
     }

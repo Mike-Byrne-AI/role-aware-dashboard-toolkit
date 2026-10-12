@@ -47,6 +47,11 @@ overrides when the last field in a group is removed.
 
 Set `sensitive=True` for secrets; sensitive-looking names are also detected.
 Sensitive values are omitted from profiles and redacted in audit/API output.
+Native widgets also protect structured current values, defaults and options
+containing nested secret-named fields before text conversion can erase their
+classification. That protection remains for the session and does not change a
+shared host registry. Ordinary public values remain editable under their usual
+permissions.
 Do not dump raw session state to debug a dashboard.
 
 When `sensitive` is omitted, detection checks both the name and key for words

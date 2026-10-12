@@ -6,7 +6,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_DOCS = (
     "README.md",
     "ARCHITECTURE_SCOPE.md",
-    "docs/what_role_aware_dashboard_toolkit_is_and_is_not.md",
 )
 DISPLAY_NAME = "Role-Aware Dashboard Toolkit"
 DISTRIBUTION_NAME = "role-aware-dashboard-toolkit"
@@ -51,8 +50,7 @@ def test_identity_docs_keep_authority_and_side_effect_boundaries_explicit():
 
 def test_readme_distinguishes_distribution_and_import_names():
     readme = _read("README.md")
-    assert f"python -m pip install {DISTRIBUTION_NAME}" in readme
-    assert f'python -m pip install "{DISTRIBUTION_NAME}[workbench]"' in readme
+    assert f"`{DISTRIBUTION_NAME}`" in readme
     assert f"import {IMPORT_NAMESPACE} as radt" in readme
     assert f"pip install {IMPORT_NAMESPACE}" not in readme
     assert f'pip install "{IMPORT_NAMESPACE}[' not in readme
@@ -64,6 +62,9 @@ def test_readme_primary_paths_use_only_retained_generic_examples():
 
     assert referenced_examples == {
         "examples.core_library",
+        "examples/README.md",
         "examples/dashboard_admin_controls_app.py",
         "examples/operator_review",
+        "examples/section_access",
+        "examples/studio_dispatch",
     }

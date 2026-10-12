@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Role-Aware Dashboard Toolkit Replay Packet",
   "type": "object",
   "required": ["schema_version", "source_type", "source_id", "controls", "touched_keys"],
@@ -7,6 +8,6 @@
     "source_type": {"type": "string"},
     "source_id": {"type": "string"},
     "controls": {"type": "object"},
-    "touched_keys": {"type": "array"}
+    "touched_keys": {"type": "array", "items": {"type": "string"}}
   }
 }

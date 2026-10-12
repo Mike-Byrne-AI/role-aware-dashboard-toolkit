@@ -13,7 +13,9 @@ from ..caseboard import (
     summarize_caseboard,
 )
 from ..security import can_mutate, has_perm
-from .shared import _record_actor, _render_table
+from .._evidence_reads import EvidenceUnavailable, read_records, warn_incomplete_evidence
+from .._record_projection import project_record
+from .shared import _record_actor, _render_table, _save_record
 
 
 def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]], selected_run: dict[str, Any]) -> None:
@@ -22,13 +24,20 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         return
 
     memory_store = getattr(config, "operator_memory_store", None)
-    cases = case_store.list_cases()
+    try:
+        cases = read_records(case_store, "list_cases", record_type="case", ctx=ctx, permission="can_view_team_ops")
+        incidents = read_records(memory_store, "list_incidents", record_type="incident", ctx=ctx,
+                                 permission="can_view_team_ops")
+        narratives = read_records(memory_store, "list_narratives", record_type="narrative_handoff", ctx=ctx,
+                                  permission="can_view_team_ops")
+        notes = read_records(memory_store, "list_notes", record_type="operator_note", ctx=ctx,
+                             permission="can_view_team_ops")
+    except EvidenceUnavailable:
+        warn_incomplete_evidence(st)
+        return
     summary = summarize_caseboard(cases)
     run_options = [str(run.get("run_id") or "") for run in runs if str(run.get("run_id") or "")]
     selected_run_id = str(selected_run.get("run_id") or "")
-    incidents = memory_store.list_incidents() if memory_store is not None else []
-    narratives = memory_store.list_narratives() if memory_store is not None else []
-    notes = memory_store.list_notes() if memory_store is not None else []
 
     st.subheader(getattr(config, "caseboard_title", "Caseboard"))
     st.json(summary)
@@ -73,10 +82,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
         if note_body:
             case = add_case_notes(case, [note_body], actor=_record_actor(ctx, st.session_state), role=ctx.role, source="ui")
-        case_store.save(case)
-        config.audit.log("case_create", detail=case["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case created: {case['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, case):
+            config.audit.log("case_create", detail=case["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case created: {case['case_id']}")
+            st.rerun()
 
     if not cases:
         st.caption("No cross-run cases recorded yet.")
@@ -92,7 +101,7 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
     selected_case = next(case for case in cases if case.get("case_id") == selected_case_id)
     st.json(case_summary(selected_case))
     with st.expander("Case record", expanded=False):
-        st.json(selected_case)
+        st.json(project_record(selected_case, getattr(config, "registry", None)))
 
     if st.button("Reopen case", key=f"_radt_reopen_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         updated = reopen_case(
@@ -102,10 +111,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_reopen", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case reopened: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_reopen", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case reopened: {updated['case_id']}")
+            st.rerun()
 
     if st.button("Close case", key=f"_radt_close_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         updated = close_case(
@@ -115,10 +124,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_close", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case closed: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_close", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case closed: {updated['case_id']}")
+            st.rerun()
 
     note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
     can_comment = bool(note_body) and can_mutate(ctx, "can_comment_runs", default=False)
@@ -130,10 +139,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_note", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case updated: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_note", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case updated: {updated['case_id']}")
+            st.rerun()
 
     if len(cases) >= 2:
         left_id = st.selectbox("Compare left case", options=case_ids, index=max(0, len(case_ids) - 2), key="_radt_compare_case_left")
@@ -141,7 +150,7 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         left_case = next(case for case in cases if case.get("case_id") == left_id)
         right_case = next(case for case in cases if case.get("case_id") == right_id)
         with st.expander("Case compare", expanded=False):
-            st.json(compare_cases(left_case, right_case))
+            st.json(project_record(compare_cases(left_case, right_case), getattr(config, "registry", None)))
 
 
 __all__ = ["_render_caseboard_panel"]

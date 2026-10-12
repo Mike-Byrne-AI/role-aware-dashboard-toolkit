@@ -2,24 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Role-Aware Dashboard Toolkit Ledger",
   "type": "object",
-  "required": [
-    "schema_version",
-    "generated_at",
-    "run_id",
-    "entries",
-    "latest_controls"
-  ],
+  "required": ["schema_version", "generated_at", "run_id", "entries", "latest_controls"],
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 1
-    },
-    "generated_at": {
-      "type": "string"
-    },
-    "run_id": {
-      "type": "string"
-    },
+    "schema_version": {"type": "integer", "const": 1},
+    "generated_at": {"type": "string"},
+    "run_id": {"type": "string"},
     "entries": {
       "type": "array",
       "items": {
@@ -39,7 +26,22 @@
           "controls": {"type": "object"},
           "controls_diff": {"type": "object"},
           "telemetry": {"type": "object"},
-          "audit_event": {"type": "object"},
+          "audit_event": {
+            "type": "object",
+            "properties": {
+              "ts": {"type": "string"},
+              "type": {"type": "string"},
+              "source": {"type": "string"},
+              "key": {"type": "string"},
+              "role": {"type": "string"},
+              "detail": {"type": "string"},
+              "user_id": {"type": "string"},
+              "session_id": {"type": "string"},
+              "app_name": {"type": "string"},
+              "app_version": {"type": "string"},
+              "schema_version": {"type": "integer"}
+            }
+          },
           "audit_count": {"type": "integer"},
           "source_sequence": {
             "type": "integer",
@@ -49,8 +51,6 @@
         }
       }
     },
-    "latest_controls": {
-      "type": "object"
-    }
+    "latest_controls": {"type": "object"}
   }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._record_utils import _record_timestamp_key
 from .store_diagnostics import (
     _JsonCollectionFileStoreMixin,
     canonical_store_id,
@@ -71,7 +72,7 @@ class FileTeamStore(_JsonCollectionFileStoreMixin, BaseTeamStore):
 
     def _list(self, subdir: str, *, run_id: str = "", checkpoint_id: str = "") -> list[dict[str, Any]]:
         rows = self._list_collection_records(subdir, id_key={'comments': 'comment_id', 'assignments': 'assignment_id', 'signoffs': 'signoff_id', 'handoffs': 'handoff_id'}[subdir], run_id=run_id, checkpoint_id=checkpoint_id)
-        rows.sort(key=lambda item: (str(item.get("ts", "")), _stable_id(item)))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("ts")), _stable_id(item)))
         return rows
 
 
@@ -121,7 +122,7 @@ class InMemoryTeamStore(BaseTeamStore):
             if checkpoint_id and str(record.get("checkpoint_id") or "") != str(checkpoint_id):
                 continue
             rows.append(json_roundtrip_copy(record))
-        rows.sort(key=lambda item: (str(item.get("ts", "")), _stable_id(item)))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("ts")), _stable_id(item)))
         return rows
 
 def _stable_id(record: dict[str, Any]) -> str:

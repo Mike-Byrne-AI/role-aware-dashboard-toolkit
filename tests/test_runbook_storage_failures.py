@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from role_aware_dashboard_toolkit import FileRunStore, InMemoryRunStore, build_run
+from role_aware_dashboard_toolkit import FileRunStore, InMemoryRunStore, append_checkpoint, build_run
 from role_aware_dashboard_toolkit.runbook_panels import render_runbook_panel, render_runbook_sidebar
 from role_aware_dashboard_toolkit.store_diagnostics import StorePathSecurityError
 from tests.test_runbook_contract import _FakeStreamlit, _admin_ctx, _limited_ctx, _runbook_config
@@ -65,6 +65,43 @@ def test_missing_active_run_still_clears_selection_after_historical_read_error(t
     assert "No active run." in _messages(ui, "caption")
     assert any(event[0] == "button" and event[2] == "_radt_run_start" for event in ui.events)
     assert len(store.read_errors) == 1
+
+
+@pytest.mark.parametrize("fault", ["status", "checkpoint", "approval"])
+def test_invalid_run_shapes_block_native_use_without_rewriting_evidence(tmp_path, fault):
+    store = FileRunStore(str(tmp_path))
+    invalid = append_checkpoint(build_run({}, run_id="active"), {})
+    if fault == "status":
+        invalid["status"] = "PRIVATE-INVALID-STATUS"
+    elif fault == "checkpoint":
+        invalid["checkpoints"] = [None]
+    else:
+        invalid["checkpoints"][0]["approval_state"] = "PRIVATE-INVALID-APPROVAL"
+    path = Path(store.save(invalid))
+    before = path.read_bytes()
+    store.save(build_run({}, run_id="healthy"))
+    config = _runbook_config(store)
+    ui = _RunbookUI(
+        session_state={"_radt_active_run_id": "active"},
+        button_returns={"_radt_run_checkpoint": True, "_radt_run_end": True},
+    )
+
+    render_runbook_sidebar(ui, config, _admin_ctx())
+    render_runbook_panel(ui, config, _admin_ctx())
+
+    assert ui.session_state["_radt_active_run_id"] == "active"
+    assert ui.session_state["_radt_selected_run_id"] == "healthy"
+    assert _messages(ui, "warning")
+    assert "PRIVATE-INVALID" not in repr(ui.events)
+    assert not config.audit.all_events()
+    assert path.read_bytes() == before
+    assert not store.read_errors, "Valid JSON can still be invalid review evidence."
+
+    store.save(build_run({}, run_id="active"))
+    recovered = _RunbookUI(session_state={"_radt_active_run_id": "active"})
+    render_runbook_sidebar(recovered, config, _admin_ctx())
+    assert not _messages(recovered, "warning")
+    assert any(event[0] == "button" and event[2] == "_radt_run_checkpoint" for event in recovered.events)
 
 
 @pytest.mark.parametrize("keep_healthy", [False, True])

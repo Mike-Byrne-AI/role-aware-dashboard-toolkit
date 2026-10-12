@@ -189,7 +189,11 @@ def test_confirmation_rechecks_authority_at_the_actual_button_boundary(monkeypat
     assert not [event for event in host.audit.all_events() if event["type"] == "profile_save"]
     assert not app.get("toast")
     assert not any(button.key == CONFIRM and not button.disabled for button in app.button)
-    assert app.text_input(key="_radt_profile_name").disabled
+    if boundary == "revoke":
+        assert not any(field.key == "_radt_profile_name" for field in app.text_input)
+        assert "_radt_profile_name" not in app.session_state
+    else:
+        assert app.text_input(key="_radt_profile_name").disabled
 
 
 def test_confirmation_rechecks_authority_after_parent_store_read(monkeypatch):

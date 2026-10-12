@@ -15,7 +15,9 @@ import role_aware_dashboard_toolkit as radt
 from role_aware_dashboard_toolkit.access import AccessDenied, AccessPolicy, SQLiteAccessStore
 from role_aware_dashboard_toolkit.access_cli import read_identity_key
 from role_aware_dashboard_toolkit.dashboard import prepare_access
-from role_aware_dashboard_toolkit.streamlit_auth import StreamlitIdentityResolver, render_sign_in
+from role_aware_dashboard_toolkit.streamlit_auth import (
+    StreamlitIdentityResolver, clear_authenticated_state, render_sign_in, sign_out_and_stop,
+)
 
 APP_TITLE = "Shared Project Pulse"
 RESOURCE_KEY = "_authenticated_pulse_resources"
@@ -67,6 +69,7 @@ def main() -> None:
     try:
         access = build_access_policy()
     except Exception:
+        clear_authenticated_state(st)
         st.error("Access configuration is unavailable. Contact the dashboard administrator.")
         st.stop()
         return
@@ -84,11 +87,10 @@ def main() -> None:
     except AccessDenied:
         render_sign_in(st, provider=os.environ.get("RADT_OIDC_PROVIDER"))
 
-    if st.button("Sign out", key="_authenticated_pulse_sign_out"):
-        st.session_state.clear()
-        st.logout()
-        st.stop()
-        return
+    st.button(
+        "Sign out", key="_authenticated_pulse_sign_out",
+        on_click=lambda: sign_out_and_stop(st),
+    )
 
     # Load private host data or account-specific stores only below this gate.
     # Data reads still need their applicable permission check at the read site.

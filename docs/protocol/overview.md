@@ -61,6 +61,32 @@ retain their list order; validation does not invent or repair sequence metadata.
 Additional application fields are retained. Validation does not grant authority
 or evaluate application business rules.
 
+## JSON schemas
+
+The source checkout and source distribution include 12 JSON Schema Draft 2020-12
+contracts in `schemas/`: case, checkpoint, decision, governance, incident,
+incident timeline, ledger, narrative handoff, operator note, packet, replay, and
+run. Each file is self-contained and can validate records offline; nested
+definitions do not require another file or a network lookup. The installed wheel
+provides the Python validators, not this separate schema directory.
+
+Record schemas describe complete records. The packet schema instead checks
+present fields in partial payloads, including nested records, to preserve packet
+compatibility. Both permit additional application fields. Required fields, field
+types, allowed values, versions, and nested rules are checked against runtime
+validation by mandatory development tests. `jsonschema` is a development
+dependency; the library does not load these files or require it at runtime.
+
+The portable schema contract uses numeric versions and canonical packet names.
+It does not promise identical results for every Python input:
+
+- JSON Schema treats an integral number such as `1.0` as an integer; Python
+  validators require actual integers in integer fields and reject floats.
+- Python accepts some legacy packet version strings and normalizes packet names;
+  those compatibility behaviors are described in [packets.md](packets.md).
+- Extension payload version comparisons remain runtime checks. Applications own
+  the rest of an extension payload's contract.
+
 ## Compatibility
 
 Schema versions change only when a record shape changes incompatibly. Readers

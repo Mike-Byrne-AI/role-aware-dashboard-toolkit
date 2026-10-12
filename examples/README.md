@@ -58,6 +58,11 @@ python -m pip install -e ".[workbench,dev]"
 python -m streamlit run examples/dashboard_admin_controls_app.py
 ```
 
+Named profiles are saved in `profiles/` relative to the launch directory and
+survive app restarts. Audit history is session-local unless you enable its file
+writer. The role selector demonstrates permissions; shared deployments need
+[verified sign-in and assigned roles](../role_aware_dashboard_toolkit/resources/guides/authentication.md).
+
 ![Dashboard Admin Controls screenshot](../docs/assets/dashboard_admin_controls_app.png)
 
 ## Studio Dispatch

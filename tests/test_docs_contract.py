@@ -16,7 +16,6 @@ LIVE_DOCS = frozenset(
         "docs/caseboard.md",
         "docs/dashboard_tools.md",
         "docs/decision_model.md",
-        "docs/development_handoff.md",
         "docs/distribution.md",
         "docs/governance.md",
         "docs/operator_memory.md",
@@ -30,14 +29,11 @@ LIVE_DOCS = frozenset(
         "docs/release_audit.md",
         "docs/release_checklist.md",
         "docs/release_runbook.md",
-        "docs/release_strategy.md",
         "docs/replay.md",
-        "docs/replay_contract.md",
         "docs/run_model.md",
         "docs/shared_store_patterns.md",
         "docs/team_ops.md",
         "docs/telemetry_contract.md",
-        "docs/what_role_aware_dashboard_toolkit_is_and_is_not.md",
     }
 )
 

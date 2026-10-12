@@ -4,8 +4,8 @@
   "type": "object",
   "required": ["schema_version", "event_type", "note_id", "ts", "run_id", "body"],
   "properties": {
-    "schema_version": {"type": "integer"},
-    "event_type": {"enum": ["note", "annotation"]},
+    "schema_version": {"type": "integer", "const": 1},
+    "event_type": {"enum": ["note", "annotation"], "type": "string"},
     "note_id": {"type": "string"},
     "ts": {"type": "string"},
     "run_id": {"type": "string"},

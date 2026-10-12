@@ -213,6 +213,7 @@ def test_decision_panel_previews_without_persisting_until_save_clicked():
         "Auditor",
         {
             "can_view_decisions": True,
+            "can_view_team_ops": True,
             "can_manage_runs": True,
         },
     )
@@ -240,6 +241,40 @@ def test_decision_preview_builder_returns_checkpoint_scoped_preview():
     assert validate_decision_record(preview["decision"])["ok"] is True
 
 
+def test_decision_preview_preserves_empty_latest_controls_for_saved_checkpoint():
+    from role_aware_dashboard_toolkit.runbook_panels_parts import build_decision_panel_preview
+
+    config = _DecisionPanelConfig()
+    run = radt.append_checkpoint(radt.build_run({"obsolete": True}), {"obsolete": True})
+    first_checkpoint = run["checkpoints"][0]
+    saved = decisions.build_decision_case(run, checkpoint=first_checkpoint)
+    config.decision_store.save(saved)
+    run = radt.append_checkpoint(run, {})
+
+    preview = build_decision_panel_preview(config, run, first_checkpoint, actor="tester", role="Operator")
+
+    assert preview["decision"]["checkpoint_id"] == first_checkpoint["checkpoint_id"]
+    assert preview["decision"]["summary"]["latest_controls"] == {}
+    assert saved["summary"]["latest_controls"] == {"obsolete": True}
+    config.decision_store.save(preview["decision"])
+    assert config.decision_store.load(saved["decision_id"])["summary"]["latest_controls"] == {}
+
+
+@pytest.mark.parametrize("run_update,expected", [
+    ({}, {"retained": True}),
+    ({"latest_controls": None}, {"retained": True}),
+    ({"latest_controls": {}}, {}),
+    ({"latest_controls": {"new": True}}, {"new": True}),
+])
+def test_decision_sync_distinguishes_missing_and_empty_latest_controls(run_update, expected):
+    original = decisions.build_decision_case(radt.build_run({"retained": True}))
+
+    updated = sync_decision_case(original, run=run_update)
+
+    assert updated["summary"]["latest_controls"] == expected
+    assert original["summary"]["latest_controls"] == {"retained": True}
+
+
 def test_decision_panel_persists_only_after_explicit_save_click():
     from role_aware_dashboard_toolkit.runbook_panels import _render_decision_panel
 
@@ -252,6 +287,7 @@ def test_decision_panel_persists_only_after_explicit_save_click():
         {
             "can_view_decisions": True,
             "can_manage_decisions": True,
+            "can_view_team_ops": True,
         },
     )
     st = _FakeStreamlit(save=True)

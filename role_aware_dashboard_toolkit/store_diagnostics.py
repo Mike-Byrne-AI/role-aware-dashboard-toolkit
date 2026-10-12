@@ -102,6 +102,21 @@ def _directory_enumeration_read_error(
     }
 
 
+def _missing_path_parent_error(path: Path) -> OSError | ValueError | RuntimeError | None:
+    """Windows can report ENOENT when an existing ancestor is a regular file."""
+    for parent in path.parents:
+        try:
+            parent_mode = parent.stat().st_mode
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError, RuntimeError) as exc:
+            return exc
+        if not stat.S_ISDIR(parent_mode):
+            return NotADirectoryError(errno.ENOTDIR, "store path parent is not a directory")
+        return None
+    return None
+
+
 def _list_json_record_paths(
     directory: Path,
     errors: MutableSequence[StoreReadError],
@@ -111,7 +126,10 @@ def _list_json_record_paths(
     paths: list[Path] = []
     try:
         entries = os.scandir(directory)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
+        parent_error = _missing_path_parent_error(directory)
+        if parent_error is not None:
+            errors.append(_directory_enumeration_read_error(directory, parent_error, root_dir=root_dir))
         return paths
     except (OSError, ValueError, RuntimeError) as exc:
         errors.append(_directory_enumeration_read_error(directory, exc, root_dir=root_dir))
@@ -192,13 +210,19 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
             return None
         try:
             path_mode = path.stat(follow_symlinks=False).st_mode
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            parent_error = _missing_path_parent_error(path)
+            if parent_error is not None:
+                self._read_errors.append(build_read_error(path, parent_error, root_dir=root))
             return None
         except (OSError, ValueError, RuntimeError) as exc:
             self._read_errors.append(build_read_error(path, exc, root_dir=root))
             return None
         if stat.S_ISREG(path_mode) or stat.S_ISLNK(path_mode):
             return path
+        self._read_errors.append(build_read_error(
+            path, StorePathSecurityError(_STORE_RECORD_UNSAFE_MESSAGE), root_dir=root,
+        ))
         return None
 
     def _path_for_write(self, record_id: str) -> Path:
@@ -237,7 +261,12 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
         target_dir = store_root / subdir
         try:
             safe_store_write_path(target_dir, root_dir=store_root)
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            parent_error = _missing_path_parent_error(target_dir)
+            if parent_error is not None:
+                self._read_errors.append(_directory_enumeration_read_error(
+                    target_dir, parent_error, root_dir=store_root,
+                ))
             return []
         except StorePathSecurityError as exc:
             self._read_errors.append(build_read_error(target_dir, exc, root_dir=store_root))
@@ -304,10 +333,13 @@ def read_text_record(
         return None
     try:
         return _read_validated_store_text(path, expected_stat)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
         try:
             path.stat(follow_symlinks=False)
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
+            parent_error = _missing_path_parent_error(path)
+            if parent_error is not None and errors is not None:
+                errors.append(build_read_error(path, parent_error, root_dir=root_dir))
             return None
         except (OSError, ValueError, RuntimeError) as probe_exc:
             if errors is not None:
@@ -495,7 +527,10 @@ def _probe_safe_store_read_file(
 ) -> os.stat_result | None:
     try:
         _resolve_safe_store_write_path(path, root_dir=root_dir)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
+        parent_error = _missing_path_parent_error(path)
+        if parent_error is not None and errors is not None:
+            errors.append(build_read_error(path, parent_error, root_dir=root_dir))
         return None
     except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
         if errors is not None:
@@ -504,7 +539,10 @@ def _probe_safe_store_read_file(
 
     try:
         path_stat = path.stat(follow_symlinks=False)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError:
+        parent_error = _missing_path_parent_error(path)
+        if parent_error is not None and errors is not None:
+            errors.append(build_read_error(path, parent_error, root_dir=root_dir))
         return None
     except (OSError, ValueError, RuntimeError) as exc:
         if errors is not None:
@@ -517,6 +555,10 @@ def _probe_safe_store_read_file(
             errors.append(build_read_error(path, exc, root_dir=root_dir))
         return None
     if not stat.S_ISREG(path_stat.st_mode):
+        if errors is not None:
+            errors.append(build_read_error(
+                path, StorePathSecurityError(_STORE_RECORD_UNSAFE_MESSAGE), root_dir=root_dir,
+            ))
         return None
     if _is_single_link_regular_store_file(path_stat):
         return path_stat

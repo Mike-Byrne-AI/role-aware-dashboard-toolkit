@@ -2,22 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Role-Aware Dashboard Toolkit Packet",
   "type": "object",
-  "required": [
-    "schema_version",
-    "packet_type",
-    "packet_id",
-    "exported_at",
-    "source_app",
-    "source_version",
-    "payload_schema_version",
-    "payload",
-    "meta"
-  ],
+  "required": ["schema_version", "packet_type", "packet_id", "exported_at", "payload_schema_version", "payload"],
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 1
-    },
+    "schema_version": {"type": "integer", "const": 1},
     "packet_type": {
       "type": "string",
       "minLength": 1,
@@ -26,49 +13,232 @@
       "description": "Canonical serialized identifier. Builders, import and export normalize surrounding whitespace and case.",
       "anyOf": [
         {
-          "enum": [
-            "profile",
-            "run",
-            "checkpoint",
-            "audit_slice",
-            "compare",
-            "replay",
-            "ledger",
-            "narrative_handoff"
-          ]
+          "enum": ["profile", "run", "checkpoint", "audit_slice", "compare", "replay", "ledger", "narrative_handoff"]
         },
-        {
-          "pattern": "^x_"
-        }
+        {"pattern": "^x_"}
       ]
     },
-    "packet_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "exported_at": {
-      "type": "string"
-    },
-    "source_app": {
-      "type": "string",
-      "minLength": 1
-    },
-    "source_version": {
-      "type": "string"
-    },
+    "packet_id": {"type": "string"},
+    "exported_at": {"type": "string"},
+    "source_app": {"type": "string"},
+    "source_version": {"type": "string"},
     "payload_schema_version": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "description": "Numeric versions are the portable contract; legacy version strings remain supported by Python validation and export."
     },
-    "payload": {
-      "type": "object"
-    },
-    "meta": {
-      "type": "object"
-    },
-    "extensions": {
-      "type": "object"
-    }
+    "payload": {"type": "object"},
+    "meta": {"type": "object"},
+    "extensions": {"type": "object"}
   },
-  "additionalProperties": false
+  "additionalProperties": true,
+  "description": "Portable packet format with canonical type identifiers and numeric payload versions. Python compatibility handling and extension version comparisons are documented in docs/protocol/packets.md.",
+  "allOf": [
+    {
+      "if": {"properties": {"packet_type": {"const": "profile"}}, "required": ["packet_type"]},
+      "then": {"properties": {"payload_schema_version": {"const": 3}, "payload": {"$ref": "#/$defs/profile_payload"}}}
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "run"}}, "required": ["packet_type"]},
+      "then": {"properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/run_payload"}}}
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "checkpoint"}}, "required": ["packet_type"]},
+      "then": {
+        "properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/checkpoint_payload"}}
+      }
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "audit_slice"}}, "required": ["packet_type"]},
+      "then": {
+        "properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/audit_slice_payload"}}
+      }
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "compare"}}, "required": ["packet_type"]},
+      "then": {"properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/compare_payload"}}}
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "replay"}}, "required": ["packet_type"]},
+      "then": {"properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/replay_payload"}}}
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "ledger"}}, "required": ["packet_type"]},
+      "then": {"properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/ledger_payload"}}}
+    },
+    {
+      "if": {"properties": {"packet_type": {"const": "narrative_handoff"}}, "required": ["packet_type"]},
+      "then": {
+        "properties": {"payload_schema_version": {"const": 1}, "payload": {"$ref": "#/$defs/narrative_handoff_payload"}}
+      }
+    }
+  ],
+  "$defs": {
+    "run_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "run_id": {"type": "string"},
+        "status": {"type": "string", "enum": ["draft", "active", "completed", "aborted"]},
+        "initial_controls": {"type": "object"},
+        "latest_controls": {"type": "object"},
+        "checkpoints": {"type": "array", "items": {"$ref": "#/$defs/checkpoint_payload"}},
+        "started_at": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "ended_at": {"type": "string"},
+        "actor": {"type": "string"},
+        "role": {"type": "string"},
+        "notes": {"type": "string"},
+        "outcome": {"type": "string"},
+        "source_profile_id": {"type": "string"},
+        "active_profile_id": {"type": "string"},
+        "app_name": {"type": "string"},
+        "app_version": {"type": "string"},
+        "session_id": {"type": "string"},
+        "source": {"type": "string"},
+        "last_checkpoint_id": {"type": "string"}
+      }
+    },
+    "checkpoint_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "checkpoint_id": {"type": "string"},
+        "controls": {"type": "object"},
+        "approval_state": {"type": "string", "enum": ["proposed", "approved", "rejected", "frozen", "replay_only"]},
+        "approval": {"$ref": "#/$defs/approval_fields"},
+        "ts": {"type": "string"},
+        "telemetry_slice": {"type": "object"},
+        "audit_slice": {"type": "array", "items": {"$ref": "#/$defs/audit_event_fields"}},
+        "label": {"type": "string"},
+        "reason": {"type": "string"},
+        "actor": {"type": "string"},
+        "role": {"type": "string"},
+        "source": {"type": "string"}
+      }
+    },
+    "replay_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "source_type": {"type": "string"},
+        "source_id": {"type": "string"},
+        "controls": {"type": "object"},
+        "touched_keys": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "ledger_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "generated_at": {"type": "string"},
+        "run_id": {"type": "string"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/ledger_entry_fields"}},
+        "latest_controls": {"type": "object"}
+      }
+    },
+    "narrative_handoff_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "event_type": {"const": "narrative_handoff", "type": "string"},
+        "narrative_id": {"type": "string"},
+        "exported_at": {"type": "string"},
+        "run_id": {"type": "string"},
+        "headline": {"type": "string"},
+        "narrative": {"type": "string"},
+        "summary": {"type": "object"},
+        "highlights": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "approval_fields": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "ts": {"type": "string"},
+        "state": {"type": "string", "enum": ["proposed", "approved", "rejected", "frozen", "replay_only"]},
+        "actor": {"type": "string"},
+        "role": {"type": "string"},
+        "reason": {"type": "string"},
+        "source": {"type": "string"}
+      }
+    },
+    "audit_event_fields": {
+      "type": "object",
+      "properties": {
+        "ts": {"type": "string"},
+        "type": {"type": "string"},
+        "source": {"type": "string"},
+        "key": {"type": "string"},
+        "role": {"type": "string"},
+        "detail": {"type": "string"},
+        "user_id": {"type": "string"},
+        "session_id": {"type": "string"},
+        "app_name": {"type": "string"},
+        "app_version": {"type": "string"},
+        "schema_version": {"type": "integer"}
+      }
+    },
+    "ledger_entry_fields": {
+      "type": "object",
+      "properties": {
+        "entry_type": {"type": "string", "enum": ["run_started", "checkpoint", "audit_event", "run_ended"]},
+        "entry_id": {"type": "string"},
+        "ts": {"type": "string"},
+        "run_id": {"type": "string"},
+        "checkpoint_id": {"type": "string"},
+        "actor": {"type": "string"},
+        "role": {"type": "string"},
+        "approval_state": {"type": "string"},
+        "label": {"type": "string"},
+        "reason": {"type": "string"},
+        "detail": {"type": "string"},
+        "controls": {"type": "object"},
+        "controls_diff": {"type": "object"},
+        "telemetry": {"type": "object"},
+        "audit_event": {"$ref": "#/$defs/audit_event_fields"},
+        "audit_count": {"type": "integer"},
+        "source_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Optional original entry position before chronological sorting. Complete unique values preserve source order for reconstruction; legacy ledgers with absent, incomplete or duplicate sequences retain list order. Present values must be nonnegative integers."
+        }
+      }
+    },
+    "profile_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 3},
+        "profile_id": {"type": "string"},
+        "saved_at": {"type": "string"},
+        "role": {"type": "string"},
+        "parent_profile_id": {"type": "string"},
+        "app_name": {"type": "string"},
+        "app_version": {"type": "string"},
+        "session_id": {"type": "string"},
+        "source": {"type": "string"},
+        "values": {"type": "object"},
+        "diff_from_parent": {"type": "object"},
+        "extra": {"type": "object"},
+        "control_meta": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "audit_slice_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "event_count": {"type": "integer"},
+        "events": {"type": "array", "items": {"$ref": "#/$defs/audit_event_fields"}}
+      }
+    },
+    "compare_payload": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "diff_type": {"type": "string"},
+        "source_ids": {"type": "array", "items": {"type": "string"}},
+        "diff": {"type": "object"}
+      }
+    }
+  }
 }

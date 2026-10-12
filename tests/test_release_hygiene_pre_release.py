@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,27 @@ def test_pre_release_check_json_entrypoint_reports_local_configuration_scope():
     for field in ("blocked", "failures", "warnings"):
         assert payload[field] == []
     assert payload["blocked_count"] == payload["failure_count"] == payload["warning_count"] == 0
+
+
+@pytest.mark.parametrize("heading,expected_status", [
+    ("## 0.1.0", "pass"),
+    ("## 0.1.0 - 2026-10-10", "pass"),
+    ("## 0.1.0rc1", "fail"),
+    ("## 0.1.0.post1", "fail"),
+    ("## 0.1.01", "fail"),
+    ("## 0x1x0", "fail"),
+    ("### 0.1.0", "fail"),
+    ("Release notes mention ## 0.1.0 here.", "fail"),
+])
+def test_changelog_gate_requires_exact_release_version_heading(monkeypatch, tmp_path, heading, expected_status):
+    pre_release = load_pre_release_check_module()
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n{heading}\n\nRelease notes.\n", encoding="utf-8")
+    monkeypatch.setattr(pre_release, "REPO_ROOT", tmp_path)
+
+    result = pre_release._check_changelog(SimpleNamespace(__version__="0.1.0"))
+
+    assert result["id"] == "changelog_version"
+    assert result["status"] == expected_status
 
 
 def test_security_contact_helper_rejects_unrelated_contact_tokens():

@@ -10,6 +10,7 @@ from .operator_memory_normalization import (
     summarize_incident_timeline as _summarize_incident_timeline,
 )
 from ._record_utils import normalize_string_list as _normalize_string_list_shared
+from ._record_utils import _record_timestamp_key
 
 OPERATOR_MEMORY_SCHEMA_VERSION = 1
 VALID_MEMORY_EVENT_TYPES = (
@@ -239,7 +240,7 @@ def build_incident_timeline(
                 str(audit.get("detail") or "")[:220],
                 severity="medium" if str(audit.get("type") or "") in {"freeze", "checkpoint_replay"} else "info",
                 refs={"run_id": run_id},
-                actor=str(audit.get("actor") or ""),
+                actor=str(audit.get("user_id") or audit.get("actor") or ""),
                 role=str(audit.get("role") or ""),
                 source=str(audit.get("source") or ""),
             )
@@ -267,7 +268,7 @@ def build_incident_timeline(
             )
         )
 
-    items.sort(key=lambda item: (str(item.get("ts") or ""), str(item.get("event_id") or "")))
+    items.sort(key=lambda item: (_record_timestamp_key(item.get("ts")), str(item.get("event_id") or "")))
     if max_items > 0:
         items = items[-int(max_items):]
     timeline_id = f"timeline_{run_id or 'default'}"
@@ -305,7 +306,7 @@ def build_operator_summary(
     if decisions:
         latest_decision = sorted(
             list(decisions),
-            key=lambda item: (str(item.get("updated_at") or item.get("created_at") or ""), str(item.get("decision_id") or "")),
+            key=lambda item: (_record_timestamp_key(item.get("updated_at") or item.get("created_at")), str(item.get("decision_id") or "")),
         )[-1]
         latest_decision_state = str(latest_decision.get("state") or "")
     possible_contributors = []

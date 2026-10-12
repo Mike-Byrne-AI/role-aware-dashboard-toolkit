@@ -21,11 +21,29 @@ clears the active selection. Preserve damaged records, check the store's
 read diagnostics remain available even after a successful retry; they do not
 keep a recovered run disabled or make a current successful read appear to fail.
 
+If a runbook or review-record save fails, the dashboard keeps rendering controls
+and drafts and reports that storage completion is uncertain. A store may have
+written before raising an error. Check the saved records and repair storage
+before retrying; the dashboard does not automatically retry or record a success
+event for that failed call.
+
 Start a run, adjust controls, capture labeled checkpoints, compare them, and
 end the run with an outcome. A checkpoint contains detached control, audit and
 telemetry evidence subject to the current visibility permissions. Sensitive
 controls are excluded. The run keeps its starting profile identifier and updates
 its active profile identifier at checkpoint/end.
+
+Historical displays, comparisons and exports also honor current control
+sensitivity and historical sensitivity metadata without rewriting the saved
+records. A control marked sensitive after capture remains hidden in those views.
+Native replay omits historically sensitive values and nested secret fields before
+restoration can convert them into visible text.
+
+Team and review panels stop dependent summaries and saves when their configured
+evidence stores cannot be read completely or contain invalid records. A corrupt
+rejection or incident must not become a missing blocker. Check the store
+diagnostics, repair the evidence and retry; old diagnostics do not prevent
+recovery after a successful read.
 
 Native checkpoint and run comparisons show recorded outcome measurements next
 to control changes when `can_view_metrics` is granted. They retain sample times

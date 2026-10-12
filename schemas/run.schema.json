@@ -1,13 +1,79 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Role-Aware Dashboard Toolkit Run",
   "type": "object",
   "required": ["schema_version", "run_id", "started_at", "status", "initial_controls", "latest_controls", "checkpoints"],
   "properties": {
     "schema_version": {"type": "integer", "const": 1},
     "run_id": {"type": "string"},
-    "status": {"type": "string"},
+    "status": {"type": "string", "enum": ["draft", "active", "completed", "aborted"]},
     "initial_controls": {"type": "object"},
     "latest_controls": {"type": "object"},
-    "checkpoints": {"type": "array"}
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["schema_version", "checkpoint_id", "ts", "controls", "approval_state", "approval"],
+        "properties": {
+          "schema_version": {"type": "integer", "const": 1},
+          "checkpoint_id": {"type": "string"},
+          "ts": {"type": "string"},
+          "controls": {"type": "object"},
+          "approval_state": {"type": "string", "enum": ["proposed", "approved", "rejected", "frozen", "replay_only"]},
+          "approval": {
+            "type": "object",
+            "required": ["schema_version", "ts", "state"],
+            "properties": {
+              "schema_version": {"type": "integer", "const": 1},
+              "ts": {"type": "string"},
+              "state": {"type": "string", "enum": ["proposed", "approved", "rejected", "frozen", "replay_only"]},
+              "actor": {"type": "string"},
+              "role": {"type": "string"},
+              "reason": {"type": "string"},
+              "source": {"type": "string"}
+            }
+          },
+          "telemetry_slice": {"type": "object"},
+          "audit_slice": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ts": {"type": "string"},
+                "type": {"type": "string"},
+                "source": {"type": "string"},
+                "key": {"type": "string"},
+                "role": {"type": "string"},
+                "detail": {"type": "string"},
+                "user_id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "app_name": {"type": "string"},
+                "app_version": {"type": "string"},
+                "schema_version": {"type": "integer"}
+              }
+            }
+          },
+          "label": {"type": "string"},
+          "reason": {"type": "string"},
+          "actor": {"type": "string"},
+          "role": {"type": "string"},
+          "source": {"type": "string"}
+        }
+      }
+    },
+    "started_at": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}},
+    "ended_at": {"type": "string"},
+    "actor": {"type": "string"},
+    "role": {"type": "string"},
+    "notes": {"type": "string"},
+    "outcome": {"type": "string"},
+    "source_profile_id": {"type": "string"},
+    "active_profile_id": {"type": "string"},
+    "app_name": {"type": "string"},
+    "app_version": {"type": "string"},
+    "session_id": {"type": "string"},
+    "source": {"type": "string"},
+    "last_checkpoint_id": {"type": "string"}
   }
 }

@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from copy import copy
 from typing import Any
 
-from ._ui_state import retain_control_state, restore_unauthorized_control_state
+from ._ui_state import protect_native_controls, retain_control_state, restore_unauthorized_control_state
 from .appearance import validate_dashboard_appearance, validate_dashboard_colors
 from .audit import AuditLog
 from .controls import ControlRegistry
@@ -196,6 +196,12 @@ def render(config: DashboardConfig) -> SecurityContext:
             "check plugin setup configuration and retry. " + diagnostic_text("RADT-PLUGIN"),
         )
         raise
+    # Detect structured secrets before sanitation can turn them into ordinary
+    # text. The view is session-local; shared host definitions stay untouched.
+    protected_registry = protect_native_controls(config.registry, streamlit_runtime.session_state)
+    if protected_registry is not config.registry:
+        config = copy(config)
+        config.registry = protected_registry
     state = prepare_render_state(config, streamlit_runtime.session_state)
     sidebar = render_sidebar(streamlit_runtime, config)
     ctx = sidebar.ctx
@@ -222,6 +228,7 @@ def render(config: DashboardConfig) -> SecurityContext:
             panel = ObservabilityPanel(
                 config.observability, state.audit, streamlit_runtime.session_state,
                 can_read_audit=lambda: has_perm(ctx, "can_view_audit"),
+                registry=config.registry,
             )
             panel.render(streamlit_runtime)
 
@@ -245,7 +252,7 @@ def render(config: DashboardConfig) -> SecurityContext:
         streamlit_runtime.warning(f"Plugin panel error: {error}")
 
     if section_visible(config, "audit_log") and has_perm(ctx, "can_view_audit"):
-        render_audit_panel(streamlit_runtime, state.audit, ctx)
+        render_audit_panel(streamlit_runtime, state.audit, ctx, registry=config.registry)
 
     return ctx
 

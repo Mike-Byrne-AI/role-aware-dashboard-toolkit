@@ -5,6 +5,8 @@ from typing import Any
 from collections.abc import Iterable
 from uuid import uuid4
 
+from ._record_utils import _record_timestamp_key
+
 GOVERNANCE_SCHEMA_VERSION = 1
 VALID_GOVERNANCE_STATES = (
     "admissible",
@@ -294,13 +296,13 @@ def evaluate_case_governance(
 def _build_evidence_linkage_check(case: dict[str, Any]) -> dict[str, Any]:
     linked_refs = sum(
         len(list(case.get(field) or []))
-        for field in ("linked_run_ids", "linked_decision_ids", "linked_incident_ids", "linked_narrative_ids", "linked_note_ids")
+        for field in ("linked_run_ids", "linked_checkpoint_ids", "linked_decision_ids", "linked_incident_ids", "linked_narrative_ids", "linked_note_ids")
     )
     return build_policy_check(
         "evidence_linkage",
         "Linked evidence present",
         "pass" if linked_refs > 0 else "warn",
-        detail="Case includes linked runs/incidents/decisions." if linked_refs > 0 else "Case has no linked evidence yet.",
+        detail="Case includes linked evidence." if linked_refs > 0 else "Case has no linked evidence yet.",
     )
 
 
@@ -343,8 +345,16 @@ def _build_decision_gate_checks(decisions: list[dict[str, Any]]) -> list[dict[st
         for item in decisions
         if str(item.get("state") or "").strip()
     }
-    replay_only_decisions = sorted(decision_states.intersection(REPLAY_ONLY_DECISION_STATES))
-    blocking_decisions = sorted(decision_states.intersection(BLOCKING_DECISION_STATES))
+    approval_states = {
+        str(item.get("approval_state") or "").strip().lower()
+        for item in decisions
+        if str(item.get("approval_state") or "").strip()
+    }
+    # A workflow transition (or an older derived snapshot) cannot erase the
+    # checkpoint's independent restriction on live changes.
+    evidence_states = decision_states | approval_states
+    replay_only_decisions = sorted(evidence_states.intersection(REPLAY_ONLY_DECISION_STATES))
+    blocking_decisions = sorted(evidence_states.intersection(BLOCKING_DECISION_STATES))
     checks: list[dict[str, Any]] = []
     if replay_only_decisions:
         checks.append(
@@ -352,9 +362,12 @@ def _build_decision_gate_checks(decisions: list[dict[str, Any]]) -> list[dict[st
                 "replay_gate",
                 "Replay-only decision gate",
                 "fail",
-                detail="At least one linked decision is replay-only; live mutation is blocked.",
+                detail="At least one linked decision or checkpoint approval is replay-only; live mutation is blocked.",
                 blocker=True,
-                refs={"decision_states": replay_only_decisions},
+                refs={
+                    "decision_states": sorted(decision_states.intersection(REPLAY_ONLY_DECISION_STATES)),
+                    "approval_states": sorted(approval_states.intersection(REPLAY_ONLY_DECISION_STATES)),
+                },
             )
         )
     else:
@@ -363,7 +376,7 @@ def _build_decision_gate_checks(decisions: list[dict[str, Any]]) -> list[dict[st
                 "replay_gate",
                 "Replay-only decision gate",
                 "pass",
-                detail="No replay-only linked decisions detected.",
+                detail="No replay-only linked decisions or checkpoint approvals detected.",
             )
         )
     if blocking_decisions:
@@ -372,9 +385,12 @@ def _build_decision_gate_checks(decisions: list[dict[str, Any]]) -> list[dict[st
                 "decision_health",
                 "Blocking decision states",
                 "fail",
-                detail=f"Blocking linked decision state(s): {', '.join(blocking_decisions)}.",
+                detail=f"Blocking linked decision or checkpoint approval state(s): {', '.join(blocking_decisions)}.",
                 blocker=True,
-                refs={"decision_states": blocking_decisions},
+                refs={
+                    "decision_states": sorted(decision_states.intersection(BLOCKING_DECISION_STATES)),
+                    "approval_states": sorted(approval_states.intersection(BLOCKING_DECISION_STATES)),
+                },
             )
         )
     else:
@@ -383,7 +399,7 @@ def _build_decision_gate_checks(decisions: list[dict[str, Any]]) -> list[dict[st
                 "decision_health",
                 "Blocking decision states",
                 "pass",
-                detail="No rejected/frozen linked decisions detected.",
+                detail="No rejected/frozen linked decisions or checkpoint approvals detected.",
             )
         )
     return checks
@@ -449,11 +465,7 @@ def derive_case_severity(case: dict[str, Any], *, incidents: list[dict[str, Any]
 def derive_approval_requirements(severity: str, *, signoffs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     required_roles = required_roles_for_severity(severity)
     satisfied_roles = sorted(
-        {
-            str(item.get("role") or "").strip()
-            for item in list(signoffs or [])
-            if str(item.get("decision") or "").strip().lower() in SIGNOFF_APPROVED and str(item.get("role") or "").strip()
-        },
+        _current_signoff_roles(list(signoffs or [])),
         key=lambda value: value.lower(),
     )
     missing_roles = [role for role in required_roles if role not in satisfied_roles]
@@ -464,6 +476,44 @@ def derive_approval_requirements(severity: str, *, signoffs: list[dict[str, Any]
         "is_satisfied": not missing_roles,
         "minimum_signoff_count": len(required_roles),
     }
+
+
+def _current_signoff_roles(signoffs: list[dict[str, Any]]) -> set[str]:
+    """Credit the current signoff of each reviewer in each run/checkpoint scope.
+
+    Role and assignment changes do not keep an identified reviewer's old
+    approval alive. Anonymous signoffs use their role as the reviewer identity.
+    Undated evidence competes with the latest dated evidence: unresolved order
+    cannot establish approval if any candidate requests changes or rejects it.
+    """
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for record in signoffs:
+        actor = str(record.get("actor") or "").strip()
+        role = str(record.get("role") or "").strip()
+        key = (
+            str(record.get("run_id") or ""),
+            str(record.get("checkpoint_id") or ""),
+            "actor" if actor else "role",
+            actor or role,
+        )
+        groups.setdefault(key, []).append(record)
+
+    satisfied: set[str] = set()
+    for records in groups.values():
+        ordered = [(_record_timestamp_key(record.get("ts")), record) for record in records]
+        dated_times = [time_key[1] for time_key, _ in ordered if not time_key[0]]
+        latest_time = max(dated_times) if dated_times else None
+        candidates = [
+            record for time_key, record in ordered
+            if time_key[0] or time_key[1] == latest_time
+        ]
+        if any(str(record.get("decision") or "").strip().lower() not in SIGNOFF_APPROVED for record in candidates):
+            continue
+        roles = {str(record.get("role") or "").strip() for record in candidates}
+        # A tie across role changes cannot prove which role the reviewer used.
+        if len(roles) == 1:
+            satisfied.update(roles - {""})
+    return satisfied
 
 
 

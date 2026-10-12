@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Callable
 from typing import Any
 
 from .._optional_pandas import load_optional_pandas
+from .._record_projection import project_record
 from ..security import has_perm
 
 pd = None
 PANDAS_AVAILABLE: bool | None = None
+
+
+def _save_record(st: Any, save: Callable[[dict[str, Any]], Any], record: dict[str, Any]) -> bool:
+    """Report uncertain storage completion without leaking provider details.
+
+    Only the storage call is caught. Callers keep rendering their widgets on
+    failure, and emit success events or rerun only after a confirmed return.
+    Never retry here: a provider can commit a write before raising an error.
+    """
+    try:
+        save(record)
+    except Exception:
+        st.warning(
+            "Record storage could not confirm this save. It may have completed partially. "
+            "Check the saved records and storage before retrying. "
+            "Help: python -m role_aware_dashboard_toolkit guide runs"
+        )
+        return False
+    return True
 
 
 def _render_table(st: Any, rows: Any) -> None:
@@ -15,7 +36,7 @@ def _render_table(st: Any, rows: Any) -> None:
     if pandas is None:
         st.json(rows)
         return
-    st.dataframe(pandas.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pandas.DataFrame(rows), width="stretch", hide_index=True)
 
 
 def _parse_tags(raw: Any) -> list[str]:
@@ -44,10 +65,16 @@ def _record_session(ctx: Any, session_state: Any) -> str:
     return str(session_state.get("_radt_session_id", ""))
 
 
-def _record_summary_view(record: dict[str, Any], ctx: Any) -> dict[str, Any]:
+def _record_summary_view(
+    record: dict[str, Any], ctx: Any, registry: Any = None, *, source: Any = None,
+) -> dict[str, Any]:
     """Filter native saved-control summaries at display time, without editing evidence."""
-    view = deepcopy(record)
-    if not has_perm(ctx, "can_view_metrics", default=False):
+    can_view_values = has_perm(ctx, "can_view_metrics", default=False)
+    view = project_record(
+        {"source": source, "record": record}, registry,
+        include_control_metadata_values=can_view_values,
+    )["record"]
+    if not can_view_values:
         summary = view.get("summary")
         if isinstance(summary, dict):
             summary.pop("latest_controls", None)
@@ -84,6 +111,7 @@ __all__ = [
     "_record_session",
     "_record_summary_view",
     "_render_table",
+    "_save_record",
     "_selected_profile_id",
     "pd",
 ]

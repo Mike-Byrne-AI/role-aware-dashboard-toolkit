@@ -10,6 +10,7 @@ import unicodedata
 
 from ._json_safety import strict_json_loads
 from ._optional_pandas import load_optional_pandas
+from ._record_projection import project_audit_events, project_record
 from ._ui_state import last_authorized_control_value, remember_authorized_control_values
 from .appearance import group_background_color, styled_group_container
 from .audit import audit_event_view
@@ -76,11 +77,13 @@ def render_audit_panel(
     st: Any,
     audit: Any,
     ctx: SecurityContext | None = None,
+    *,
+    registry: Any = None,
 ) -> None:
     can_clear = can_mutate(ctx, "can_manage_audit")
     st.divider()
     with st.expander("Audit Log", expanded=False):
-        events = audit.recent(100)
+        events = project_audit_events(audit.recent(100), registry)
         if not events:
             st.caption("No audit events yet.")
             clear_requested = st.button(
@@ -111,7 +114,7 @@ def render_audit_panel(
                 audit.clear()
                 st.rerun()
 
-        source_events = audit.all_events() if hasattr(audit, "all_events") else events
+        source_events = project_audit_events(audit.all_events(), registry) if hasattr(audit, "all_events") else events
         filtered = _filter_audit_panel_events(source_events, event_types=selected_types, text=search, limit=100)
         if not filtered:
             st.info("No matching events.")
@@ -131,10 +134,10 @@ def render_audit_panel(
             ]
             radt = pandas.DataFrame(display_events)
             display_cols = [c for c in ["ts", "type", "key", "old", "new", "role", "detail", "source"] if c in radt.columns]
-            st.dataframe(radt[display_cols], use_container_width=True, hide_index=True)
+            st.dataframe(radt[display_cols], width="stretch", hide_index=True)
 
         st.subheader("Replay Preview")
-        st.json(audit.replay_plan(limit=replay_limit))
+        st.json(project_record(audit.replay_plan(limit=replay_limit), registry))
 
         c_exp1, c_exp2 = st.columns(2)
         with c_exp1:

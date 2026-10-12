@@ -15,6 +15,16 @@ These core helpers operate on dictionaries; a host using them directly owns
 authorization. The native dashboard profile menu enforces its action and
 per-control permissions.
 
+In authenticated mode, opening the profile menu requires `can_load_profiles` or
+`can_save_profiles`. Without either permission, it does not create or read a
+profile store, and clears stale profile selection and replacement state. Access
+is rechecked after reads and before showing their results. Save permission also
+allows viewing existing profile names and metadata needed to select parents,
+replace profiles and delete them; it does not permit loading or previewing saved
+values. Value previews still require both metrics-view and profile-load
+permission. Scope shared stores to the intended accounts or tenants in the host:
+these permissions do not provide row-level ownership or tenant filtering.
+
 In the native menu, **Save** creates a new name immediately. Reusing an existing
 name first offers **Replace saved profile** and **Cancel replacement**; the
 stored profile changes only after confirmation. Changing the name, selection,
@@ -55,6 +65,12 @@ Viewing values requires both metrics-view and profile-load permission. Sensitive
 values and values from removed controls are hidden. Previewing does not change
 live state, run callbacks, save records or add audit events. Load rereads the
 profile and checks current permissions before applying it.
+
+`profile_diff(before, after)` includes value changes and added or removed keys,
+including keys whose value is `None`. Its existing `{"from": ..., "to": ...}`
+format uses `None` for an absent side. Adding or removing a null-valued key
+therefore produces `{"from": None, "to": None}`; use the source mappings to
+determine direction. A key present with `None` on both sides is unchanged.
 
 `InMemoryProfileStore` is session-local when retained by the host.
 `FileProfileStore(profile_dir)` enables durable local JSON only when the host

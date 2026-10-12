@@ -32,6 +32,45 @@ Recommended permissions:
 Governance permissions are explicit. Missing permission keys fail closed; run
 and team permissions do not imply governance access.
 
+The native governance panel also requires `can_view_decisions`, including when
+the decision store has been removed: saved governance can still contain derived
+decision evidence. Denied, unreadable or invalid evidence blocks the preview
+and save action with a generic notice. It is not evaluated as an empty set of
+decisions or incidents. Restore permission or repair the evidence and retry;
+historical store diagnostics alone do not block a successful retry. Optional
+stores that were never configured retain their intentional empty-input behavior
+when the case does not require records from them. Explicit linked decisions,
+incidents, notes, narratives, checkpoints and runs must resolve to readable, valid records;
+an identifier alone is not evidence. Decision links work independently of run
+links, so a rejected decision linked only by its identifier still blocks review.
+
+Evidence links are additive. A run link includes its decision and signoff
+records; a checkpoint-only link includes those records for that checkpoint.
+Resolved checkpoint-only links satisfy the linked-evidence policy check.
+Explicit decision links add records to that scope rather than replacing it.
+Adding an approved decision link therefore cannot conceal a rejected decision
+from an already linked run. To review a narrower scope, link the relevant
+checkpoints or decisions without linking the entire run.
+
+Incident evidence follows the same run and checkpoint scope. Explicit incident
+links add incidents, including incidents from another run, without removing
+incidents already covered by a run or checkpoint link. Unrelated incidents in
+the shared store do not affect the case's severity, closure, or action guidance.
+
+Approval coverage uses the latest signoff per reviewer within each run/checkpoint
+scope. For identified reviewers, a role or assignment change supersedes the
+earlier signoff; signoffs without an actor use the role as their reviewer identity.
+Other reviewers and scopes remain independent. ISO timestamps are compared in
+UTC; naive historical timestamps mean UTC. Rejection or requested changes wins
+a tied timestamp. Undated or malformed signoffs are considered alongside the
+latest dated evidence, so unresolved order cannot restore positive coverage;
+unresolved role changes do not establish coverage either. Approved and
+acknowledged signoffs retain their existing positive-coverage meaning.
+
+Decision gates retain rejected, frozen and replay-only checkpoint approval
+restrictions even when a decision snapshot has a different workflow state,
+including closed or older saved snapshots.
+
 ## Common flow
 
 1. Select a case.
@@ -55,4 +94,6 @@ It captures:
 - `allowed_next_actions`
 - `history`
 
-See `schemas/governance.schema.json` for the workbench schema snapshot.
+See the [governance JSON schema](../schemas/governance.schema.json) for the record
+contract and the [protocol overview](protocol/overview.md#json-schemas) for its
+validation scope and runtime compatibility differences.

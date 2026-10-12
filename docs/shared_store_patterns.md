@@ -34,13 +34,25 @@ Call `clear_read_errors()` after the host application has surfaced or recorded
 the diagnostics.
 
 Missing records remain normal `None`/empty results. Present but corrupt, unsafe,
-or unreadable records produce diagnostics.
+or unreadable records produce diagnostics. An existing file in place of a store
+directory, or a directory/nonregular file in place of a JSON record, is an error
+rather than empty evidence. This also applies when Windows reports a missing
+path because one of its existing parents is a regular file.
 
 Store diagnostics describe file access and JSON parsing. They do not certify a
 record's application shape. Use `validate_record()` before consuming imported
 records. Native profile loading separately checks saved field shapes before
 restoring controls; invalid fields raise `ValueError` without changing live
 controls. The UI reports that failure and the HTTP API returns status 422.
+
+Native team, decision, case, governance and operator-memory reviews check each
+configured store read for new diagnostics and validate the records they consume.
+Incomplete or invalid evidence produces a generic notice and blocks dependent
+summaries and save actions. A successful empty read remains valid; a failed or
+unauthorized read is not silently converted into empty evidence. These adapters
+retain diagnostic history and allow recovery after the underlying records are
+repaired. Direct callers of the pure review builders remain responsible for
+supplying complete, authorized evidence.
 
 ## Record identifiers
 
@@ -77,6 +89,10 @@ File-store reads and packet imports accept standards-compliant JSON only. They
 reject the non-standard `NaN`, `Infinity`, and `-Infinity` constants, as well as
 numeric exponents too large to remain finite (for example, `1e9999`). Rejected
 store records are skipped and reported through `read_errors`.
+
+Audit JSONL records are separated by physical LF newlines (including CRLF).
+Unicode line separators inside JSON strings remain part of the event text and
+do not create extra records or change diagnostic line numbers.
 
 Ordinary file and in-memory store writes also reject non-finite numbers. A file
 record is serialized successfully before its existing path is replaced, so a

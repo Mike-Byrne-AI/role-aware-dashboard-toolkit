@@ -168,3 +168,23 @@ def test_failed_recovery_sign_out_stops_before_newly_restored_access(host, monke
     assert any("Sign-out is unavailable" in item.value for item in app.error)
     assert "synthetic-private-provider-detail" not in repr(app.error)
     _assert_private_state_cleared(app.session_state)
+
+    # A failed redirect leaves Streamlit's verified provider claims intact.
+    # Refreshing must not silently reopen the access the user tried to end.
+    for _ in range(2):
+        _healthy(app.run())
+        assert host.resource_reads == 0
+        assert not app.metric and not app.number_input
+        assert app.button(key="_radt_sign_out").label == "Sign out"
+        _assert_private_state_cleared(app.session_state)
+
+    def recovered_logout():
+        host.calls.append(("logout",))
+        host.claims = {"is_logged_in": False}
+
+    monkeypatch.setattr(st, "logout", recovered_logout)
+    _healthy(app.button(key="_radt_sign_out").click().run())
+    _healthy(app.run())
+    _assert_ordinary_sign_in(app)
+    assert host.resource_reads == 0
+    assert host.calls == [("logout",), ("logout",)]

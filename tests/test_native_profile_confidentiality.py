@@ -108,7 +108,10 @@ def test_authenticated_operator_load_cannot_reveal_hidden_legacy_profile_values(
 def test_native_projection_keeps_load_permission_and_freeze_preflight(boundary):
     original = _legacy_profile({"password": "NESTED-CANARY"})
     app, host = _app(original)
-    before = app.session_state["config"].registry.snapshot(app.session_state)
+    registry = app.session_state["config"].registry
+    # AppTest exposes keyed access, not the Mapping interface used by a real
+    # Streamlit session. Capture the actual values without relying on .get().
+    before = {control.key: app.session_state[control.key] for control in registry.all()}
     if boundary == "freeze":
         freeze = host.store.read_freeze()
         host.store.compare_and_set_freeze(True, freeze.revision, host.principal)
@@ -119,7 +122,7 @@ def test_native_projection_keeps_load_permission_and_freeze_preflight(boundary):
 
     _healthy(app.button(key="_radt_profile_load").click().run())
 
-    assert app.session_state["config"].registry.snapshot(app.session_state) == before
+    assert {control.key: app.session_state[control.key] for control in registry.all()} == before
     assert host.profiles.load("legacy") == original
     assert not host.calls
     assert not any(event["type"] == "profile_load" for event in host.audit.all_events())
@@ -184,3 +187,34 @@ def test_native_projection_leaves_file_evidence_and_core_restore_contract_unchan
     assert core_state["note"] == str(original["values"]["note"])
     assert core_state["private_value"] == "CURRENT-CANARY"
     assert path.read_bytes() == saved_bytes
+
+
+@pytest.mark.parametrize("replace_parent", [False, True])
+def test_native_save_excludes_parent_secrets_from_persisted_diffs(replace_parent):
+    original = _legacy_profile({"password": "NESTED-CANARY"})
+    original["control_meta"].append({"key": "removed", "sensitive": True})
+    original["values"]["retired_public_field"] = "retired public value"
+    app, host = _app(original)
+    host.store.replace_grants(host.principal, ("Admin",))
+    _healthy(app.run())
+    name = "legacy" if replace_parent else "public-child"
+    _healthy(app.text_input(key="_radt_profile_name").set_value(name).run())
+
+    _healthy(app.button(key="_radt_profile_save").click().run())
+    if replace_parent:
+        assert host.profiles.load("legacy") == original
+        _healthy(app.button(key="_radt_profile_replace_confirm").click().run())
+
+    saved = host.profiles.load(name)
+    assert saved["parent_profile_id"] == "legacy"
+    assert "CANARY" not in str(saved)
+    assert saved["values"]["connection"] == "live-connection"
+    assert saved["diff_from_parent"]["workers"] == {"from": 8, "to": 3}
+    assert saved["diff_from_parent"]["retired_public_field"] == {
+        "from": "retired public value", "to": None,
+    }
+    assert [event["type"] for event in host.audit.all_events()
+            if event["type"].startswith("profile_")] == ["profile_save"]
+    assert "CANARY" not in _visible(app)
+    if not replace_parent:
+        assert host.profiles.load("legacy") == original

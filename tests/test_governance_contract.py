@@ -40,6 +40,9 @@ class FakeStreamlit:
     def caption(self, text):
         self.events.append(("caption", str(text)))
 
+    def warning(self, text):
+        self.events.append(("warning", str(text)))
+
     def json(self, payload):
         self.events.append(("json", payload))
 
@@ -62,6 +65,7 @@ class Config:
         self.decision_store = decision_store.InMemoryDecisionStore()
         self.operator_memory_store = operator_memory_store.InMemoryOperatorMemoryStore()
         self.team_store = team_store.InMemoryTeamStore()
+        self.run_store = radt.InMemoryRunStore()
         self.governance_title = "Governance"
 
 
@@ -69,6 +73,7 @@ def _seed_case(config: Config):
     case_record = caseboard.build_case_record("Case A", case_id="case_a", linked_run_ids=["run_a"])
     config.case_store.save(case_record)
     run = radt.build_run({"mode": "safe"}, run_id="run_a", actor="tester", role="Operator")
+    config.run_store.save(run)
     decision = decisions.build_decision_case(run, actor="tester", role="Operator")
     config.decision_store.save(decision)
     signoff = team_ops.build_signoff_record("run_a", "approved", actor="approver", role="Approver")
@@ -113,7 +118,8 @@ def test_governance_panel_previews_without_saving_until_button_press():
 
     config = Config()
     _seed_case(config)
-    ctx = make_security_context("Auditor", {"can_view_governance": True, "can_manage_governance": False})
+    ctx = make_security_context("Auditor", {"can_view_team_ops": True, "can_view_decisions": True,
+                                          "can_view_governance": True, "can_manage_governance": False})
     st = FakeStreamlit(save=False)
 
     _render_governance_panel(st, config, ctx, runs=[])
@@ -140,7 +146,8 @@ def test_governance_panel_saves_only_when_explicitly_requested():
 
     config = Config()
     _seed_case(config)
-    ctx = make_security_context("Approver", {"can_view_governance": True, "can_manage_governance": True})
+    ctx = make_security_context("Approver", {"can_view_team_ops": True, "can_view_decisions": True,
+                                           "can_view_governance": True, "can_manage_governance": True})
     st = FakeStreamlit(save=True)
 
     _render_governance_panel(st, config, ctx, runs=[])

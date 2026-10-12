@@ -53,6 +53,9 @@ class _FakeStreamlit:
     def caption(self, value):
         self.events.append(("caption", str(value)))
 
+    def warning(self, value):
+        self.events.append(("warning", str(value)))
+
     def subheader(self, value):
         self.events.append(("subheader", str(value)))
 

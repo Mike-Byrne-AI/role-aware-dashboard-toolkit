@@ -218,12 +218,18 @@ def load_profile_data(profile_id: str, *, profile_dir: str = DEFAULT_PROFILE_DIR
 
 
 def profile_diff(base_values: dict[str, Any], new_values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Report changed values and key additions/removals in the existing shape.
+
+    A missing side is represented by None. A null-valued key added or removed
+    therefore has both values set to None; consult the source mappings for its
+    direction. A key present with None on both sides is unchanged.
+    """
     diff: dict[str, dict[str, Any]] = {}
     keys = set(base_values.keys()) | set(new_values.keys())
     for key in sorted(keys):
         old = base_values.get(key)
         new = new_values.get(key)
-        if old != new:
+        if key not in base_values or key not in new_values or old != new:
             diff[key] = {"from": old, "to": new}
     return diff
 

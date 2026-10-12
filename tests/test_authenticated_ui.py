@@ -297,6 +297,129 @@ def test_prepare_access_guards_host_reads_and_discards_revoked_resources():
     assert len(app.error) == 1
 
 
+def test_session_audit_failure_denies_without_private_callback_exception(monkeypatch):
+    host = _host()
+    original_log = host.audit.log
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic-private-audit-path-and-token")
+
+    monkeypatch.setattr(host.audit, "log", unavailable)
+    app = _app(host)
+
+    assert host.calls == []
+    assert "resource" not in app.session_state
+    assert app.session_state["test_context"].role == "Unauthenticated"
+    assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
+    assert not app.toggle and not app.text_input
+    assert "synthetic-private" not in repr(app.error)
+
+    monkeypatch.setattr(host.audit, "log", original_log)
+    _healthy(app.run())
+    assert host.calls == [("setup", host.principal), ("source_panel", host.principal)]
+    assert app.session_state["test_context"].authenticated
+    assert len([event for event in host.audit.all_events()
+                if event["type"] == "access_session_started"]) == 1
+
+
+@pytest.mark.parametrize("session_value", [None, "raw-user@example.invalid"])
+def test_malformed_authenticated_session_binding_fails_closed_and_clears_state(session_value):
+    host = _host()
+    app = _app(host)
+    calls_before = list(host.calls)
+    host.patch_state["_radt_authenticated_session"] = session_value
+    _healthy(app.run())
+    assert host.calls == calls_before
+    assert "resource" not in app.session_state
+    assert app.session_state["test_context"].role == "Unauthenticated"
+    assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
+    assert not app.toggle and not app.text_input
+
+
+def test_malformed_custom_role_permissions_fail_closed_before_protected_plugins():
+    from role_aware_dashboard_toolkit.security import RoleDef
+
+    host = _host()
+    app = _app(host)
+    calls_before = list(host.calls)
+    app.session_state["config"].custom_roles["Admin"] = RoleDef("Admin", None)
+    _healthy(app.run())
+    assert host.calls == calls_before
+    assert "resource" not in app.session_state
+    assert app.session_state["test_context"].role == "Unauthenticated"
+    assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
+
+
+@pytest.mark.parametrize("provider_status", [False, True, None])
+def test_custom_identity_pending_signout_blocks_old_context_and_cannot_be_cleared_by_streamlit_status(provider_status):
+    from role_aware_dashboard_toolkit import DashboardConfig
+    from role_aware_dashboard_toolkit._access_ui import prepare_authenticated_access
+    from role_aware_dashboard_toolkit.streamlit_auth import _SIGN_OUT_PENDING
+
+    host = _host()
+    messages = []
+    st = SimpleNamespace(
+        session_state={
+            "_radt_authenticated_principal": host.principal,
+            "_radt_authenticated_session": "a" * 32, "_radt_role": "Admin",
+        },
+        user={"is_logged_in": provider_status}, error=messages.append, info=messages.append,
+    )
+    config = DashboardConfig(access=host.policy, audit=host.audit)
+    previous = prepare_authenticated_access(st, config)
+    assert has_perm(previous, "can_view_metrics")
+    st.session_state[_SIGN_OUT_PENDING] = True
+    st.session_state["private-host-data"] = "synthetic-only"
+
+    assert not has_perm(previous, "can_view_metrics")
+    assert prepare_authenticated_access(st, config) is None
+    assert st.session_state[_SIGN_OUT_PENDING] is True
+    assert "private-host-data" not in st.session_state
+    assert messages == ["Dashboard access could not be confirmed."]
+
+
+def test_freeze_audit_failure_preserves_committed_state_and_reports_uncertain_recording(monkeypatch):
+    host = _host()
+    app = _app(host)
+    original_log = host.audit.log
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic-private-freeze-audit-detail")
+
+    monkeypatch.setattr(host.audit, "log", unavailable)
+    _healthy(app.toggle(key="_radt_shared_frozen").set_value(False).run())
+    assert host.store.read_freeze().frozen is False
+    assert app.toggle(key="_radt_shared_frozen").value is False
+    assert any("Freeze changed, but audit recording could not be confirmed." == item.value
+               for item in app.warning)
+    assert not any("denied" in item.value for item in app.warning)
+    assert "synthetic-private" not in repr(app.warning)
+    assert not any(event["type"] == "shared_freeze_changed" for event in host.audit.all_events())
+
+    monkeypatch.setattr(host.audit, "log", original_log)
+    _healthy(app.toggle(key="_radt_shared_frozen").set_value(True).run())
+    assert host.store.read_freeze().frozen is True
+    assert not app.warning
+    assert len([event for event in host.audit.all_events()
+                if event["type"] == "shared_freeze_changed"]) == 1
+
+
+def test_role_switch_audit_failure_denies_before_further_protected_rendering(monkeypatch):
+    host = _host(("Admin", "Viewer"))
+    app = _app(host)
+    calls_before = list(host.calls)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("synthetic-private-role-audit-detail")
+
+    monkeypatch.setattr(host.audit, "log", unavailable)
+    _healthy(app.selectbox(key="_radt_role").select("Viewer").run())
+    assert host.calls == calls_before
+    assert "resource" not in app.session_state
+    assert app.session_state["test_context"].role == "Unauthenticated"
+    assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
+
+
 def test_role_change_discards_replay_created_under_another_assigned_role():
     from role_aware_dashboard_toolkit import build_checkpoint_packet
     from role_aware_dashboard_toolkit._ui_state import queue_replay

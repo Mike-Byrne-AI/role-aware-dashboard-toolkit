@@ -13,7 +13,7 @@ from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import (
-    _InvalidProfileError, _load_ui_profile, _require_profile_shape, delete_profile, list_profiles,
+    _InvalidProfileError, _load_ui_profile, _public_profile_values, _require_profile_shape, delete_profile, list_profiles,
     load_profile_data, save_profile,
 )
 from .runbook_panels import render_runbook_sidebar
@@ -24,6 +24,7 @@ from .security import (
     can_mutate,
     get_role,
     get_role_names,
+    has_perm,
     make_security_context,
 )
 from .store_diagnostics import StorePathSecurityError, safe_store_write_path
@@ -176,6 +177,34 @@ class _ProfileStorageFailure(Exception):
     """Sanitized failure raised only around a profile store operation."""
 
 
+class _ProfileAccessDenied(Exception):
+    """Stop a profile render when its live metadata permission is lost."""
+
+
+def _profile_metadata_allowed(ctx: SecurityContext) -> bool:
+    # Preserve the legacy demo menu. In authenticated mode, profile managers
+    # need names/metadata for parent selection, replacement and deletion even
+    # when they cannot load values. Neither grant means no profile-store reads.
+    if ctx.role == "Unauthenticated":
+        return False
+    if not ctx.authenticated:
+        return True
+    return has_perm(ctx, "can_load_profiles") or has_perm(ctx, "can_save_profiles")
+
+
+def _require_profile_metadata(ctx: SecurityContext) -> None:
+    if not _profile_metadata_allowed(ctx):
+        raise _ProfileAccessDenied()
+
+
+def _clear_profile_state(st: Any) -> None:
+    for key in list(st.session_state):
+        if str(key).startswith("_radt_profile_") or key in {
+            "_radt_active_profile_id", "_radt_selected_profile_id", "_radt_last_profile_id",
+        }:
+            del st.session_state[key]
+
+
 def _profile_store_call(operation: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return operation(*args, **kwargs)
@@ -183,12 +212,36 @@ def _profile_store_call(operation: Any, *args: Any, **kwargs: Any) -> Any:
         raise _ProfileStorageFailure(type(exc).__name__) from None
 
 
+def _profile_read(ctx: SecurityContext, operation: Any, *args: Any, **kwargs: Any) -> Any:
+    _require_profile_metadata(ctx)
+    try:
+        return _profile_store_call(operation, *args, **kwargs)
+    finally:
+        # A store callback can take time; never publish data returned after
+        # the profile grant was removed while that read was in flight.
+        _require_profile_metadata(ctx)
+
+
 def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list[str]) -> None:
+    if not _profile_metadata_allowed(ctx):
+        _clear_profile_state(st)
+        return
     profile_store = getattr(config, "profile_store", None)
+    region = st.empty() if ctx.authenticated else None
     try:
         if profile_store is None:
-            profile_store = _profile_store_call(FileProfileStore, config.profile_dir)
-        _render_profile_controls(st, config, ctx, profile_store)
+            profile_store = _profile_read(ctx, FileProfileStore, config.profile_dir)
+        if region is not None:
+            with region.container():
+                _render_profile_controls(st, config, ctx, profile_store)
+        else:
+            _render_profile_controls(st, config, ctx, profile_store)
+        _require_profile_metadata(ctx)
+    except _ProfileAccessDenied:
+        _clear_profile_state(st)
+        if region is not None:
+            region.empty()
+        return
     except _ProfileStorageFailure as exc:
         # Custom and file stores may raise before returning diagnostics. Do not
         # expose exception text: paths and credentials can appear in it.
@@ -204,17 +257,18 @@ def _render_profiles(st: Any, config: Any, ctx: SecurityContext, all_roles: list
 
 
 def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile_store: Any) -> None:
+    _require_profile_metadata(ctx)
     st.divider()
     st.subheader("Profiles")
-    profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
-    selected_profile = st.session_state.get("_radt_profile_choice", "(none)")
+    profiles = _profile_read(ctx, list_profiles, config.profile_dir, store=profile_store)
+    selected_profile = st.session_state.get("_radt_profile_choice")
     if selected_profile not in profiles:
-        selected_profile = "(none)"
+        selected_profile = None
         st.session_state["_radt_profile_choice"] = selected_profile
     selected_profile_valid = True
-    if selected_profile != "(none)":
-        selected_data = _profile_store_call(
-            load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store,
+    if selected_profile is not None:
+        selected_data = _profile_read(
+            ctx, load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store,
         )
         if selected_data is not None:
             try:
@@ -230,34 +284,43 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
         if _render_profile_actions(st, config, ctx, profile_store, selected_profile,
                                    selected_profile_valid=selected_profile_valid,
                                    known_profiles=profiles):
-            profiles = _profile_store_call(list_profiles, config.profile_dir, store=profile_store)
+            profiles = _profile_read(ctx, list_profiles, config.profile_dir, store=profile_store)
     finally:
         # A failed store operation or denied load must still render these keyed
         # inputs, so Streamlit does not remove the operator's selection/name.
+        _require_profile_metadata(ctx)
         with inputs:
-            profile_options = ["(none)", *profiles]
-            current_choice = st.session_state.get("_radt_profile_choice", "(none)")
+            # None cannot collide with a store's string identifiers. Keep an
+            # actual profile named '(none)' selectable and distinguish its label.
+            profile_options = [None, *profiles]
+            current_choice = st.session_state.get("_radt_profile_choice")
             st.session_state["_radt_profile_choice"] = (
-                current_choice if current_choice in profile_options else "(none)"
+                current_choice if current_choice in profile_options else None
             )
             selected_profile = st.selectbox(
-                "Load profile", options=profile_options, key="_radt_profile_choice"
+                "Load profile", options=profile_options, key="_radt_profile_choice",
+                format_func=lambda value: (
+                    "(none)" if value is None else
+                    "(none) (saved profile)" if value == "(none)" else value
+                ),
             )
             st.text_input(
-                "Profile name", value="my_profile", key="_radt_profile_name",
+                "Profile name", key="_radt_profile_name",
+                **({"value": "my_profile"} if "_radt_profile_name" not in st.session_state else {}),
                 disabled=not can_mutate(ctx, "can_save_profiles"),
                 help="Name for saving the current settings. Replacing an existing profile requires confirmation.",
             )
 
     with inputs:
-        if selected_profile and selected_profile != "(none)":
-            loaded = _profile_store_call(load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
+        if selected_profile is not None:
+            loaded = _profile_read(ctx, load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
             if loaded:
                 try:
                     _require_profile_shape(loaded)
                 except _InvalidProfileError:
                     st.warning("Profile preview is unavailable: saved values are invalid.")
                     return
+                _require_profile_metadata(ctx)
                 parent = str(loaded.get("parent_profile_id") or "").strip()
                 if parent:
                     st.caption(f"Parent profile: {parent}")
@@ -278,13 +341,17 @@ def _render_profile_preview(
     except InvalidProfilePreviewValues:
         st.warning("Profile preview is unavailable: saved values are invalid.")
         return
+    _require_profile_metadata(ctx)
     with st.expander("Preview profile changes", expanded=False):
         if preview.blocked_reasons:
             st.warning("Load is blocked; no values will change. " + " ".join(preview.blocked_reasons))
-        if preview.values_visible:
+        # Preview construction checks other live permissions while staging its
+        # rows. Its earlier visibility result is not authority to publish them.
+        if (preview.values_visible and has_perm(ctx, "can_view_metrics")
+                and has_perm(ctx, "can_load_profiles")):
             st.caption("Effective values show the proposed result after correction. Load rechecks permissions.")
             if preview.rows:
-                st.dataframe(preview.rows, use_container_width=True, hide_index=True)
+                st.dataframe(preview.rows, width="stretch", hide_index=True)
             else:
                 st.caption("No registered controls to restore.")
         else:
@@ -298,20 +365,26 @@ def _render_profile_preview(
 
 
 def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
-                     name: str, selected_profile: str) -> bool:
-    parent_id = selected_profile if selected_profile != "(none)" else ""
-    parent = _profile_store_call(
-        load_profile_data, parent_id, profile_dir=config.profile_dir, store=store,
+                     name: str, selected_profile: str | None) -> bool:
+    parent_id = selected_profile if selected_profile is not None else ""
+    parent = _profile_read(
+        ctx, load_profile_data, parent_id, profile_dir=config.profile_dir, store=store,
     ) if parent_id else None
     if parent is not None:
         _profile_store_call(_require_profile_shape, parent)
+    # Native saves must not copy fields hidden by the selected parent's preview
+    # into a new durable diff. Keep the trusted core builder's contract intact.
+    parent_values = _public_profile_values(
+        config.registry, (parent or {}).get("values"),
+        (parent or {}).get("control_meta"), known_only=False,
+    )
     if not can_mutate(ctx, "can_save_profiles"):
         st.warning("Save denied. Your permission or the shared freeze changed.")
         return False
     _profile_store_call(
         save_profile, name, config.registry, st.session_state, role=ctx.role,
         profile_dir=config.profile_dir, store=store, parent_profile_id=parent_id,
-        parent_values=(parent or {}).get("values"), app_name=config.title,
+        parent_values=parent_values, app_name=config.title,
         app_version=getattr(config, "version", ""),
         session_id=str(st.session_state.get("_radt_session_id", "")), source="ui",
     )
@@ -320,11 +393,11 @@ def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
     return True
 
 
-def _read_profile_save_target(config: Any, store: Any, name: str,
+def _read_profile_save_target(config: Any, ctx: SecurityContext, store: Any, name: str,
                               known_profiles: list[str]) -> dict | None:
     errors_before = len(getattr(store, "read_errors", ()))
-    saved = _profile_store_call(
-        load_profile_data, name, profile_dir=config.profile_dir, store=store,
+    saved = _profile_read(
+        ctx, load_profile_data, name, profile_dir=config.profile_dir, store=store,
     )
     if saved is None and (
         name in known_profiles or len(getattr(store, "read_errors", ())) > errors_before
@@ -337,7 +410,7 @@ def _read_profile_save_target(config: Any, store: Any, name: str,
 
 
 def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
-                         selected_profile: str, selected_profile_valid: bool,
+                         selected_profile: str | None, selected_profile_valid: bool,
                          known_profiles: list[str], *, save_column: Any) -> bool:
     allowed = can_mutate(ctx, "can_save_profiles") and selected_profile_valid
     name = str(st.session_state.get("_radt_profile_name", "")).strip()
@@ -359,13 +432,14 @@ def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
         if not name:
             st.warning("Enter a profile name.")
         else:
-            saved = _read_profile_save_target(config, store, name, known_profiles)
+            saved = _read_profile_save_target(config, ctx, store, name, known_profiles)
             if saved is None:
                 return _save_ui_profile(st, config, ctx, store, name, selected_profile)
             pending = {"intent": deepcopy(intent), "saved": deepcopy(saved)}
             st.session_state[_PROFILE_REPLACE_PENDING] = pending
     if pending is None:
         return False
+    _require_profile_metadata(ctx)
     confirmation = st.empty()
     with confirmation.container():
         st.warning(f'A saved profile named "{name}" already exists. Replace it with the current settings, or cancel to keep the saved version.')
@@ -383,7 +457,7 @@ def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
             if not can_mutate(ctx, "can_save_profiles"):
                 st.warning("Replacement denied. Your permission or the shared freeze changed.")
                 return False
-            saved = _read_profile_save_target(config, store, name, known_profiles)
+            saved = _read_profile_save_target(config, ctx, store, name, known_profiles)
             if saved != pending["saved"]:
                 st.warning("The saved profile changed. Nothing was replaced; choose Save to review it again.")
                 return False
@@ -394,7 +468,7 @@ def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
 
 
 def _render_profile_actions(
-    st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str,
+    st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str | None,
     *, selected_profile_valid: bool = True, known_profiles: list[str] | None = None,
 ) -> bool:
     """Process profile actions once; report a successful membership-changing write."""
@@ -416,10 +490,13 @@ def _render_profile_actions(
             disabled=not can_load_profiles or not selected_profile_valid,
         )
     if load_requested and can_write(ctx, "can_load_profiles"):
-        choice = st.session_state.get("_radt_profile_choice", "(none)")
-        if choice and choice != "(none)":
+        choice = st.session_state.get("_radt_profile_choice")
+        if choice is not None:
             staged_state = dict(st.session_state)
-            result = _profile_store_call(_load_ui_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
+            result = _profile_read(ctx, _load_ui_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
+            if not can_write(ctx, "can_load_profiles"):
+                st.warning("Load denied. Your permission or the shared freeze changed.")
+                return profiles_changed
             if result:
                 # A bulk restore must not bypass a control's permission,
                 # including changes made by whole-registry sanitization.
@@ -468,8 +545,8 @@ def _render_profile_actions(
         disabled=not can_save_profiles,
     )
     if delete_requested and can_mutate(ctx, "can_save_profiles"):
-        choice = st.session_state.get("_radt_profile_choice", "(none)")
-        if choice and choice != "(none)":
+        choice = st.session_state.get("_radt_profile_choice")
+        if choice is not None:
             if _profile_store_call(delete_profile, choice, profile_dir=config.profile_dir, store=profile_store):
                 audit.log("profile_delete", detail=choice, role=ctx.role)
                 st.toast(f"Deleted profile: {choice}")

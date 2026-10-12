@@ -145,9 +145,10 @@ def _check_runtime_version(radt: Any, pyproject: dict[str, Any]) -> dict[str, An
 def _check_changelog(radt: Any) -> dict[str, Any]:
     version = str(getattr(radt, "__version__", ""))
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    if f"## {version}" in changelog:
-        return _record("changelog_version", "pass", f"CHANGELOG.md mentions {version}")
-    return _record("changelog_version", "fail", f"CHANGELOG.md does not mention {version}")
+    heading_pattern = rf"^##[ \t]+{re.escape(version)}(?:[ \t].*)?$"
+    if version and re.search(heading_pattern, changelog, flags=re.MULTILINE):
+        return _record("changelog_version", "pass", f"CHANGELOG.md has a release heading for {version}")
+    return _record("changelog_version", "fail", f"CHANGELOG.md has no release heading for {version}")
 
 
 def _check_release_audit_doc(radt: Any) -> dict[str, Any]:

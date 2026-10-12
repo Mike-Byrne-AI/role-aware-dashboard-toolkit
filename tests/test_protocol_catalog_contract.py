@@ -37,3 +37,14 @@ def test_protocol_catalog_accessors_return_defensive_values():
     run["builder"] = "changed"
     assert get_protocol_entry("run")["builder"] != "changed"
     assert {entry["name"] for entry in list_protocol_entries()} == set(PROTOCOL_CATALOG)
+
+
+def test_catalogued_telemetry_builder_produces_a_valid_sample():
+    from role_aware_dashboard_toolkit import observability, validators
+
+    entry = get_protocol_entry("telemetry_sample")
+    sample = getattr(observability, entry["builder"])(
+        {"metrics": {"queue_depth": 12}, "ts": "2026-10-12T12:00:00+00:00"},
+    )
+    assert getattr(validators, entry["validator"])(sample)["ok"]
+    assert sample["metrics"] == {"queue_depth": 12}

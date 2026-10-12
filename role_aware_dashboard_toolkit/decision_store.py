@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._record_utils import _record_timestamp_key
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
     canonical_store_id,
@@ -59,7 +60,7 @@ class FileDecisionStore(_JsonRecordFileStoreMixin, BaseDecisionStore):
             if checkpoint_id and str(loaded.get("checkpoint_id") or "") != str(checkpoint_id):
                 continue
             rows.append(loaded)
-        rows.sort(key=lambda item: (str(item.get("updated_at", "")), str(item.get("decision_id", ""))))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("updated_at")), str(item.get("decision_id", ""))))
         return rows
 
     def resolve_path(self, decision_id: str) -> str | None:
@@ -96,7 +97,7 @@ class InMemoryDecisionStore(BaseDecisionStore):
             if checkpoint_id and str(record.get("checkpoint_id") or "") != str(checkpoint_id):
                 continue
             rows.append(json_roundtrip_copy(record))
-        rows.sort(key=lambda item: (str(item.get("updated_at", "")), str(item.get("decision_id", ""))))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("updated_at")), str(item.get("decision_id", ""))))
         return rows
 
 __all__ = [
