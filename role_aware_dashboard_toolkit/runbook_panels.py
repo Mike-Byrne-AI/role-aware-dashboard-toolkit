@@ -23,6 +23,7 @@ from .runbook_panels_parts.shared import (
     _record_actor,
     _record_session,
     _render_table,
+    _save_record,
     _selected_profile_id,
 )
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
@@ -127,11 +128,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 session_id=_record_session(ctx, st.session_state),
                 source="ui",
             )
-            store.save(started)
-            st.session_state["_radt_active_run_id"] = started["run_id"]
-            config.audit.log("run_start", detail=started["run_id"], role=ctx.role, source="ui")
-            st.toast(f"Started run: {started['run_id']}")
-            st.rerun()
+            if _save_record(st, store.save, started):
+                st.session_state["_radt_active_run_id"] = started["run_id"]
+                config.audit.log("run_start", detail=started["run_id"], role=ctx.role, source="ui")
+                st.toast(f"Started run: {started['run_id']}")
+                st.rerun()
         return
 
     summary = run_summary(active_run)
@@ -162,11 +163,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 ),
             )
             updated["active_profile_id"] = _selected_profile_id(st.session_state)
-            store.save(updated)
-            checkpoint_id = str(updated.get("last_checkpoint_id", ""))
-            config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
-            st.toast(f"Saved checkpoint: {checkpoint_id}")
-            st.rerun()
+            if _save_record(st, store.save, updated):
+                checkpoint_id = str(updated.get("last_checkpoint_id", ""))
+                config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
+                st.toast(f"Saved checkpoint: {checkpoint_id}")
+                st.rerun()
     with c2:
         if st.button("End run", key="_radt_run_end", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
             finished = end_run(
@@ -176,11 +177,11 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 status="completed",
             )
             finished["active_profile_id"] = _selected_profile_id(st.session_state)
-            store.save(finished)
-            st.session_state["_radt_active_run_id"] = ""
-            config.audit.log("run_end", detail=finished["run_id"], role=ctx.role, source="ui")
-            st.toast(f"Ended run: {finished['run_id']}")
-            st.rerun()
+            if _save_record(st, store.save, finished):
+                st.session_state["_radt_active_run_id"] = ""
+                config.audit.log("run_end", detail=finished["run_id"], role=ctx.role, source="ui")
+                st.toast(f"Ended run: {finished['run_id']}")
+                st.rerun()
 
     if section_visible(config, "team_ops"):
         _render_team_ops_sidebar(st, config, ctx, active_run)

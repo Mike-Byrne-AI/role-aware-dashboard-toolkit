@@ -208,7 +208,7 @@ def test_delete_updates_menu_immediately_and_preserves_studio_navigation(app):
     app.button(key='_radt_profile_delete').click().run()
     healthy(app)
     assert 'temporary plan' not in app.selectbox(key='_radt_profile_choice').options
-    assert app.selectbox(key='_radt_profile_choice').value == '(none)'
+    assert app.selectbox(key='_radt_profile_choice').value is None
     assert app.number_input(key='weekly_hours').value == 90
     assert app.radio(key='studio_view').value == 'Notes'
     assert 'Studio notes' in [x.value for x in app.subheader]

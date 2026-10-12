@@ -30,6 +30,10 @@ demo opt-in, not the default.
 
 Authenticated requests default to Viewer unless the host configures a role.
 Control updates require `can_edit_controls` and the field's permission.
+Their response keeps its normal shape but uses `value: "<redacted-secret>"`
+without `can_view_metrics`; the authorized update still completes. This also
+hides defaults or bounds selected by sanitation. A control's `sensitive` flag
+continues to describe its definition, independently of the caller's read grant.
 Profile activation checks every affected field. Profile save/delete require
 `can_save_profiles`; audit reads require `can_view_audit`. Protected shared
 deployments also need trusted ingress and TLS.
@@ -54,3 +58,13 @@ sensitivity flags and nested secret-named fields also exclude a saved control
 from API responses and activation, preserving its current live value. This
 projection does not rewrite the saved record. Core profile helpers remain
 host-controlled; this additional projection belongs to the HTTP boundary.
+
+Public text/color writes that would stringify nested secret fields are rejected
+with HTTP 422 before any values or audit events change, including when the
+sanitizer selects a nested default. Profile activation uses the same check.
+An ordinary public replacement remains allowed; explicitly sensitive controls
+remain write-only and structured select responses still redact secret fields.
+
+Single-control reads support keys containing `/`, including automatically
+derived keys such as `requests/second`. Append the URL-encoded complete key to
+`/controls/`, for example `urllib.parse.quote(key, safe="")`.

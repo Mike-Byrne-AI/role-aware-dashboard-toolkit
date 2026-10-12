@@ -183,7 +183,15 @@ def build_governance_panel_preview(
     if linked_incident_ids:
         if not linked_incident_ids.issubset({item.get("incident_id") for item in incidents}):
             raise EvidenceUnavailable()
-        incidents = [item for item in incidents if item.get("incident_id") in linked_incident_ids]
+    # Apply the same additive run/checkpoint scope as decisions and signoffs.
+    # Explicit incident links can add evidence, never hide a scoped blocker.
+    incidents = [
+        item for item in incidents
+        if item.get("incident_id") in linked_incident_ids
+        or any(item.get("run_id") == run_id
+               and (not checkpoint_id or item.get("checkpoint_id") == checkpoint_id)
+               for run_id, checkpoint_id in evidence_scopes)
+    ]
     for field, method, record_type, id_field in (
         ("linked_note_ids", "list_notes", "operator_note", "note_id"),
         ("linked_narrative_ids", "list_narratives", "narrative_handoff", "narrative_id"),

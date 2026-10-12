@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -8,6 +9,8 @@ import role_aware_dashboard_toolkit.decisions as decisions
 import role_aware_dashboard_toolkit.operator_memory_store as operator_memory_store
 import role_aware_dashboard_toolkit.operator_memory as operator_memory_module
 import role_aware_dashboard_toolkit.operator_memory_normalization as operator_memory_normalization_module
+from role_aware_dashboard_toolkit.access import Identity, principal_id
+from role_aware_dashboard_toolkit.access_audit import bind_audit_identity
 from role_aware_dashboard_toolkit.validators import validate_incident_record, validate_incident_timeline_record, validate_narrative_handoff_record, validate_operator_note_record
 from role_aware_dashboard_toolkit.store_diagnostics import StorePathSecurityError
 
@@ -91,6 +94,36 @@ def test_inmemory_operator_memory_store_filters_by_run_checkpoint_and_decision()
     assert store.list_incidents("run_a")[0]["title"] == "Issue A"
     assert store.list_narratives("run_a")[0]["handoff_to"] == "ops"
 
+
+
+def test_incident_timeline_preserves_authenticated_audit_actor():
+    identity = Identity("https://issuer.example", "test-subject", 2_000_000_000)
+    actor = principal_id(identity, b"test-only-fixed-key-32-bytes-long!!")
+    audit = bind_audit_identity(radt.AuditLog(), actor, uuid4().hex)
+    audit.log("freeze_toggle", new_value=True, role="Admin")
+
+    timeline = operator_memory_module.build_incident_timeline(
+        radt.build_run({}, run_id="run_a"), audit_events=audit.recent(),
+    )
+
+    event = next(item for item in timeline["events"] if item["event_type"] == "audit_event")
+    assert audit.recent()[0]["user_id"] == actor
+    assert event["actor"] == actor
+    assert event["role"] == "Admin"
+    assert validate_incident_timeline_record(timeline)["ok"] is True
+
+
+@pytest.mark.parametrize("attribution,expected", [
+    ({"actor": "legacy-actor"}, "legacy-actor"),
+    ({"user_id": "", "actor": "legacy-actor"}, "legacy-actor"),
+    ({"user_id": "current-actor", "actor": "legacy-actor"}, "current-actor"),
+])
+def test_incident_timeline_audit_actor_uses_legacy_fallback(attribution, expected):
+    timeline = operator_memory_module.build_incident_timeline(
+        {}, audit_events=[{"type": "note", **attribution}],
+    )
+
+    assert timeline["events"][0]["actor"] == expected
 
 
 def test_file_operator_memory_store_uses_hashed_writes_and_lists_manual_records(tmp_path):

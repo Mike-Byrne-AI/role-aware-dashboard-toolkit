@@ -111,7 +111,7 @@ PROTOCOL_CATALOG: dict[str, dict[str, Any]] = {
         schema_version=TELEMETRY_SCHEMA_VERSION,
         docs="docs/telemetry_contract.md",
         validator="validate_telemetry_sample",
-        builder="build_observability_snapshot",
+        builder="coerce_telemetry_sample",
     ),
     "replay": _entry(
         kind="packet",

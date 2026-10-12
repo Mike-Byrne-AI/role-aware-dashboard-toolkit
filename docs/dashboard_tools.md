@@ -155,6 +155,11 @@ Selecting a profile previews it; only a successful load marks it active. Runs
 record the loaded profile as their source at start and refresh the active
 profile identifier at checkpoint capture and completion.
 
+Native profile saves use the selected profile as a parent. Before deriving the
+parent diff, they omit historically sensitive fields and values containing nested
+secret fields, as well as currently sensitive controls. The parent record is
+unchanged unless the operator explicitly confirms replacing it.
+
 Profile store I/O and path-security failures appear inline without resetting
 controls or recording a successful load/save/delete. File-store read diagnostics
 also remain visible; unreadable records are not silently overwritten.

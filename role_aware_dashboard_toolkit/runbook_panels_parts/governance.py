@@ -7,7 +7,7 @@ from .._evidence_reads import EvidenceUnavailable, read_records, require_evidenc
 from .._record_projection import project_record
 from ..security import can_mutate, has_perm
 from .review_models import build_governance_panel_preview
-from .shared import _record_actor
+from .shared import _record_actor, _save_record
 
 
 def _render_governance_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]]) -> None:
@@ -46,8 +46,9 @@ def _render_governance_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str
     st.subheader(getattr(config, "governance_title", "Governance"))
     st.caption("Preview, validate, then explicitly save governance records. Rendering the panel does not persist state.")
     st.json(governance_summary(governance))
-    if can_save and st.button("Save governance snapshot", key=f"_radt_governance_save::{selected_case_id}") and can_mutate(ctx, "can_manage_governance"):
-        governance_store.save(governance)
+    if (can_save and st.button("Save governance snapshot", key=f"_radt_governance_save::{selected_case_id}")
+            and can_mutate(ctx, "can_manage_governance")
+            and _save_record(st, governance_store.save, governance)):
         try:
             records = read_records(governance_store, "list_records", record_type="governance", ctx=ctx,
                                    permission="can_view_governance")

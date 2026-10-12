@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from uuid import uuid4
 
 from ._record_utils import normalize_string_list as _normalize_string_list_shared
+from ._record_utils import _record_timestamp_key
 
 CASEBOARD_SCHEMA_VERSION = 1
 VALID_CASE_STATES = (
@@ -383,7 +384,7 @@ def summarize_caseboard(cases: Iterable[dict[str, Any]]) -> dict[str, Any]:
         incident_ids.update(str(item) for item in list(row.get("linked_incident_ids") or []))
     latest = sorted(
         rows,
-        key=lambda item: (str(item.get("updated_at") or item.get("created_at") or ""), str(item.get("case_id") or "")),
+        key=lambda item: (_record_timestamp_key(item.get("updated_at") or item.get("created_at")), str(item.get("case_id") or "")),
     )[-1] if rows else {}
     return {
         "case_count": len(rows),

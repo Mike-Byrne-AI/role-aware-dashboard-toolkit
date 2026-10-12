@@ -34,7 +34,10 @@ Call `clear_read_errors()` after the host application has surfaced or recorded
 the diagnostics.
 
 Missing records remain normal `None`/empty results. Present but corrupt, unsafe,
-or unreadable records produce diagnostics.
+or unreadable records produce diagnostics. An existing file in place of a store
+directory, or a directory/nonregular file in place of a JSON record, is an error
+rather than empty evidence. This also applies when Windows reports a missing
+path because one of its existing parents is a regular file.
 
 Store diagnostics describe file access and JSON parsing. They do not certify a
 record's application shape. Use `validate_record()` before consuming imported

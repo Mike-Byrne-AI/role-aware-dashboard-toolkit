@@ -12,7 +12,7 @@ from ..team_ops import (
     build_team_comment,
     summarize_team_ops,
 )
-from .shared import _record_actor, _record_summary_view, _render_table
+from .shared import _record_actor, _record_summary_view, _render_table, _save_record
 
 
 def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[str, Any]) -> None:
@@ -40,10 +40,10 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
             actor=_record_actor(ctx, st.session_state),
             role=ctx.role,
         )
-        team_store.save_comment(comment)
-        config.audit.log("team_comment", detail=comment["comment_id"], role=ctx.role, source="ui")
-        st.toast(f"Comment added: {comment['comment_id']}")
-        st.rerun()
+        if _save_record(st, team_store.save_comment, comment):
+            config.audit.log("team_comment", detail=comment["comment_id"], role=ctx.role, source="ui")
+            st.toast(f"Comment added: {comment['comment_id']}")
+            st.rerun()
 
     can_assign = can_mutate(ctx, "can_assign_reviews", default=False)
     if st.button("Assign review", key="_radt_assign_review_btn", disabled=not can_assign) and can_mutate(ctx, "can_assign_reviews"):
@@ -57,10 +57,10 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
             assigned_role=ctx.role,
             instructions=str(st.session_state.get("_radt_checkpoint_reason", "")),
         )
-        team_store.save_assignment(assignment)
-        config.audit.log("review_assignment", detail=assignment["assignment_id"], role=ctx.role, source="ui")
-        st.toast(f"Assigned review: {assignment['assignment_id']}")
-        st.rerun()
+        if _save_record(st, team_store.save_assignment, assignment):
+            config.audit.log("review_assignment", detail=assignment["assignment_id"], role=ctx.role, source="ui")
+            st.toast(f"Assigned review: {assignment['assignment_id']}")
+            st.rerun()
 
     can_signoff = bool(latest_checkpoint_id) and can_mutate(ctx, "can_signoff_runs", default=False)
     if st.button("Sign off latest checkpoint", key="_radt_signoff_btn", disabled=not can_signoff) and latest_checkpoint_id and can_mutate(ctx, "can_signoff_runs"):
@@ -73,10 +73,10 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
             reason=str(st.session_state.get("_radt_checkpoint_reason", "")),
             summary=str(st.session_state.get("_radt_run_outcome", "")),
         )
-        team_store.save_signoff(signoff)
-        config.audit.log("checkpoint_signoff", detail=signoff["signoff_id"], role=ctx.role, source="ui")
-        st.toast(f"Signoff saved: {signoff['signoff_id']}")
-        st.rerun()
+        if _save_record(st, team_store.save_signoff, signoff):
+            config.audit.log("checkpoint_signoff", detail=signoff["signoff_id"], role=ctx.role, source="ui")
+            st.toast(f"Signoff saved: {signoff['signoff_id']}")
+            st.rerun()
 
     can_manage_runs = can_mutate(ctx, "can_manage_runs", default=False)
     if st.button("Create handoff", key="_radt_handoff_btn", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
@@ -109,10 +109,10 @@ def _render_team_ops_sidebar(st: Any, config: Any, ctx: Any, active_run: dict[st
         if not can_mutate(ctx, "can_manage_runs"):
             st.warning("Handoff creation is no longer permitted. Check access and freeze state, then retry.")
             return
-        team_store.save_handoff(handoff)
-        config.audit.log("run_handoff", detail=handoff["handoff_id"], role=ctx.role, source="ui")
-        st.toast(f"Handoff created: {handoff['handoff_id']}")
-        st.rerun()
+        if _save_record(st, team_store.save_handoff, handoff):
+            config.audit.log("run_handoff", detail=handoff["handoff_id"], role=ctx.role, source="ui")
+            st.toast(f"Handoff created: {handoff['handoff_id']}")
+            st.rerun()
 
 
 def _render_team_ops_panel(st: Any, config: Any, ctx: Any, run: dict[str, Any]) -> None:

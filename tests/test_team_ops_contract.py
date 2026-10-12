@@ -205,7 +205,8 @@ def test_file_team_store_handles_collection_root_symlinks(tmp_path):
 
     file_store = team_store.FileTeamStore(str(file_link))
     assert file_store.list_comments("run_a") == []
-    assert file_store.read_errors == []
+    assert len(file_store.read_errors) == 1
+    assert file_store.read_errors[0]["error_type"] == "NotADirectoryError"
 
     loop_store = tmp_path / "loop-store"
     try:

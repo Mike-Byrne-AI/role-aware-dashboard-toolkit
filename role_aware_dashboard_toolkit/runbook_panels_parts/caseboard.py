@@ -15,7 +15,7 @@ from ..caseboard import (
 from ..security import can_mutate, has_perm
 from .._evidence_reads import EvidenceUnavailable, read_records, warn_incomplete_evidence
 from .._record_projection import project_record
-from .shared import _record_actor, _render_table
+from .shared import _record_actor, _render_table, _save_record
 
 
 def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]], selected_run: dict[str, Any]) -> None:
@@ -82,10 +82,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
         note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
         if note_body:
             case = add_case_notes(case, [note_body], actor=_record_actor(ctx, st.session_state), role=ctx.role, source="ui")
-        case_store.save(case)
-        config.audit.log("case_create", detail=case["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case created: {case['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, case):
+            config.audit.log("case_create", detail=case["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case created: {case['case_id']}")
+            st.rerun()
 
     if not cases:
         st.caption("No cross-run cases recorded yet.")
@@ -111,10 +111,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_reopen", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case reopened: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_reopen", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case reopened: {updated['case_id']}")
+            st.rerun()
 
     if st.button("Close case", key=f"_radt_close_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
         updated = close_case(
@@ -124,10 +124,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_close", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case closed: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_close", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case closed: {updated['case_id']}")
+            st.rerun()
 
     note_body = str(st.session_state.get("_radt_case_note_body", "") or "").strip()
     can_comment = bool(note_body) and can_mutate(ctx, "can_comment_runs", default=False)
@@ -139,10 +139,10 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             role=ctx.role,
             source="ui",
         )
-        case_store.save(updated)
-        config.audit.log("case_note", detail=updated["case_id"], role=ctx.role, source="ui")
-        st.toast(f"Case updated: {updated['case_id']}")
-        st.rerun()
+        if _save_record(st, case_store.save, updated):
+            config.audit.log("case_note", detail=updated["case_id"], role=ctx.role, source="ui")
+            st.toast(f"Case updated: {updated['case_id']}")
+            st.rerun()
 
     if len(cases) >= 2:
         left_id = st.selectbox("Compare left case", options=case_ids, index=max(0, len(case_ids) - 2), key="_radt_compare_case_left")

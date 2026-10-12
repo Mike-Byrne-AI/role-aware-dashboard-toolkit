@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from uuid import uuid4
 
 from .approvals import coerce_approval_state
+from ._record_utils import _record_timestamp_key
 from .team_ops import coerce_assignment_status, coerce_handoff_status, coerce_signoff_decision
 
 DECISION_SCHEMA_VERSION = 1
@@ -191,10 +192,13 @@ def sync_decision_case(
     )
     updated["allowed_actions"] = allowed_actions_for_state(target_state)
     updated["updated_at"] = _iso_now()
+    latest_controls = run_copy.get("latest_controls")
+    if latest_controls is None:
+        latest_controls = updated.get("summary", {}).get("latest_controls")
     updated["summary"] = {
         "run_status": str(run_copy.get("status") or updated.get("summary", {}).get("run_status") or ""),
         "checkpoint_count": len(list(run_copy.get("checkpoints") or [])),
-        "latest_controls": dict(run_copy.get("latest_controls") or updated.get("summary", {}).get("latest_controls") or {}),
+        "latest_controls": dict(latest_controls or {}),
         "outcome": str(run_copy.get("outcome") or updated.get("summary", {}).get("outcome") or ""),
         "latest_assignment_status": _latest_value(assignment_list, "status"),
         "comment_count": len(comment_list),
@@ -276,7 +280,7 @@ def derive_decision_state(
         return "frozen"
     if approval == "replay_only":
         return "replay_only"
-    if latest_signoff == "rejected":
+    if approval == "rejected" or latest_signoff == "rejected":
         return "rejected"
     if latest_handoff == "accepted":
         return "handed_off"
@@ -288,7 +292,7 @@ def derive_decision_state(
         return "approved"
     if latest_assignment_status == "in_review":
         return "in_review"
-    if open_assignment_count > 0 or assignment_list:
+    if open_assignment_count > 0:
         return "review_requested"
     if approval == "approved":
         return "approved"
@@ -330,6 +334,8 @@ def blockers_for_decision(
         blockers.append({"kind": "changes_requested", "detail": "Latest signoff requested changes."})
     if latest_signoff_decision == "rejected":
         blockers.append({"kind": "rejected", "detail": "Latest signoff rejected the decision."})
+    elif approval_state == "rejected":
+        blockers.append({"kind": "rejected", "detail": "Checkpoint approval is rejected."})
     if approval_state in {"frozen", "replay_only"}:
         blockers.append({"kind": approval_state, "detail": f"Approval state is {approval_state}."})
     if latest_handoff_status == "pending":
@@ -359,7 +365,7 @@ def infer_transition_event(
         return "handoff_accepted", "Handoff was accepted.", str(handoff.get("handoff_id") or ""), str(handoff.get("actor") or actor or ""), str(handoff.get("role") or role or "")
     if target_state == "handoff_pending" and handoff:
         return "handoff_created", "Decision is waiting on handoff acceptance.", str(handoff.get("handoff_id") or ""), str(handoff.get("actor") or actor or ""), str(handoff.get("role") or role or "")
-    if target_state in {"approved", "changes_requested", "rejected"} and signoff:
+    if target_state in {"approved", "changes_requested", "rejected"} and signoff and signoff.get("decision") == target_state:
         return "signoff_recorded", f"Latest signoff moved decision to {target_state}.", str(signoff.get("signoff_id") or ""), str(signoff.get("actor") or actor or ""), str(signoff.get("role") or role or "")
     if target_state == "in_review" and assignment:
         return "review_started", "An assignment is actively in review.", str(assignment.get("assignment_id") or ""), str(assignment.get("assigned_by") or actor or ""), str(assignment.get("assigned_role") or role or "")
@@ -367,7 +373,7 @@ def infer_transition_event(
         return "review_requested", "A review assignment is open.", str(assignment.get("assignment_id") or ""), str(assignment.get("assigned_by") or actor or ""), str(assignment.get("assigned_role") or role or "")
     event_type = "approval_synced"
     reason = f"Approval state synced as {approval_state}."
-    if target_state in {"approved", "frozen", "replay_only"}:
+    if target_state in {"approved", "rejected", "frozen", "replay_only"}:
         reason = f"Approval state moved decision to {target_state}."
     return event_type, reason, "", str(actor or ""), str(role or "")
 
@@ -427,7 +433,7 @@ def _sorted_records(records: list[dict[str, Any]] | None) -> list[dict[str, Any]
             row["decision"] = coerce_signoff_decision(str(row.get("decision") or "acknowledged"))
         if "status" in row and row.get("event_type") == "handoff":
             row["status"] = coerce_handoff_status(str(row.get("status") or "pending"))
-    rows.sort(key=lambda item: (str(item.get("ts", "")), str(item.get("event_type", ""))))
+    rows.sort(key=lambda item: (_record_timestamp_key(item.get("ts")), str(item.get("event_type", ""))))
     return rows
 
 

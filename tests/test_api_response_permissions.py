@@ -9,6 +9,7 @@ import pytest
 from role_aware_dashboard_toolkit import AuditLog, ControlRegistry, InMemoryProfileStore
 from role_aware_dashboard_toolkit.api import FASTAPI_AVAILABLE, create_app
 from role_aware_dashboard_toolkit.security import RoleDef
+from role_aware_dashboard_toolkit.sensitive_values import REDACTED_SECRET
 
 
 pytestmark = pytest.mark.skipif(not FASTAPI_AVAILABLE, reason="FastAPI not installed")
@@ -96,7 +97,9 @@ def test_api_permission_combinations_do_not_borrow_response_read_authority(monke
             else:
                 assert values == {}
     if expected["patch"]:
-        assert responses["patch"].json()[0]["value"] == "USER-SUBMITTED-CANARY"
+        assert responses["patch"].json()[0]["value"] == (
+            "USER-SUBMITTED-CANARY" if perms["can_view_metrics"] else REDACTED_SECRET
+        )
     if expected["save"]:
         assert profiles.load("saved")["values"]["operations_note"] == _LIVE
 

@@ -47,6 +47,15 @@ When an operator-memory store is configured, the runbook surfaces:
 - a timeline panel inside the runbook
 - a narrative handoff preview for the selected run
 
+Native timelines and saved narrative handoffs use audit and telemetry context
+captured in the selected run's checkpoints, subject to the corresponding read
+permissions. Identical records repeated across checkpoint slices appear once.
+The current session's audit log and live telemetry history are not added to a
+historical run. A run without captured context has no audit or telemetry timeline
+events. Capturing context associates that snapshot with a run; it does not prove
+that every captured audit event originated during that run. Public timeline
+builders continue to summarize the evidence explicitly supplied by their caller.
+
 ## Defer line
 
 This phase does not add:

@@ -25,10 +25,11 @@ from typing import Any
 
 from .audit import AuditLog
 from ._record_projection import project_audit_events, project_record
-from .controls import ControlRegistry
+from .controls import ControlDef, ControlRegistry, _looks_like_hex_color
 from .profile_store import BaseProfileStore
 from .profiles import (
     _InvalidProfileError,
+    _contains_secret_fields,
     _public_profile_values as _profile_response_values,
     _require_profile_shape,
     _restore_profile_data,
@@ -271,13 +272,13 @@ def _make_require_api_context(app_state: _AppState):
     return require_api_context
 
 
-def _control_value(app_state: _AppState, key: str) -> ControlValue:
+def _control_value(app_state: _AppState, key: str, *, can_read: bool = True) -> ControlValue:
     ctrl = app_state.registry.get(key)
     if ctrl is None:
         raise HTTPException(status_code=404, detail=f"Control '{key}' not found")
     return ControlValue(
         key=ctrl.key,
-        value=REDACTED_SECRET if ctrl.sensitive else project_record(
+        value=REDACTED_SECRET if ctrl.sensitive or not can_read else project_record(
             {"controls": {ctrl.key: app_state.state.get(ctrl.key, ctrl.default)}},
             app_state.registry,
         )["controls"][ctrl.key],
@@ -286,6 +287,25 @@ def _control_value(app_state: _AppState, key: str) -> ControlValue:
         group=ctrl.group,
         sensitive=ctrl.sensitive,
     )
+
+
+def _require_safe_api_coercion(ctrl: ControlDef, value: Any) -> None:
+    """Reject public string conversion that would erase nested secret labels."""
+    if ctrl.sensitive or ctrl.kind not in {"text", "color"}:
+        return
+    if ctrl.kind == "text":
+        source = ctrl.default if value is None else value
+    else:
+        source = value or ctrl.default or "#3b82f6"
+        # Invalid color input falls back to the configured default, which is
+        # also stringified by the core sanitizer.
+        if not _looks_like_hex_color(str(source).strip()):
+            source = ctrl.default
+    if _contains_secret_fields(source):
+        raise HTTPException(
+            status_code=422,
+            detail="A public control cannot convert structured secret fields to text.",
+        )
 
 
 def _live_profile_response_values(app_state: _AppState, ctx: SecurityContext) -> dict[str, Any]:
@@ -309,7 +329,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
         """Return all control keys and their current values."""
         return [_control_value(app_state, ctrl.key) for ctrl in app_state.registry.all()]
 
-    @app.get("/controls/{key}")
+    @app.get("/controls/{key:path}")
     async def get_control(key: str, _: SecurityContext = Depends(require_api_context("can_view_metrics"))):
         """Return a single control's current value."""
         return _control_value(app_state, key)
@@ -330,6 +350,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 )
             _require_permission(ctx, ctrl.permission)
             old = app_state.state.get(key, ctrl.default)
+            _require_safe_api_coercion(ctrl, value)
             stored = app_state.registry.sanitize_value(key, value)
             pending_updates.append((ctrl, old, stored))
 
@@ -344,13 +365,15 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 source="api",
                 sensitive=ctrl.sensitive,
             )
-            updated.append(_control_value(app_state, ctrl.key))
+            updated.append(_control_value(
+                app_state, ctrl.key, can_read=has_perm(ctx, "can_view_metrics"),
+            ))
         return updated
 
 
 def _load_api_profile(
     profile_id: str, registry: ControlRegistry, session_state: dict[str, Any],
-    *, profile_dir: str, store: BaseProfileStore | None = None,
+    *, profile_dir: str, store: BaseProfileStore | None = None, restore: bool = True,
 ) -> dict[str, Any] | None:
     try:
         data = load_profile_data(profile_id, profile_dir=profile_dir, store=store)
@@ -362,6 +385,11 @@ def _load_api_profile(
         safe_data = {**data, "values": _profile_response_values(
             registry, data.get("values"), data.get("control_meta"),
         )}
+        if not restore:
+            return safe_data
+        for ctrl in registry.all():
+            value = safe_data["values"].get(ctrl.key, session_state.get(ctrl.key, ctrl.default))
+            _require_safe_api_coercion(ctrl, value)
         return _restore_profile_data(safe_data, registry, session_state)
     except _InvalidProfileError:
         raise HTTPException(status_code=422, detail="Stored profile fields are invalid.") from None
@@ -381,6 +409,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             {},  # read-only: don't mutate app state
             profile_dir=app_state.profile_dir,
             store=app_state.profile_store,
+            restore=False,
         )
         if data is None:
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")

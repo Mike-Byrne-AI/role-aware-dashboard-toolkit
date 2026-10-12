@@ -46,10 +46,30 @@ links, so a rejected decision linked only by its identifier still blocks review.
 
 Evidence links are additive. A run link includes its decision and signoff
 records; a checkpoint-only link includes those records for that checkpoint.
+Resolved checkpoint-only links satisfy the linked-evidence policy check.
 Explicit decision links add records to that scope rather than replacing it.
 Adding an approved decision link therefore cannot conceal a rejected decision
 from an already linked run. To review a narrower scope, link the relevant
 checkpoints or decisions without linking the entire run.
+
+Incident evidence follows the same run and checkpoint scope. Explicit incident
+links add incidents, including incidents from another run, without removing
+incidents already covered by a run or checkpoint link. Unrelated incidents in
+the shared store do not affect the case's severity, closure, or action guidance.
+
+Approval coverage uses the latest signoff per reviewer within each run/checkpoint
+scope. For identified reviewers, a role or assignment change supersedes the
+earlier signoff; signoffs without an actor use the role as their reviewer identity.
+Other reviewers and scopes remain independent. ISO timestamps are compared in
+UTC; naive historical timestamps mean UTC. Rejection or requested changes wins
+a tied timestamp. Undated or malformed signoffs are considered alongside the
+latest dated evidence, so unresolved order cannot restore positive coverage;
+unresolved role changes do not establish coverage either. Approved and
+acknowledged signoffs retain their existing positive-coverage meaning.
+
+Decision gates retain rejected, frozen and replay-only checkpoint approval
+restrictions even when a decision snapshot has a different workflow state,
+including closed or older saved snapshots.
 
 ## Common flow
 

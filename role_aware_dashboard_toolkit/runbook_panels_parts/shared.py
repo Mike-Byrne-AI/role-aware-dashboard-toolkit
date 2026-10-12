@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from collections.abc import Callable
 from typing import Any
 
 from .._optional_pandas import load_optional_pandas
@@ -9,6 +10,25 @@ from ..security import has_perm
 
 pd = None
 PANDAS_AVAILABLE: bool | None = None
+
+
+def _save_record(st: Any, save: Callable[[dict[str, Any]], Any], record: dict[str, Any]) -> bool:
+    """Report uncertain storage completion without leaking provider details.
+
+    Only the storage call is caught. Callers keep rendering their widgets on
+    failure, and emit success events or rerun only after a confirmed return.
+    Never retry here: a provider can commit a write before raising an error.
+    """
+    try:
+        save(record)
+    except Exception:
+        st.warning(
+            "Record storage could not confirm this save. It may have completed partially. "
+            "Check the saved records and storage before retrying. "
+            "Help: python -m role_aware_dashboard_toolkit guide runs"
+        )
+        return False
+    return True
 
 
 def _render_table(st: Any, rows: Any) -> None:
@@ -91,6 +111,7 @@ __all__ = [
     "_record_session",
     "_record_summary_view",
     "_render_table",
+    "_save_record",
     "_selected_profile_id",
     "pd",
 ]

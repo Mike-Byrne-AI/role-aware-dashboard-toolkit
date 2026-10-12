@@ -13,7 +13,7 @@ from .audit import _get_writer_shutdown_error, _get_writer_startup_error
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import (
-    _InvalidProfileError, _load_ui_profile, _require_profile_shape, delete_profile, list_profiles,
+    _InvalidProfileError, _load_ui_profile, _public_profile_values, _require_profile_shape, delete_profile, list_profiles,
     load_profile_data, save_profile,
 )
 from .runbook_panels import render_runbook_sidebar
@@ -261,12 +261,12 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
     st.divider()
     st.subheader("Profiles")
     profiles = _profile_read(ctx, list_profiles, config.profile_dir, store=profile_store)
-    selected_profile = st.session_state.get("_radt_profile_choice", "(none)")
+    selected_profile = st.session_state.get("_radt_profile_choice")
     if selected_profile not in profiles:
-        selected_profile = "(none)"
+        selected_profile = None
         st.session_state["_radt_profile_choice"] = selected_profile
     selected_profile_valid = True
-    if selected_profile != "(none)":
+    if selected_profile is not None:
         selected_data = _profile_read(
             ctx, load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store,
         )
@@ -290,13 +290,19 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
         # inputs, so Streamlit does not remove the operator's selection/name.
         _require_profile_metadata(ctx)
         with inputs:
-            profile_options = ["(none)", *profiles]
-            current_choice = st.session_state.get("_radt_profile_choice", "(none)")
+            # None cannot collide with a store's string identifiers. Keep an
+            # actual profile named '(none)' selectable and distinguish its label.
+            profile_options = [None, *profiles]
+            current_choice = st.session_state.get("_radt_profile_choice")
             st.session_state["_radt_profile_choice"] = (
-                current_choice if current_choice in profile_options else "(none)"
+                current_choice if current_choice in profile_options else None
             )
             selected_profile = st.selectbox(
-                "Load profile", options=profile_options, key="_radt_profile_choice"
+                "Load profile", options=profile_options, key="_radt_profile_choice",
+                format_func=lambda value: (
+                    "(none)" if value is None else
+                    "(none) (saved profile)" if value == "(none)" else value
+                ),
             )
             st.text_input(
                 "Profile name", key="_radt_profile_name",
@@ -306,7 +312,7 @@ def _render_profile_controls(st: Any, config: Any, ctx: SecurityContext, profile
             )
 
     with inputs:
-        if selected_profile and selected_profile != "(none)":
+        if selected_profile is not None:
             loaded = _profile_read(ctx, load_profile_data, selected_profile, profile_dir=config.profile_dir, store=profile_store)
             if loaded:
                 try:
@@ -359,20 +365,26 @@ def _render_profile_preview(
 
 
 def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
-                     name: str, selected_profile: str) -> bool:
-    parent_id = selected_profile if selected_profile != "(none)" else ""
+                     name: str, selected_profile: str | None) -> bool:
+    parent_id = selected_profile if selected_profile is not None else ""
     parent = _profile_read(
         ctx, load_profile_data, parent_id, profile_dir=config.profile_dir, store=store,
     ) if parent_id else None
     if parent is not None:
         _profile_store_call(_require_profile_shape, parent)
+    # Native saves must not copy fields hidden by the selected parent's preview
+    # into a new durable diff. Keep the trusted core builder's contract intact.
+    parent_values = _public_profile_values(
+        config.registry, (parent or {}).get("values"),
+        (parent or {}).get("control_meta"), known_only=False,
+    )
     if not can_mutate(ctx, "can_save_profiles"):
         st.warning("Save denied. Your permission or the shared freeze changed.")
         return False
     _profile_store_call(
         save_profile, name, config.registry, st.session_state, role=ctx.role,
         profile_dir=config.profile_dir, store=store, parent_profile_id=parent_id,
-        parent_values=(parent or {}).get("values"), app_name=config.title,
+        parent_values=parent_values, app_name=config.title,
         app_version=getattr(config, "version", ""),
         session_id=str(st.session_state.get("_radt_session_id", "")), source="ui",
     )
@@ -398,7 +410,7 @@ def _read_profile_save_target(config: Any, ctx: SecurityContext, store: Any, nam
 
 
 def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
-                         selected_profile: str, selected_profile_valid: bool,
+                         selected_profile: str | None, selected_profile_valid: bool,
                          known_profiles: list[str], *, save_column: Any) -> bool:
     allowed = can_mutate(ctx, "can_save_profiles") and selected_profile_valid
     name = str(st.session_state.get("_radt_profile_name", "")).strip()
@@ -456,7 +468,7 @@ def _render_profile_save(st: Any, config: Any, ctx: SecurityContext, store: Any,
 
 
 def _render_profile_actions(
-    st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str,
+    st: Any, config: Any, ctx: SecurityContext, profile_store: Any, selected_profile: str | None,
     *, selected_profile_valid: bool = True, known_profiles: list[str] | None = None,
 ) -> bool:
     """Process profile actions once; report a successful membership-changing write."""
@@ -478,8 +490,8 @@ def _render_profile_actions(
             disabled=not can_load_profiles or not selected_profile_valid,
         )
     if load_requested and can_write(ctx, "can_load_profiles"):
-        choice = st.session_state.get("_radt_profile_choice", "(none)")
-        if choice and choice != "(none)":
+        choice = st.session_state.get("_radt_profile_choice")
+        if choice is not None:
             staged_state = dict(st.session_state)
             result = _profile_read(ctx, _load_ui_profile, choice, reg, staged_state, profile_dir=config.profile_dir, store=profile_store)
             if not can_write(ctx, "can_load_profiles"):
@@ -533,8 +545,8 @@ def _render_profile_actions(
         disabled=not can_save_profiles,
     )
     if delete_requested and can_mutate(ctx, "can_save_profiles"):
-        choice = st.session_state.get("_radt_profile_choice", "(none)")
-        if choice and choice != "(none)":
+        choice = st.session_state.get("_radt_profile_choice")
+        if choice is not None:
             if _profile_store_call(delete_profile, choice, profile_dir=config.profile_dir, store=profile_store):
                 audit.log("profile_delete", detail=choice, role=ctx.role)
                 st.toast(f"Deleted profile: {choice}")

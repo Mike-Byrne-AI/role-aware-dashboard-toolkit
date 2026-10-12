@@ -211,8 +211,8 @@ def compare_dashboard_snapshots(left: dict[str, Any], right: dict[str, Any]) -> 
 
 def _snapshot_controls(snapshot: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
     restore = _mapping(snapshot.get("restore_payload"))
-    restore_controls = _mapping(restore.get("controls"))
-    if restore_controls:
+    restore_controls = restore.get("controls")
+    if isinstance(restore_controls, Mapping):
         return dict(restore_controls)
     return _mapping(snapshot.get("controls"))
 

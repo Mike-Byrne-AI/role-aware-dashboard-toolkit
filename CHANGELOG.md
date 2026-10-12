@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- API control writes preserve nested-secret confidentiality and withhold values
+  without metrics read permission. Single-control reads support slash-containing
+  keys. Unsafe structured-to-text coercion is rejected before mutation.
+- Existing invalid store paths produce read diagnostics and block dependent
+  reviews instead of appearing as complete, empty evidence.
+- Rejected checkpoint approvals remain blocking through decision and governance
+  review; completed assignments no longer imply an outstanding review.
+  Checkpoint-only case links count as governance evidence.
+- Review chronology compares ISO timestamps in UTC. Governance approval coverage
+  uses current signoffs per reviewer and run/checkpoint scope, and incident
+  evidence follows the case's additive links.
+- Native record-save failures preserve the dashboard and drafts, report uncertain
+  completion without raw provider errors, and do not emit success audit events.
+- Profiles named `(none)` remain selectable, loadable and deletable. Empty
+  snapshot restore mappings remain authoritative in comparisons, and empty
+  latest control snapshots clear previous decision summaries.
+- Native profile saves omit historical and nested parent secrets from saved
+  differences. Run narratives use captured checkpoint evidence, and incident
+  timelines preserve authenticated audit attribution.
+- The Access Lab keeps access denied after a failed sign-out until recovery.
+- The protocol catalog points telemetry samples to their actual sample builder.
+
 ## 0.1.0
 
 Initial release candidate of Role-Aware Dashboard Toolkit.

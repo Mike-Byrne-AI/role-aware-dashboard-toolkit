@@ -21,6 +21,12 @@ clears the active selection. Preserve damaged records, check the store's
 read diagnostics remain available even after a successful retry; they do not
 keep a recovered run disabled or make a current successful read appear to fail.
 
+If a runbook or review-record save fails, the dashboard keeps rendering controls
+and drafts and reports that storage completion is uncertain. A store may have
+written before raising an error. Check the saved records and repair storage
+before retrying; the dashboard does not automatically retry or record a success
+event for that failed call.
+
 Start a run, adjust controls, capture labeled checkpoints, compare them, and
 end the run with an outcome. A checkpoint contains detached control, audit and
 telemetry evidence subject to the current visibility permissions. Sensitive

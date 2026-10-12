@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._record_utils import _record_timestamp_key
 from .store_diagnostics import (
     _JsonCollectionFileStoreMixin,
     canonical_store_id,
@@ -67,7 +68,7 @@ class FileOperatorMemoryStore(_JsonCollectionFileStoreMixin, BaseOperatorMemoryS
             checkpoint_id=checkpoint_id,
             decision_id=decision_id,
         )
-        rows.sort(key=lambda item: (str(item.get('ts') or item.get('exported_at') or ''), _stable_id(item)))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get('ts') or item.get('exported_at')), _stable_id(item)))
         return rows
 
 
@@ -112,7 +113,7 @@ class InMemoryOperatorMemoryStore(BaseOperatorMemoryStore):
             if decision_id and str(record.get('decision_id') or '') != str(decision_id):
                 continue
             rows.append(json_roundtrip_copy(record))
-        rows.sort(key=lambda item: (str(item.get('ts') or item.get('exported_at') or ''), _stable_id(item)))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get('ts') or item.get('exported_at')), _stable_id(item)))
         return rows
 
 

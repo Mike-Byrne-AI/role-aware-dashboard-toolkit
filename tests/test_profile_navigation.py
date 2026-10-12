@@ -86,7 +86,7 @@ def test_profile_removed_while_hidden_resets_selection_without_losing_draft_or_l
     assert host.config.profile_store.delete("baseline")
     _healthy(app.run())
     _show(app)
-    _assert_retained(app, choice="(none)")
+    _assert_retained(app, choice=None)
     assert app.selectbox(key="_radt_profile_choice").options == ["(none)"]
 
 
@@ -146,7 +146,7 @@ def test_retained_profile_inputs_do_not_bypass_current_role_or_freeze(change, mo
     _healthy(app.run())
     if change == "role":
         # Regranting access cannot resurrect metadata cleared on revocation.
-        assert app.selectbox(key="_radt_profile_choice").value == "(none)"
+        assert app.selectbox(key="_radt_profile_choice").value is None
         assert app.text_input(key="_radt_profile_name").value == "my_profile"
         _healthy(app.selectbox(key="_radt_profile_choice").select("baseline").run())
     _healthy(app.button(key="_radt_profile_load").click().run())
@@ -168,7 +168,7 @@ def test_principal_change_clears_profile_inputs_and_live_values(hidden):
     _healthy(app.run())
     assert app.session_state["_radt_authenticated_principal"] == next_principal
     assert app.session_state["_radt_authenticated_session"] != previous_session
-    assert app.selectbox(key="_radt_profile_choice").value == "(none)"
+    assert app.selectbox(key="_radt_profile_choice").value is None
     assert app.text_input(key="_radt_profile_name").value == "my_profile"
     assert app.number_input(key="workers").value == 8
     assert "_radt_active_profile_id" not in app.session_state

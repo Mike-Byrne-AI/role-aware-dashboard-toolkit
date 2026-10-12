@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ._record_utils import _record_timestamp_key
 from .store_diagnostics import (
     _JsonRecordFileStoreMixin,
     canonical_store_id,
@@ -52,7 +53,7 @@ class FileGovernanceStore(_JsonRecordFileStoreMixin, BaseGovernanceStore):
 
     def list_records(self) -> list[dict[str, Any]]:
         rows = self._list_records()
-        rows.sort(key=lambda item: (str(item.get("updated_at") or item.get("created_at") or ""), str(item.get("governance_id") or "")))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("updated_at") or item.get("created_at")), str(item.get("governance_id") or "")))
         return rows
 
     def list_by_case(self, case_id: str) -> list[dict[str, Any]]:
@@ -87,7 +88,7 @@ class InMemoryGovernanceStore(BaseGovernanceStore):
 
     def list_records(self) -> list[dict[str, Any]]:
         rows = [json_roundtrip_copy(record) for record in self._records.values()]
-        rows.sort(key=lambda item: (str(item.get("updated_at") or item.get("created_at") or ""), str(item.get("governance_id") or "")))
+        rows.sort(key=lambda item: (_record_timestamp_key(item.get("updated_at") or item.get("created_at")), str(item.get("governance_id") or "")))
         return rows
 
     def list_by_case(self, case_id: str) -> list[dict[str, Any]]:

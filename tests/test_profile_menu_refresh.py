@@ -116,7 +116,7 @@ def _profile_events(app):
             if event["type"].startswith("profile_")]
 
 
-@pytest.mark.parametrize("selection", ["(none)", "base"])
+@pytest.mark.parametrize("selection", [None, "base"])
 def test_save_immediately_refreshes_options_and_preserves_existing_selection(app, selection):
     _healthy(app.selectbox(key="_radt_profile_choice").select(selection).run())
     counts, values = _counts(app), _values(app)
@@ -129,7 +129,7 @@ def test_save_immediately_refreshes_options_and_preserves_existing_selection(app
     saved = app.session_state["config"].profile_store.load("new-plan")
     assert saved["values"] == {key: values[key] for key in
                                ("workers", "progress", "priority", "project", "accepting", "chart_color")}
-    assert saved["parent_profile_id"] == (selection if selection != "(none)" else "")
+    assert saved["parent_profile_id"] == (selection if selection is not None else "")
     _assert_one_pass(app, counts, values, control_calls)
     # The newly offered choice is usable immediately; no unrelated click is required.
     _healthy(app.selectbox(key="_radt_profile_choice").select("new-plan").run())
@@ -143,7 +143,7 @@ def test_delete_refreshes_options_and_keeps_toast_host_widgets_and_single_dispat
     control_calls = app.session_state["control_calls"]
     _healthy(app.button(key="_radt_profile_delete").click().run())
     assert app.selectbox(key="_radt_profile_choice").options == ["(none)", "other"]
-    assert app.selectbox(key="_radt_profile_choice").value == "(none)"
+    assert app.selectbox(key="_radt_profile_choice").value is None
     assert [toast.value for toast in app.get("toast")] == ["Deleted profile: base"]
     assert [event["type"] for event in _profile_events(app)] == ["profile_delete"]
     assert app.session_state["config"].profile_store.load("base") is None
@@ -151,6 +151,31 @@ def test_delete_refreshes_options_and_keeps_toast_host_widgets_and_single_dispat
     _healthy(app.run())
     assert _values(app) == values
     assert len(_profile_events(app)) == 1
+
+
+def test_none_named_profile_can_be_saved_loaded_used_as_parent_and_deleted(app):
+    _healthy(app.text_input(key="_radt_profile_name").set_value("(none)").run())
+    _healthy(app.button(key="_radt_profile_save").click().run())
+    store = app.session_state["config"].profile_store
+    assert store.load("(none)")["values"]["workers"] == 18
+    assert app.selectbox(key="_radt_profile_choice").value is None
+    assert app.selectbox(key="_radt_profile_choice").options[:2] == [
+        "(none)", "(none) (saved profile)",
+    ]
+
+    _healthy(app.number_input(key="workers").set_value(31).run())
+    _healthy(app.selectbox(key="_radt_profile_choice").select("(none)").run())
+    _healthy(app.button(key="_radt_profile_load").click().run())
+    assert app.number_input(key="workers").value == 18
+    assert app.session_state["_radt_active_profile_id"] == "(none)"
+
+    _healthy(app.text_input(key="_radt_profile_name").set_value("child").run())
+    _healthy(app.button(key="_radt_profile_save").click().run())
+    assert store.load("child")["parent_profile_id"] == "(none)"
+    _healthy(app.button(key="_radt_profile_delete").click().run())
+    assert store.load("(none)") is None
+    assert app.selectbox(key="_radt_profile_choice").value is None
+    assert app.number_input(key="workers").value == 18
 
 
 @pytest.mark.parametrize("operation", ["save", "delete"])

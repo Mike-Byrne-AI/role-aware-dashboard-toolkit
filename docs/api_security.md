@@ -19,7 +19,13 @@ Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
 `<redacted-secret>` and mark the control as `sensitive: true`. Structured public
 control responses also redact nested secret-named fields, preserving ordinary
-siblings and the original live values. Profile endpoints
+siblings and the original live values. A public text/color update that would
+stringify a nested secret field receives HTTP 422 before any batch state or
+audit changes. This includes a nested default selected by sanitation. Profile
+activation applies the same check to values it would sanitize. Replace the
+value with an ordinary public value or explicitly configure a write-only
+sensitive control; structured select values retain their existing redacted
+responses. Profile endpoints
 omit sensitive values. Reads of existing profiles expose only currently registered
 public controls, and honor historical sensitivity flags. A control containing
 nested secret-named fields is omitted as a whole, before any text coercion.
@@ -55,6 +61,12 @@ Route permissions follow the existing role map:
 - profile save/delete require `can_save_profiles`
 - audit reads require `can_view_audit`
 
+Control update responses retain their normal fields but contain
+`value: "<redacted-secret>"` when the caller lacks `can_view_metrics`, including
+when sanitation chooses a default or clamps the submitted value. The
+`sensitive` flag continues to describe the control definition; a false flag
+does not grant read permission. The authorized update still completes.
+
 Profile save and activation responses contain `values: {}` when the caller lacks
 `can_view_metrics`; the authorized action still completes. This prevents a
 save/load combination from exposing live controls through a newly saved profile.
@@ -81,6 +93,13 @@ A host that needs shared UI/API state or external actions must supply its own
 integration and enforce authorization at the action boundary. Shared profile or
 audit stores do not synchronize live controls. The toolkit does not provide a
 shared-state adapter or cross-process coordination.
+
+## Control keys
+
+Single-control reads accept slash-containing keys, including a key derived from
+a label such as `Requests/second`. URL-encode the complete key when appending it
+to `/controls/`, for example `urllib.parse.quote(key, safe="")`. Registration
+does not need a different key to use the API.
 
 ## Profile identifiers and audit provenance
 

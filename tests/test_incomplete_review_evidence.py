@@ -441,3 +441,19 @@ def test_store_exception_is_failed_without_exposing_original_exception():
     result = read_evidence(SimpleNamespace(list_records=broken), "list_records", record_type="decision")
     assert result.status == "failed"
     assert "synthetic-private" not in repr(result)
+
+
+def test_governance_ui_ignores_unrelated_incident_until_explicitly_linked(host):
+    incident = build_incident_record("unrelated-run", "Unrelated incident", severity="critical")
+    host.config.operator_memory_store.save_incident(incident)
+    app = _app(host, "governance")
+    assert not app.warning and _displayed(app)[0]["state"] == "admissible"
+    _healthy(app.button(key="_radt_governance_save::synthetic-case").click().run())
+    assert host.config.governance_store.list_records()[0]["state"] == "admissible"
+
+    host.case["linked_incident_ids"] = [incident["incident_id"]]
+    host.config.case_store.save(host.case)
+    _healthy(app.run())
+    assert not app.warning and _displayed(app)[0]["state"] == "blocked"
+    _healthy(app.button(key="_radt_governance_save::synthetic-case").click().run())
+    assert host.config.governance_store.list_records()[0]["state"] == "blocked"
