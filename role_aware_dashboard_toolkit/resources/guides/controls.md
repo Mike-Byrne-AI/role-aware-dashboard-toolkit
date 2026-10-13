@@ -54,8 +54,16 @@ shared host registry. Ordinary public values remain editable under their usual
 permissions.
 Do not dump raw session state to debug a dashboard.
 
-When `sensitive` is omitted, detection checks both the name and key for words
-such as `token`, `secret`, `password` and `credential`, for every control kind.
+When `sensitive` is omitted, detection checks both the name and key, for every
+control kind, against `sensitive_values.BUILTIN_SENSITIVE_NAMES`: `token`,
+`secret`, `password`, `passphrase`, `passwd`, `pwd`, `api key`, `private key`,
+`access key`, `authorization`, `credential`, `cookie`, `jwt`, `dsn` and
+`connection string`. The same names mark nested secret fields in audit, API,
+profile and export output. A name of four or more characters matches anywhere,
+ignoring case, with its words joined by `_`, `-`, a space or nothing
+(`api_key`, `x-api-key`, `apiKey`). A shorter name matches only a whole word,
+split at separators and case changes: `dsn` matches `SENTRY_DSN` and
+`sentryDsn` but not `kidsName`.
 It intentionally errs toward protection. For a nonsecret field that matches,
 such as a token-count limit, explicitly use `sensitive=False` to retain its
 ordinary widget and profile values:
@@ -65,6 +73,16 @@ registry.register(
     "Max tokens", kind="number", key="max_tokens", default=256,
     min_value=1, max_value=4096, step=1, sensitive=False,
 )
+```
+
+Hosts can add names for their own secrets. Registration is process-wide and
+additive; built-in names cannot be removed. Register names before registering
+controls, because a control's sensitivity is decided when it is registered:
+
+```python
+from role_aware_dashboard_toolkit.sensitive_values import register_sensitive_names
+
+register_sensitive_names("tenant pin", "otp")
 ```
 
 Sensitive controls use a blank password replacement form for all six kinds;
