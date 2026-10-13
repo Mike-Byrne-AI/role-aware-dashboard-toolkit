@@ -112,7 +112,7 @@ changes.
 - An audit append after a torn line starts on a new line.
 - A record replaced during a read is re-read, not reported missing. Record
   writes fsync the file and directory, stale temporary files are swept, and a
-  replaced record keeps its file mode.
+  replaced record keeps its file mode without group or other write access.
 - Run, evidence and API reads still detect a failed store read after
   `read_errors` is full.
 - The API reports an unreadable stored profile instead of 404 or overwriting

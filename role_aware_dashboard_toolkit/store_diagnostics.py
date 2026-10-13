@@ -538,8 +538,10 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
             handle.write(text)
             handle.flush()
             if existing_mode is not None:
-                # Keep the mode an operator set; mkstemp's 0600 is for new records.
-                os.fchmod(handle.fileno(), existing_mode)
+                # Keep the read access an operator set; mkstemp's 0600 is for
+                # new records. Group and other write bits are never kept, as
+                # 0.1.0 never kept them: another account could rewrite it.
+                os.fchmod(handle.fileno(), existing_mode & ~0o022)
             # The new contents must be durable before the rename publishes them.
             os.fsync(handle.fileno())
         os.replace(tmp_path, target)
