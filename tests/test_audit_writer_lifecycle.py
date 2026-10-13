@@ -117,10 +117,10 @@ def test_toggle_reflects_live_writer_before_any_interaction(tmp_path):
     audit.start_writer(str(audit_root / "audit.jsonl"))
     fake_st = FakeStreamlit()
     try:
-        _render_audit_writer_controls(fake_st, DashboardConfig(audit=audit, audit_dir=str(audit_root)), _ctx("Admin"))
+        _render_audit_writer_controls(fake_st, DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root)), _ctx("Admin"))
         assert fake_st.session_state["_radt_audit_writer"] is True
         audit.stop_writer()
-        _render_audit_writer_controls(fake_st, DashboardConfig(audit=audit, audit_dir=str(audit_root)), _ctx("Admin"))
+        _render_audit_writer_controls(fake_st, DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root)), _ctx("Admin"))
         assert fake_st.session_state["_radt_audit_writer"] is False
     finally:
         audit.stop_writer()
@@ -131,7 +131,7 @@ def test_explicit_toggle_changes_start_and_stop_with_attribution(tmp_path):
     path = audit_root / "audit.jsonl"
     audit = AuditLog()
     fake_st = FakeStreamlit()
-    config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+    config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
     ctx = _ctx("Admin")
     _render_audit_writer_controls(fake_st, config, ctx)
     assert audit.writer_status()["writer_active"] is False
@@ -156,7 +156,7 @@ def test_lifecycle_records_carry_bound_identity(tmp_path):
     path = audit_root / "audit.jsonl"
     parent = AuditLog()
     fake_st = FakeStreamlit()
-    config = DashboardConfig(audit=bind_audit_identity(parent, _PRINCIPAL, _SESSION), audit_dir=str(audit_root))
+    config = DashboardConfig(auth_mode="demo", audit=bind_audit_identity(parent, _PRINCIPAL, _SESSION), audit_dir=str(audit_root))
     ctx = _ctx("Admin")
     _render_audit_writer_controls(fake_st, config, ctx)
     fake_st.session_state["_radt_audit_writer"] = True
@@ -173,7 +173,7 @@ def test_forged_toggle_from_role_without_manage_audit_is_ignored_and_resynced(tm
     audit = AuditLog()
     audit.start_writer(str(audit_root / "audit.jsonl"))
     fake_st = FakeStreamlit()
-    config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+    config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
     try:
         _render_audit_writer_controls(fake_st, config, _ctx("Operator"))
         fake_st.session_state["_radt_audit_writer"] = False  # a disabled widget cannot send this
@@ -189,7 +189,7 @@ def test_path_edit_moves_an_active_writer_and_a_bad_path_keeps_it(tmp_path):
     first, second = audit_root / "first.jsonl", audit_root / "second.jsonl"
     audit = AuditLog()
     fake_st = FakeStreamlit()
-    config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+    config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
     ctx = _ctx("Admin")
     fake_st.session_state["_radt_audit_path"] = str(first)
     _render_audit_writer_controls(fake_st, config, ctx)
@@ -218,7 +218,7 @@ def test_failed_start_shows_the_toggle_off(tmp_path):
     audit_root = tmp_path / "audit"
     audit = AuditLog()
     fake_st = FakeStreamlit()
-    config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+    config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
     ctx = _ctx("Admin")
     fake_st.session_state["_radt_audit_path"] = str(tmp_path / "outside.jsonl")
     fake_st.session_state["_radt_audit_writer"] = True

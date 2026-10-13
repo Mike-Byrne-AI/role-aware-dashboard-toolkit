@@ -54,7 +54,7 @@ def test_full_window_still_refuses_to_overwrite_an_unreadable_profile(tmp_path):
     store = _store_with_corrupt_profile(tmp_path)
     for _ in range(500):  # fill the retained window
         store.list_ids()
-    config = DashboardConfig(profile_dir=str(tmp_path), profile_store=store)
+    config = DashboardConfig(auth_mode="demo", profile_dir=str(tmp_path), profile_store=store)
     ctx = make_security_context("Admin", dict(get_role("Admin").perms))
     with pytest.raises(sidebar._ProfileStorageFailure):
         sidebar._read_profile_save_target(config, ctx, store, "prod", known_profiles=[])

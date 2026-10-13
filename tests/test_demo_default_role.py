@@ -8,6 +8,7 @@ from tests.test_role_aware_dashboard_toolkit import FakeStreamlit
 
 def _config(**kwargs):
     return DashboardConfig(
+        auth_mode="demo",
         sections=DashboardSections(audit_writer=False, profiles=False, runbook=False), **kwargs,
     )
 
