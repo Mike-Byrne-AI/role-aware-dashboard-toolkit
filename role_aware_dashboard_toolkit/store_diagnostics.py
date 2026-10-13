@@ -36,6 +36,8 @@ _STORE_RECORD_CREATE_FLAGS = (
     _STORE_RECORD_APPEND_FLAGS | os.O_CREAT | os.O_EXCL
 )
 _STORE_RECORD_READ_CHUNK_BYTES = 64 * 1024
+# A concurrent replace between probe and open is retried this many times in all.
+_STORE_RECORD_READ_ATTEMPTS = 3
 _STORE_FILENAME_MAX_BYTES = 255
 _STORE_RECORD_CHANGED_MESSAGE = "store record changed between validation and read"
 _STORE_RECORD_APPEND_CHANGED_MESSAGE = (
@@ -375,42 +377,56 @@ def read_text_record(
     *,
     root_dir: Path | None = None,
 ) -> str | None:
-    expected_stat = _probe_safe_store_read_file(path, root_dir=root_dir, errors=errors)
-    if expected_stat is None:
-        return None
-    try:
-        return _read_validated_store_text(path, expected_stat)
-    except FileNotFoundError:
+    # Another writer's atomic replace between the safety probe and the open
+    # changes the file's identity. That is a newer version, not a missing or
+    # unsafe record: validate the new file from scratch and read it. Only a
+    # record that keeps changing is diagnosed.
+    for attempt in range(_STORE_RECORD_READ_ATTEMPTS):
+        final_attempt = attempt == _STORE_RECORD_READ_ATTEMPTS - 1
+        expected_stat = _probe_safe_store_read_file(path, root_dir=root_dir, errors=errors)
+        if expected_stat is None:
+            return None
         try:
-            path.stat(follow_symlinks=False)
+            return _read_validated_store_text(path, expected_stat)
         except FileNotFoundError:
-            parent_error = _missing_path_parent_error(path)
-            if parent_error is not None and errors is not None:
-                errors.append(build_read_error(path, parent_error, root_dir=root_dir))
-            return None
-        except (OSError, ValueError, RuntimeError) as probe_exc:
+            try:
+                path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                parent_error = _missing_path_parent_error(path)
+                if parent_error is not None and errors is not None:
+                    errors.append(build_read_error(path, parent_error, root_dir=root_dir))
+                return None
+            except (OSError, ValueError, RuntimeError) as probe_exc:
+                if errors is not None:
+                    errors.append(build_read_error(path, probe_exc, root_dir=root_dir))
+                return None
+            if not final_attempt:
+                continue
             if errors is not None:
-                errors.append(build_read_error(path, probe_exc, root_dir=root_dir))
-            return None
-        if errors is not None:
-            errors.append(
-                build_read_error(
-                    path,
-                    StorePathSecurityError(_STORE_RECORD_CHANGED_MESSAGE),
-                    root_dir=root_dir,
+                errors.append(
+                    build_read_error(
+                        path,
+                        StorePathSecurityError(_STORE_RECORD_CHANGED_MESSAGE),
+                        root_dir=root_dir,
+                    )
                 )
-            )
-        return None
-    except (
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-        StorePathSecurityError,
-    ) as exc:
-        if errors is not None:
-            errors.append(build_read_error(path, exc, root_dir=root_dir))
-        return None
+            return None
+        except StorePathSecurityError as exc:
+            if not final_attempt and exc.args == (_STORE_RECORD_CHANGED_MESSAGE,):
+                continue
+            if errors is not None:
+                errors.append(build_read_error(path, exc, root_dir=root_dir))
+            return None
+        except (
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            if errors is not None:
+                errors.append(build_read_error(path, exc, root_dir=root_dir))
+            return None
+    return None
 
 
 def append_text_record(
