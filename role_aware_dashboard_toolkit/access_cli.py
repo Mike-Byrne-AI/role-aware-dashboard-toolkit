@@ -198,9 +198,11 @@ def _directory(value: str | Path) -> Path:
         raise ProvisioningError(_ANCESTOR_MESSAGE.format(path=changeable))
     if not _owned_by_caller(real_info):
         raise ProvisioningError(_OWNER_MESSAGE)
+    # Before the mode check: Linux setfacl widens the group bits to the ACL
+    # mask, and the operator must be told to remove the ACL, not to chmod.
+    _refuse_extended_acl(real, "the protected directory")
     if os.name == "posix" and real_info.st_mode & 0o077:
         raise ProvisioningError(_PERMISSIONS_MESSAGE)
-    _refuse_extended_acl(real, "the protected directory")
     return real
 
 

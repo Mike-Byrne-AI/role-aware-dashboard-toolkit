@@ -665,3 +665,33 @@ def test_a_parent_acl_may_deny_but_not_allow(private_directory, capsys, allow):
             assert status == 0, output.err
     finally:
         _remove_acls(parent)
+
+
+# On Linux, setfacl also widens the group bits of the mode to the ACL mask,
+# so the mode check would fire first and blame "group or other access". These
+# tests emulate that shape on any POSIX host: the ACL is reported and the
+# mode carries the mask, as `setfacl -m u:<id>:rwx` leaves it.
+
+def _emulate_linux_acl(monkeypatch, path, mask_mode):
+    target = os.fspath(path)
+    real_check = access_cli._has_extended_acl
+
+    def has_acl(candidate, *, allow_entries_only=False):
+        if os.fspath(candidate) == target:
+            return not allow_entries_only  # POSIX ACLs have no allow-only reading
+        return real_check(candidate, allow_entries_only=allow_entries_only)
+
+    monkeypatch.setattr(access_cli, "_has_extended_acl", has_acl)
+    os.chmod(path, mask_mode)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL shape")
+def test_a_directory_acl_is_named_even_when_it_widens_the_mode(private_directory, monkeypatch, capsys):
+    _emulate_linux_acl(monkeypatch, private_directory, 0o770)
+
+    assert access_cli.main(["init", "--directory", str(private_directory)]) == 1
+
+    output = capsys.readouterr()
+    assert "access control list" in output.err
+    assert "group or other access" not in output.err
+    assert not (private_directory / "identity.key").exists()
