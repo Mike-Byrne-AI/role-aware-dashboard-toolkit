@@ -108,6 +108,29 @@ def test_host_extras_require_reviewed_dependency_floors_without_changing_core():
     assert set(extras["api"]) <= set(extras["dev"])
 
 
+def test_dependency_floors_install_from_wheels_at_the_lowest_resolution():
+    # Checked with `uv pip compile --resolution lowest-direct --only-binary :all:`
+    # for Python 3.10-3.14 on Linux, macOS and Windows, then installed and tested.
+    # pandas < 2.2.2 fails to import against numpy 2; fastapi 0.133 needs
+    # pydantic 2.7; older pandas and pydantic-core lack 3.13/3.14 wheels.
+    extras = _load_pyproject()["project"]["optional-dependencies"]
+    pandas_floors = {
+        "pandas>=2.2.2",
+        "pandas>=2.2.3; python_version >= '3.13'",
+        "pandas>=2.3.3; python_version >= '3.14'",
+    }
+    pydantic_floors = {
+        "pydantic>=2.7.0",
+        "pydantic>=2.8.1; python_version >= '3.13'",
+        "pydantic>=2.12.0; python_version >= '3.14'",
+    }
+    for extra in ("pandas", "full", "dev"):
+        assert {dep for dep in extras[extra] if dep.startswith("pandas")} == pandas_floors, extra
+    for extra in ("api", "full", "dev"):
+        assert {dep for dep in extras[extra] if dep.startswith("pydantic")} == pydantic_floors, extra
+    assert "black>=24.1.0" in extras["dev"]
+
+
 def test_release_checker_requires_metadata_25_compatible_twine():
     extras = _load_pyproject()["project"]["optional-dependencies"]
     assert "twine>=7.0.0" in extras["dev"]
