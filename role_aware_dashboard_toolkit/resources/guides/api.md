@@ -34,8 +34,11 @@ control value or a profile's `extra` receives HTTP 422.
 
 State-changing requests (`POST`, `PATCH`, `DELETE`) without an `X-API-Key`
 header must send `Content-Type: application/json`, including bodyless profile
-activation and deletion; otherwise they receive HTTP 415. This stops another web
-site from making a browser change an anonymous demo API.
+activation and deletion; otherwise they receive HTTP 415. With anonymous access
+and no API key, they must also be addressed to `localhost`, `127.0.0.1` or
+`[::1]` (the `Host` header); another name receives HTTP 403. Together these stop
+another web site from making a browser change an anonymous demo API, including
+by pointing its own name at this server (DNS rebinding).
 
 Request bodies are exact. `PATCH /controls` takes `{"values": {"key": value}}`;
 a body without `values`, or with any other field, is refused with HTTP 422.

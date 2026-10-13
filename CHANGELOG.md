@@ -43,6 +43,11 @@ changes.
 - With `allow_anonymous=True`, a `POST`, `PATCH` or `DELETE` without
   `X-API-Key` must send `Content-Type: application/json` (else 415), so a
   browser cannot send it cross-site. Send JSON with that header.
+- With `allow_anonymous=True` and no API key set, a `POST`, `PATCH` or
+  `DELETE` whose `Host` header is not `localhost`, a `127.x` address or
+  `[::1]` gets 403, which stops DNS rebinding. Address an anonymous demo as
+  `localhost` or `127.0.0.1`, or set an API key to serve it under another name
+  (a LAN address, a container name, or a test client's default host).
 - `RoleDef` permission values must be `True` or `False` (`TypeError`
   otherwise), and only `True` grants. `register()` refuses an empty or
   non-string `permission`, and the API denies a control without one.

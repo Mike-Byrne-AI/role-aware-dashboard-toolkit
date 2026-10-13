@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import logging
 import hmac
+import ipaddress
 from typing import Any
 
 from .audit import AuditLog
@@ -317,6 +318,50 @@ def _require_preflighted_request(request: Any) -> None:
     raise HTTPException(status_code=415, detail=_CROSS_SITE_REFUSAL)
 
 
+_REMOTE_HOST_REFUSAL = (
+    "Anonymous state-changing requests must be addressed to a loopback host "
+    "(localhost, 127.0.0.1 or [::1]) in the Host header. This refuses a web page "
+    "that points its own name at this server (DNS rebinding). Address the API by "
+    "a loopback name, or set an API key and send X-API-Key."
+)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a Host header names localhost or a loopback address."""
+    text = host.strip().lower()
+    if text.startswith("["):
+        end = text.find("]")
+        name, port = (text[1:end], text[end + 1:]) if end > 0 else ("", "")
+        if port and not (port.startswith(":") and port[1:].isdigit()):
+            return False
+    else:
+        name, _, port = text.partition(":")
+        if port and not port.isdigit():
+            return False
+    if name.rstrip(".") == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped is not None and mapped.is_loopback)
+
+
+def _require_loopback_host(request: Any) -> None:
+    """Refuse an anonymous state change addressed to a name other than loopback.
+
+    A page that rebinds its own DNS name to 127.0.0.1 makes the browser treat
+    the demo API as same-origin, so its JSON requests need no preflight; the
+    Host header still carries the page's name. Anonymous access is for a local
+    demo, which is addressed as localhost.
+    """
+    if request.method in _READ_METHODS:
+        return
+    if not _is_loopback_host(request.headers.get("host", "")):
+        raise HTTPException(status_code=403, detail=_REMOTE_HOST_REFUSAL)
+
+
 def _canonical_api_profile_id(profile_id: str) -> str:
     """Return the identifier that the API will persist and clients can address.
 
@@ -432,6 +477,9 @@ def _make_require_api_context(app_state: _AppState):
         ) -> SecurityContext:
             ctx = _resolve_api_context(app_state, x_api_key)
             _require_preflighted_request(request)
+            if app_state.allow_anonymous and not os.getenv(_API_KEY_ENV, ""):
+                # The request was served anonymously: no key was checked.
+                _require_loopback_host(request)
             _require_permission(ctx, permission)
             return ctx
 

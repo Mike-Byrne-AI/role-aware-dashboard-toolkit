@@ -199,7 +199,7 @@ def test_api_preserves_caller_provided_empty_audit(api_registry):
         allow_anonymous=True,
         anonymous_role="Admin",
     )
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
     response = client.patch("/controls", json={"values": {"temp": 1.2}})
 
@@ -357,7 +357,7 @@ def test_api_profile_activation_returns_applied_sanitized_state(api_registry, mo
     monkeypatch.delenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", raising=False)
     monkeypatch.delenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_ALLOW_ANONYMOUS", raising=False)
     app = create_app(api_registry, profile_store=store, allow_anonymous=True, anonymous_role="Admin")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
     # Anonymous state changes must be non-simple requests (cross-site guard).
     activated = client.post("/profiles/unsafe/activate", headers={"Content-Type": "application/json"})
@@ -521,7 +521,7 @@ def test_api_numeric_update_cannot_store_or_emit_nonfinite_values(api_registry, 
         allow_anonymous=True,
         anonymous_role="Admin",
     )
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
     updated = client.patch(
         "/controls",
@@ -722,7 +722,7 @@ def test_api_profile_store_takes_precedence_over_profile_dir(api_registry, monke
             allow_anonymous=True,
             anonymous_role="Admin",
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://localhost")
 
         saved = client.post(
             "/profiles",

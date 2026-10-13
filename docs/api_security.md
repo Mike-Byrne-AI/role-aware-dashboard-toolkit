@@ -84,6 +84,17 @@ Clients that send `X-API-Key` need no change. Anonymous clients send
 activation and deletion. A host that adds a CORS policy allowing other origins
 removes this protection for those origins.
 
+The content-type check alone does not stop DNS rebinding: a page whose own name
+the attacker re-points at 127.0.0.1 is same-origin to the browser, so its JSON
+requests need no preflight. With anonymous access on and no API key set, every
+state-changing request must therefore name a loopback host (`localhost`,
+`127.0.0.1` or another `127.x` address, or `[::1]`) in its `Host` header, or it
+receives HTTP 403 before any state or audit change; the rebinding page's
+requests carry its own name. Address an anonymous demo API as `localhost` or
+`127.0.0.1`, or set an API key to serve it under another name. Reads are not
+host-checked, so anonymous reads expose control values to such a page: keep
+anonymous access to synthetic local data.
+
 Public bind examples such as `--host 0.0.0.0` are deployment-only. Keep them
 behind trusted network controls (private network segments, ingress auth, and
 TLS termination) rather than exposing the API directly to the open internet.

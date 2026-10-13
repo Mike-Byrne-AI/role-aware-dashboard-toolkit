@@ -28,7 +28,8 @@ def _demo_app(monkeypatch, role="Operator"):
     audit = AuditLog()
     app = create_app(registry, audit=audit, profile_store=store,
                      allow_anonymous=True, anonymous_role=role)
-    return TestClient(app), audit, store
+    # A local demo is addressed as localhost (anonymous writes need a loopback Host).
+    return TestClient(app, base_url="http://localhost"), audit, store
 
 
 def _headers(content_type):
@@ -106,3 +107,72 @@ def test_read_routes_need_no_content_type(monkeypatch):
 
     assert client.get("/controls", headers=EVIL).status_code == 200
     assert client.get("/health", headers=EVIL).status_code == 200
+
+
+# DNS rebinding: a page at rebind.attacker.example re-points its own name at
+# 127.0.0.1, so its JSON requests are same-origin to the browser (no
+# preflight) and reach the demo API with the attacker's name as Host.
+REMOTE_HOSTS = [
+    "rebind.attacker.example", "rebind.attacker.example:8000", "192.168.1.20:8000",
+    "localhost.attacker.example", "127.0.0.1.attacker.example", "[::2]:8000",
+    "localhost:notaport", "testserver",
+]
+LOOPBACK_HOSTS = [
+    "localhost", "localhost:8000", "LOCALHOST", "localhost.", "127.0.0.1", "127.0.0.1:8501",
+    "127.8.9.10", "[::1]", "[::1]:8000", "[::ffff:127.0.0.1]:8000",
+]
+
+
+def _state_changing_requests(client, host):
+    headers = {"Content-Type": "application/json", "Host": host}
+    return [
+        client.post("/profiles", headers=headers, content=b'{"profile_id":"forged"}'),
+        client.patch("/controls", headers=headers, content=b'{"values":{"maintenance":true}}'),
+        client.post("/profiles/maintenance-on/activate", headers=headers),
+        client.request("DELETE", "/profiles/maintenance-on", headers=headers),
+    ]
+
+
+@pytest.mark.parametrize("host", REMOTE_HOSTS)
+def test_anonymous_state_changes_need_a_loopback_host(monkeypatch, host):
+    client, audit, store = _demo_app(monkeypatch, role="Admin")
+
+    responses = _state_changing_requests(client, host)
+
+    assert [response.status_code for response in responses] == [403] * 4
+    assert "loopback" in responses[0].json()["detail"]
+    assert sorted(store.list_ids()) == ["maintenance-on"]
+    assert client.get("/controls/maintenance", headers={"Host": "localhost"}).json()["value"] is False
+    assert audit.all_events() == []
+
+
+@pytest.mark.parametrize("host", LOOPBACK_HOSTS)
+def test_anonymous_state_changes_work_at_a_loopback_host(monkeypatch, host):
+    client, audit, store = _demo_app(monkeypatch, role="Admin")
+
+    responses = _state_changing_requests(client, host)
+
+    assert [response.status_code for response in responses] == [200] * 4
+    assert store.list_ids() == ["forged"]
+    assert [event["type"] for event in audit.all_events()] == [
+        "profile_save", "control_change", "profile_load", "profile_delete",
+    ]
+
+
+def test_key_clients_and_reads_are_not_host_checked(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    client, _audit, _store = _demo_app(monkeypatch)
+    assert client.get("/controls", headers={"Host": "rebind.attacker.example"}).status_code == 200
+
+    # A deployment behind a proxy keeps its own Host; the key authenticates it.
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", "synthetic-cross-site-key")
+    registry = ControlRegistry()
+    registry.register("Maintenance mode", kind="toggle", key="maintenance", default=False)
+    app = create_app(registry, api_role="Admin", allow_anonymous=True)
+    with TestClient(app) as keyed:
+        response = keyed.patch(
+            "/controls", json={"values": {"maintenance": True}},
+            headers={"X-API-Key": "synthetic-cross-site-key", "Host": "dashboard.example.com"},
+        )
+    assert response.status_code == 200
