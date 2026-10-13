@@ -29,9 +29,11 @@ changes.
   nested more than 32 levels gets 422; a 422 body lists only `type`, `loc` and
   `msg` per error. These apply to the toolkit's routes; routes a host adds to
   the returned app keep FastAPI's defaults.
-- The authenticated starter and the A/B/C example compare resolved paths when
-  refusing access storage inside the app tree (`/tmp/app/secrets` on macOS got
-  through) and check before reading the key. Apply the same change to the
+- The authenticated starter and the A/B/C example compare directory
+  identities (device and inode) when refusing access storage inside the app
+  tree, so `/tmp/app/secrets` on macOS, a case-changed `/deploy/APP/secrets`
+  and the `/System/Volumes/Data/...` firmlink no longer get through, and check
+  before reading the key. Apply the same change (`_inside`) to the
   `build_access_policy` of an app scaffolded from 0.1.0.
 
 ### Changed (BREAKING)

@@ -4,7 +4,10 @@ The authenticated starter and the A/B/C example refuse an access directory
 inside their own source tree. The check must compare resolved paths: on
 macOS /tmp is a root-owned link to /private/tmp, which the provisioning
 helpers accept, so /tmp/deploy/app/secrets must still count as inside an app
-deployed at /tmp/deploy/app.
+deployed at /tmp/deploy/app. Text comparison is not enough either: a
+case-insensitive file system accepts /deploy/APP/secrets, and macOS reaches
+the same directory through the /System/Volumes/Data firmlink, so the check
+compares each directory's identity (device and inode).
 """
 from __future__ import annotations
 
@@ -72,4 +75,29 @@ def test_access_storage_outside_the_app_tree_reaches_the_key_check(tmp_path, mon
     monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(link / "deploy" / "access"))
 
     with pytest.raises(KeyRead):
+        module.build_access_policy()
+
+
+def _same_directory(first: Path, second: Path) -> bool:
+    try:
+        a, b = first.stat(), second.stat()
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+@pytest.mark.parametrize("name", sorted(APPS))
+@pytest.mark.parametrize("spelling", ["case_changed", "firmlink"])
+def test_another_spelling_of_the_app_tree_is_refused(tmp_path, monkeypatch, name, spelling):
+    module, _link, real = _deploy(tmp_path, name, monkeypatch, key_reader=lambda directory: b"k" * 32)
+    app = (real / "deploy" / "app").resolve()
+    if spelling == "case_changed":
+        alias = app.parent / "APP"
+    else:
+        alias = Path("/System/Volumes/Data" + str(app))
+    if not _same_directory(alias, app):
+        pytest.skip(f"this file system has no {spelling.replace('_', ' ')} spelling of a directory")
+    monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(alias / "secrets"))
+
+    with pytest.raises(ValueError, match="outside the application source tree"):
         module.build_access_policy()

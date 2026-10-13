@@ -21,11 +21,29 @@ from examples.section_access.policy import (
 APP_TITLE = "A / B / C Access Lab"
 
 
+def _inside(directory: Path, tree: Path) -> bool:
+    """Return whether ``directory`` is ``tree`` or below it, by directory identity.
+
+    Text comparison misses /tmp/app on macOS (a link to /private/tmp/app), a
+    case-changed /deploy/APP on a case-insensitive disk and the
+    /System/Volumes/Data/... firmlink; device and inode numbers do not.
+    """
+    tree_info = tree.stat()
+    for candidate in (directory, *directory.parents):
+        try:
+            info = candidate.stat()
+        except OSError:
+            continue  # a directory that does not exist yet
+        if (info.st_dev, info.st_ino) == (tree_info.st_dev, tree_info.st_ino):
+            return True
+    return False
+
+
 def build_access_policy() -> AccessPolicy:
     """Production identity comes only from verified OIDC and external grants."""
     directory = Path(os.environ["RADT_ACCESS_DIRECTORY"]).expanduser().absolute()
-    # Compare resolved paths: /tmp/app/secrets is inside an app at /private/tmp/app.
-    if directory.resolve().is_relative_to(Path(__file__).resolve().parent):
+    # Compare directory identities, not path text (see _inside).
+    if _inside(directory.resolve(), Path(__file__).resolve().parent):
         raise ValueError("Access storage must be outside the application source tree.")
     identity_key = read_identity_key(directory)
     return AccessPolicy(
