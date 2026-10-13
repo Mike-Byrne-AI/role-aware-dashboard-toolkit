@@ -28,6 +28,12 @@ Supply credentials through the host's secret handling; never hardcode or print
 them. `/health` is static liveness only. Anonymous access is an explicit local
 demo opt-in, not the default.
 
+Request bodies are exact. `PATCH /controls` takes `{"values": {"key": value}}`;
+a body without `values`, or with any other field, is refused with HTTP 422.
+`POST /profiles` accepts `profile_id`, `role` and `extra` only. It saves the API
+instance's current live values, so a `values` field is refused rather than
+ignored.
+
 Authenticated requests default to Viewer unless the host configures a role.
 Control updates require `can_edit_controls` and the field's permission.
 Their response keeps its normal shape but uses `value: "<redacted-secret>"`

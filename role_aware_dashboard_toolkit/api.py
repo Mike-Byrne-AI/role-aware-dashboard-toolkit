@@ -200,13 +200,19 @@ class ControlValue(BaseModel):
 
 
 class ControlUpdateRequest(BaseModel):
+    # A missing wrapper or a misspelled field is refused, never a silent no-op.
+    model_config = {"extra": "forbid"}
+
     values: dict[str, Any] = Field(
-        default_factory=dict,
+        ...,
         description="Map of control key -> new value",
     )
 
 
 class ProfileRequest(BaseModel):
+    # Profiles snapshot the API's live values; a "values" field would be ignored.
+    model_config = {"extra": "forbid"}
+
     profile_id: str
     role: str = ""
     extra: dict[str, Any] = Field(default_factory=dict)
