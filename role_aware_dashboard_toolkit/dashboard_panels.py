@@ -130,9 +130,7 @@ def render_audit_panel(
             # The table's built-in CSV download exports these cells, so they get
             # the same formula protection as the dedicated audit.csv view.
             display_events = [
-                {key: _spreadsheet_safe_cell(
-                    str(value) if key in {"old", "new"} and value is not None else value
-                 ) for key, value in event.items()}
+                {key: _timeline_cell(key, value) for key, value in event.items()}
                 for event in filtered
             ]
             radt = pandas.DataFrame(display_events)
@@ -172,6 +170,19 @@ def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
     for event in events:
         writer.writerow([_spreadsheet_safe_cell(event.get(key)) for key in fields])
     return output.getvalue()
+
+
+def _timeline_cell(key: str, value: Any) -> Any:
+    """One Timeline table cell: text gets formula protection; other values do not.
+
+    ``old`` and ``new`` hold mixed kinds, so non-text values become their text
+    after protection is decided: a number such as -5 shows as -5, not '-5.
+    """
+    if isinstance(value, str):
+        return _spreadsheet_safe_cell(value)
+    if key in {"old", "new"} and value is not None:
+        return str(value)
+    return value
 
 
 def _spreadsheet_safe_cell(value: Any) -> Any:

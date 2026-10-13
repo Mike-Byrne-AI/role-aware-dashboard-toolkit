@@ -43,3 +43,22 @@ def test_ordinary_cells_and_the_stored_events_are_unchanged():
     assert list(frame["role"])[0] == "Operator"
     assert audit.all_events() == before
     assert before[1]["detail"] == "=1+1"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "shown"),
+    [(5, -5, ("5", "-5")), (0.5, -0.25, ("0.5", "-0.25")), (-1, [1, -2], ("-1", "[1, -2]"))],
+)
+def test_numbers_are_shown_as_numbers_not_quoted_text(old, new, shown):
+    # A negative number is not a formula; only values that were text get the
+    # apostrophe, so the table no longer shows '-5.
+    audit = AuditLog()
+    audit.log_control_change("offset", old, new, role="Operator")
+    frame = _timeline(audit)
+    assert (list(frame["old"])[0], list(frame["new"])[0]) == shown
+
+
+def test_text_that_looks_like_a_negative_number_is_still_protected():
+    audit = AuditLog()
+    audit.log_control_change("comment", "plain", "-5+cmd", role="Operator")
+    assert list(_timeline(audit)["new"])[0] == "'-5+cmd"
