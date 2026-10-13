@@ -27,7 +27,7 @@ from .security import (
     has_perm,
     make_security_context,
 )
-from .store_diagnostics import StorePathSecurityError, safe_store_write_path
+from .store_diagnostics import StorePathSecurityError, safe_store_write_path, store_read_error_total
 
 
 @dataclass
@@ -395,12 +395,12 @@ def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
 
 def _read_profile_save_target(config: Any, ctx: SecurityContext, store: Any, name: str,
                               known_profiles: list[str]) -> dict | None:
-    errors_before = len(getattr(store, "read_errors", ()))
+    errors_before = store_read_error_total(store)
     saved = _profile_read(
         ctx, load_profile_data, name, profile_dir=config.profile_dir, store=store,
     )
     if saved is None and (
-        name in known_profiles or len(getattr(store, "read_errors", ())) > errors_before
+        name in known_profiles or store_read_error_total(store) > errors_before
     ):
         # An unreadable/disappearing record is not permission to overwrite it.
         raise _ProfileStorageFailure("UnreadableProfile")

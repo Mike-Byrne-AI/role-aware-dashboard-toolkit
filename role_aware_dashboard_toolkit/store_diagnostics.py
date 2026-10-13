@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import errno
 import hashlib
 import json
@@ -52,16 +53,62 @@ class StorePathSecurityError(Exception):
     """Raised when a store path fails boundary or file-identity checks."""
 
 
+# A long-lived store re-reports the same unreadable record on every listing.
+# Keep the newest errors only; count every one so callers can still detect an
+# error added by a single read.
+_READ_ERRORS_RETAINED = 200
+
+
+class _ReadErrorLog(collections.deque):
+    """Newest store read errors, bounded, with a total of every error recorded."""
+
+    def __init__(self, iterable: Iterable[StoreReadError] = (), maxlen: int | None = _READ_ERRORS_RETAINED) -> None:
+        super().__init__(maxlen=maxlen)
+        self.total = 0
+        for item in iterable:
+            self.append(item)
+
+    def append(self, item: StoreReadError) -> None:
+        self.total += 1
+        super().append(item)
+
+    def extend(self, items: Iterable[StoreReadError]) -> None:
+        for item in items:
+            self.append(item)
+
+
 class StoreReadDiagnosticsMixin:
     def _init_read_diagnostics(self) -> None:
-        self._read_errors: list[StoreReadError] = []
+        self._read_errors: MutableSequence[StoreReadError] = _ReadErrorLog()
 
     @property
     def read_errors(self) -> list[StoreReadError]:
+        """The newest read errors (at most ``_READ_ERRORS_RETAINED``)."""
         return list(self._read_errors)
+
+    @property
+    def read_error_count(self) -> int:
+        """Every read error recorded by this store; ``clear_read_errors`` keeps it.
+
+        Compare it before and after an operation to detect errors that
+        operation added; ``len(read_errors)`` stops growing once full.
+        """
+        return int(getattr(self._read_errors, "total", len(self._read_errors)))
 
     def clear_read_errors(self) -> None:
         self._read_errors.clear()
+
+
+def store_read_error_total(store: Any) -> int:
+    """Monotonic read-error count for any store, for before/after comparisons.
+
+    Uses ``read_error_count`` when the store has it, else ``len(read_errors)``
+    (custom stores that keep an unbounded list).
+    """
+    count = getattr(store, "read_error_count", None)
+    if isinstance(count, int) and not isinstance(count, bool):
+        return count
+    return len(getattr(store, "read_errors", ()) or ())
 
 
 def _directory_enumeration_error_message(exc: OSError | ValueError | RuntimeError) -> str:
@@ -825,4 +872,5 @@ __all__ = [
     "safe_store_filename",
     "safe_store_write_path",
     "sorted_store_ids",
+    "store_read_error_total",
 ]
