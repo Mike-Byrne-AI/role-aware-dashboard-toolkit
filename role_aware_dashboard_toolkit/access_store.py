@@ -90,9 +90,13 @@ def _darwin_acl_library():
 
 def _darwin_acl_tags(path: str | os.PathLike[str]) -> list[int]:
     """Return the tag of each extended ACL entry on ``path`` (not following links)."""
-    import ctypes
+    try:
+        import ctypes
 
-    library = _darwin_acl_library()
+        library = _darwin_acl_library()
+    except (ImportError, OSError, AttributeError) as exc:
+        # No way to read ACLs means no way to rule one out: fail closed.
+        raise OSError(errno.ENOTSUP, "cannot load the ACL library") from exc
     ctypes.set_errno(0)
     acl = library.acl_get_link_np(os.fsencode(path), _DARWIN_ACL_TYPE_EXTENDED)
     if not acl:

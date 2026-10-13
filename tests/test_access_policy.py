@@ -455,3 +455,17 @@ def test_sqlite_store_refuses_a_database_owned_by_another_account(tmp_path, monk
             SQLiteAccessStore(path)
     else:
         assert store.read_grants(PID) == ("Viewer",)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACLs are read through ctypes")
+def test_an_unusable_acl_library_fails_closed_as_a_store_error(tmp_path, monkeypatch):
+    import role_aware_dashboard_toolkit.access_store as access_store
+
+    store = SQLiteAccessStore.create(tmp_path / "access.sqlite3")
+
+    def missing_library():
+        raise ImportError("ctypes is unavailable")
+
+    monkeypatch.setattr(access_store, "_darwin_acl_library", missing_library)
+    with pytest.raises(AccessStoreError):
+        store.read_freeze()
