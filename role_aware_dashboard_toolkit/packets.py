@@ -6,8 +6,11 @@ from typing import Any
 from ._json_safety import strict_json_loads
 from .packet_core import (
     DIFF_PACKET_SCHEMA_VERSION,
+    MAX_PACKET_NESTING_DEPTH,
     PACKET_SCHEMA_VERSION,
     VALID_PACKET_TYPES,
+    _nesting_error,
+    _nesting_exceeds,
     _normalize_packet_type,
     build_packet,
 )
@@ -130,6 +133,8 @@ def build_ledger_packet(
 
 
 def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
+    if _nesting_exceeds(packet, MAX_PACKET_NESTING_DEPTH):
+        raise _nesting_error("Cannot export invalid packet: ")
     validated = validate_packet(packet)
     if not validated["ok"]:
         raise ValueError("Cannot export invalid packet: " + "; ".join(validated["errors"]))
@@ -138,7 +143,12 @@ def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
 
 
 def load_packet_json(raw: str) -> dict[str, Any]:
-    data = strict_json_loads(raw)
+    try:
+        data = strict_json_loads(raw)
+    except RecursionError:
+        raise _nesting_error("Invalid packet JSON: ", may_cycle=False) from None
+    if _nesting_exceeds(data, MAX_PACKET_NESTING_DEPTH):
+        raise _nesting_error("Invalid packet JSON: ", may_cycle=False)
     validated = validate_packet(data)
     if not validated["ok"]:
         raise ValueError("Invalid packet JSON: " + "; ".join(validated["errors"]))
@@ -152,6 +162,7 @@ def extract_packet_payload(packet: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "DIFF_PACKET_SCHEMA_VERSION",
+    "MAX_PACKET_NESTING_DEPTH",
     "PACKET_SCHEMA_VERSION",
     "VALID_PACKET_TYPES",
     "build_audit_slice_packet",

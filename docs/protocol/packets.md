@@ -66,6 +66,11 @@ explicitly to local paths when constructing a generic packet. Export validates
 the envelope first and uses strict JSON encoding; `NaN`, positive infinity, and
 negative infinity are rejected.
 
+A packet nests at most 100 levels of mappings and lists, counting the envelope
+(`MAX_PACKET_NESTING_DEPTH`). Construction, import and export raise `ValueError`
+for a deeper packet, or for a payload or metadata that contains a cycle, before
+redaction or JSON encoding starts.
+
 File URIs, with or without `//` (`file:///x`, `file:/x`, `file:C:/x`), and
 editor links that carry a local path (`vscode://file/...` and the same form in
 other editors) are redacted as local paths.

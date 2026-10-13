@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -12,6 +13,11 @@ _PACKET_RESERVED_PAYLOAD_KEYS = frozenset({"repo_root", "schema_version"})
 _PACKET_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 PACKET_SCHEMA_VERSION = 1
+# A packet nests at most this many mappings and lists, counting the envelope.
+# Deeper or cyclic values are refused with ValueError before redaction or JSON
+# encoding could recurse past Python's limit.
+MAX_PACKET_NESTING_DEPTH = 100
+_CONTAINER_TYPES = (Mapping, list, tuple, set, frozenset)
 DIFF_PACKET_SCHEMA_VERSION = 1
 VALID_PACKET_TYPES = (
     "profile",
@@ -41,6 +47,39 @@ def _normalize_packet_type(packet_type: Any) -> str:
     return normalized_type
 
 
+def _nesting_exceeds(value: Any, limit: int) -> bool:
+    """Return whether ``value`` nests more than ``limit`` containers deep.
+
+    Levels are walked breadth-first without recursion. A container reached
+    twice on one level is walked once, so shared values stay cheap and a cycle
+    simply counts as too deep.
+    """
+    level = [value] if isinstance(value, _CONTAINER_TYPES) else []
+    depth = 0
+    while level:
+        depth += 1
+        if depth > limit:
+            return True
+        seen: set[int] = set()
+        next_level: list[Any] = []
+        for container in level:
+            items = container.values() if isinstance(container, Mapping) else container
+            for item in items:
+                if isinstance(item, _CONTAINER_TYPES) and id(item) not in seen:
+                    seen.add(id(item))
+                    next_level.append(item)
+        level = next_level
+    return False
+
+
+def _nesting_error(prefix: str, *, may_cycle: bool = True) -> ValueError:
+    cycle = ", or contains a cycle" if may_cycle else ""
+    return ValueError(
+        f"{prefix}nesting exceeds {MAX_PACKET_NESTING_DEPTH} levels of mappings "
+        f"and lists, counting the envelope{cycle}."
+    )
+
+
 def build_packet(
     packet_type: str,
     payload: dict[Any, Any],
@@ -62,6 +101,11 @@ def build_packet(
     normalized_type = _normalize_packet_type(packet_type)
 
     payload_copy = dict(payload or {})
+    # Payload and metadata sit one level below the envelope.
+    if _nesting_exceeds(payload_copy, MAX_PACKET_NESTING_DEPTH - 1):
+        raise _nesting_error("Packet payload ")
+    if _nesting_exceeds(dict(meta or {}), MAX_PACKET_NESTING_DEPTH - 1):
+        raise _nesting_error("Packet metadata ")
     if isinstance(repo_root, os.PathLike):
         resolved_repo_root: str | os.PathLike[Any] = repo_root
     elif isinstance(repo_root, str):
@@ -95,6 +139,7 @@ def build_packet(
 
 __all__ = [
     "DIFF_PACKET_SCHEMA_VERSION",
+    "MAX_PACKET_NESTING_DEPTH",
     "PACKET_SCHEMA_VERSION",
     "VALID_PACKET_TYPES",
     "build_packet",
