@@ -597,11 +597,13 @@ def _redact_text_local_paths(
         unit = "character" if omitted == 1 else "characters"
         return f"{scanned}<redacted-oversize-text: {omitted} {unit} omitted>"
     if _looks_absolute_path(value):
+        # The whole text is read as one path, so a repository root containing
+        # spaces stays whole; a later path in the relative remainder is
+        # redacted by _repo_relative_text. A URL in the text is the exception:
+        # path normalization would fold its "//", so scan path by path.
         whole = _redact_absolute_path(value, repo_root_path=repo_root_path, cache=cache)
-        if whole == _REDACTED_LOCAL_PATH:
+        if whole == _REDACTED_LOCAL_PATH or "://" not in value:
             return whole
-        # Under the repository root, the relative remainder of the whole text
-        # would keep any later path in it: scan the text path by path instead.
     elif not value:
         return value
     value = _replace_oserror_double_root_paths(value, repo_root_path=repo_root_path, cache=cache)
@@ -958,14 +960,16 @@ def _redact_absolute_path_once(value: str, *, repo_root_path: _RepoRootPath | No
 
 
 def _repo_relative_text(relative: str, repo_root_path: _RepoRootPath) -> str:
-    """Scan a repository-relative result for a path it still carries.
+    """Redact any path a repository-relative result still carries.
 
     A candidate path can run on past a separator that is not a path boundary
-    (``/repo/a.txt,/Users/alice/s``); its relative remainder must not carry the
-    later path through. The remainder is shorter than the candidate, so the
-    scan ends.
+    (``/repo/a.txt,/Users/alice/s``), so its relative remainder must not carry
+    a later path through. The remainder is scanned once, without the root: a
+    later path is redacted whole, even one inside the repository, so the scan
+    never recurses again and stays linear however many paths are joined.
     """
-    return _redact_text_local_paths(relative, repo_root_path=repo_root_path)
+    del repo_root_path  # deliberately not used: see above
+    return _redact_text_local_paths(relative, repo_root_path=None)
 
 
 def _log_resolve_failure(context: str, exc: Exception) -> None:

@@ -714,3 +714,43 @@ def test_a_windows_path_glued_to_an_editor_link_is_redacted_with_it(message, exp
     # The Windows path took the link's scheme, and what was left no longer
     # read as a link or a path.
     assert redact_text_local_paths(message) == expected
+
+
+@pytest.mark.parametrize(
+    ("prefix", "count", "expected_start"),
+    [("", 150, "src/mod0.py,<redacted-local-path>"), ("files: ", 150, "files: src/mod0.py,<redacted-local-path>"),
+     # Past 4,096 characters a candidate path is redacted without resolving.
+     ("files: ", 2_000, "files: <redacted-local-path>")],
+)
+def test_many_repo_paths_joined_without_spaces_do_not_recurse(prefix, count, expected_start):
+    # Each repository-relative remainder was scanned again with the root, one
+    # stack level per path: 150 comma-joined paths raised RecursionError. The
+    # remainder is now scanned once, without the root, so later paths are
+    # redacted whole.
+    message = prefix + ",".join(f"/srv/repo/src/mod{index}.py" for index in range(count))
+
+    redacted = redact_text_local_paths(message, repo_root="/srv/repo")
+
+    assert redacted == expected_start
+    assert "/srv/repo" not in redacted
+
+
+def test_a_packet_of_comma_joined_repo_paths_builds():
+    paths = ",".join(f"/srv/repo/src/mod{index}.py" for index in range(150))
+
+    packet = build_packet("x_probe", {"schema_version": 1, "files": paths}, repo_root="/srv/repo")
+
+    assert packet["payload"]["files"] == "src/mod0.py,<redacted-local-path>"
+
+
+@pytest.mark.parametrize(
+    ("repo_root", "message", "expected"),
+    [
+        ("/srv/Alice Smith/proj", "/srv/Alice Smith/proj/a.py", "a.py"),
+        ("/Users/al/Library/Mobile Documents/com~apple~CloudDocs/proj",
+         "/Users/al/Library/Mobile Documents/com~apple~CloudDocs/proj/a.py", "a.py"),
+    ],
+)
+def test_a_whole_string_repo_path_with_spaces_stays_relative(repo_root, message, expected):
+    # Scanning such a string token by token would split the root at its space.
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected

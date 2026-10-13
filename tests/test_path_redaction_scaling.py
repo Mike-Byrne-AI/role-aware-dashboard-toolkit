@@ -137,3 +137,16 @@ def json_text(value):
     import json
 
     return json.dumps(value)
+
+
+def test_comma_joined_repo_paths_scan_in_linear_time():
+    # Distinct in-repository paths joined by commas form one long candidate;
+    # its relative remainder is scanned once more, not once per path.
+    text = "log: " + " ".join(
+        ",".join(f"/srv/repo/pkg{run}/mod{index}.py" for index in range(60)) for run in range(80)
+    )
+    started = time.perf_counter()
+    redact_text_local_paths(text, repo_root="/srv/repo")
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < _BOUND_SECONDS, f"redaction took {elapsed:.2f}s for {len(text)} characters"
