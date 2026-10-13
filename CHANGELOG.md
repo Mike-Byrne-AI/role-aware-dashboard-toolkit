@@ -12,7 +12,9 @@ changes.
   or moves it, and the toggle shows the live state to every role.
 - Starting or stopping the audit writer and `AuditLog.clear()` record
   `audit_writer_start`, `audit_writer_stop` and `audit_cleared` events; an
-  identity-bound audit view pins its actor on them.
+  identity-bound audit view pins its actor on them. A stop that times out
+  records its `audit_writer_stop` (detail "timed out ...") before raising,
+  and the stop that finds the writer ended appends it to the file.
 - The audit Timeline table and its CSV download get the audit CSV's formula
   protection.
 - Path redaction runs in linear time and scans at most 1 MiB of a string;

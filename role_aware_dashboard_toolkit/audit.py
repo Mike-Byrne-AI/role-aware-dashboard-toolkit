@@ -308,6 +308,8 @@ class AuditLog:
         self._writer_path: str | None = None
         self._writer_exit_hook: Any = None
         self._writer_finalizer: weakref.finalize | None = None
+        # A stop that timed out: its record, for the file once the thread ends.
+        self._writer_stop_record: dict[str, Any] | None = None
         self.dropped: int = 0
         self._writer_error_count: int = 0
         self._last_writer_error: dict[str, str] = {}
@@ -627,6 +629,7 @@ class AuditLog:
         was_running = self._writer_running_locked()
         stopped_store = self._writer_store
         stopped_path = self._writer_path
+        actor = attribution or _lifecycle_attribution("", "host", "", "")
         self._writer_stop.set()
         writer_thread = self._writer_thread
         if writer_thread is not None:
@@ -637,15 +640,30 @@ class AuditLog:
                 )
                 record = self._record_writer_error(error)
                 _attach_writer_shutdown_error(error, record)
+                if was_running and stopped_store is not None:
+                    # Record the stop now, in the view only: the thread still
+                    # writes the file. The stop that finds it ended (a retry
+                    # or the exit drain) appends this record as the last line.
+                    evt = _make_event(
+                        "audit_writer_stop",
+                        # Quoted, so redaction removes a path with spaces whole.
+                        detail=(
+                            f"timed out after {_WRITER_STOP_TIMEOUT_SECONDS:g} seconds "
+                            f'waiting for the writer to drain: "{stopped_path or ""}"'
+                        ),
+                        **actor,
+                    )
+                    self._writer_stop_record = self._store_event(
+                        redact_audit_event(evt), writer_locked=True,
+                    )
                 raise error
         self._clear_writer_state_locked()
-        if was_running and stopped_store is not None:
-            evt = _make_event(
-                "audit_writer_stop",
-                detail=str(stopped_path or ""),
-                **(attribution or _lifecycle_attribution("", "host", "", "")),
-            )
+        stored = self._writer_stop_record
+        self._writer_stop_record = None
+        if stored is None and was_running and stopped_store is not None:
+            evt = _make_event("audit_writer_stop", detail=str(stopped_path or ""), **actor)
             stored = self._store_event(redact_audit_event(evt), writer_locked=True)
+        if stored is not None and stopped_store is not None:
             try:
                 # The thread has exited: this is the file's last line.
                 stopped_store.append(stored)

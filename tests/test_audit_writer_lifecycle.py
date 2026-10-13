@@ -350,3 +350,45 @@ def test_custom_role_without_manage_audit_cannot_stop_a_writer(tmp_path):
         assert audit.writer_status()["writer_active"] is True
     finally:
         audit.stop_writer()
+
+
+def test_a_stop_that_times_out_is_recorded_and_reaches_the_file_once(tmp_path, monkeypatch):
+    # A stop that times out raised before recording anything, and a retry
+    # found the writer already marked stopped and recorded nothing either.
+    import threading
+
+    import role_aware_dashboard_toolkit.audit as audit_module
+
+    monkeypatch.setattr(audit_module, "_WRITER_STOP_TIMEOUT_SECONDS", 0.2)
+    path = tmp_path / "audit.jsonl"
+    audit = AuditLog()
+    audit.start_writer(str(path), role="Admin", source="ui")
+    assert _wait_for(lambda: _types(path) == ["audit_writer_start"])
+    release = threading.Event()
+    store = audit._writer_store
+    append = store.append
+
+    def slow_append(event):
+        release.wait(5)
+        append(event)
+
+    store.append = slow_append
+    audit.log("queued")
+    assert _wait_for(lambda: audit._writer_queue.qsize() == 0)
+
+    with pytest.raises(TimeoutError):
+        audit.stop_writer(role="Admin", source="ui")
+
+    stops = [event for event in audit.all_events() if event["type"] == "audit_writer_stop"]
+    assert len(stops) == 1
+    assert "timed out" in stops[0]["detail"]
+    assert stops[0]["role"] == "Admin" and stops[0]["source"] == "ui"
+    assert str(tmp_path) not in stops[0]["detail"]
+
+    release.set()
+    assert _wait_for(lambda: not audit.writer_status()["writer_active"])
+    audit.stop_writer(role="Admin", source="ui")  # the retry completes the stop
+
+    assert [event["type"] for event in audit.all_events()].count("audit_writer_stop") == 1
+    assert _types(path) == ["audit_writer_start", "queued", "audit_writer_stop"]
+    assert "timed out" in _disk(path)[-1]["detail"]
