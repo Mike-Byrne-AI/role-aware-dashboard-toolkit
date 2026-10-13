@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -72,8 +73,8 @@ def _healthy(app):
 
 @pytest.fixture
 def app(tmp_path):
-    app = _healthy(AppTest.from_function(_consumer, args=(str(tmp_path / "audit"),),
-                                        default_timeout=15).run())
+    app = _healthy(start_as_admin(AppTest.from_function(_consumer, args=(str(tmp_path / "audit"),),
+                                        default_timeout=15)).run())
     app.number_input(key="workers").set_value(18)
     app.slider(key="progress").set_value(70)
     app.selectbox(key="priority").select("High")
@@ -202,8 +203,12 @@ def test_failed_write_keeps_profile_widgets_selection_and_no_success(app, operat
 @pytest.mark.parametrize("operation", ["save", "delete"])
 def test_viewer_cannot_forge_profile_write_and_freeze_authority_is_preserved(app, operation, monkeypatch):
     _healthy(app.selectbox(key="_radt_profile_choice").select("base").run())
-    _healthy(app.selectbox(key="_radt_role").select("Viewer").run())
+    # Only a role with can_manage_freeze changes the demo freeze: an Admin
+    # freezes, then the session switches to Viewer.
+    _healthy(app.selectbox(key="_radt_role").select("Admin").run())
     _healthy(app.toggle(key="_radt_writable").set_value(False).run())
+    _healthy(app.selectbox(key="_radt_role").select("Viewer").run())
+    assert app.toggle(key="_radt_writable").disabled
     counts, values = _counts(app), _values(app)
     control_calls = app.session_state["control_calls"]
     assert app.button(key=f"_radt_profile_{operation}").disabled

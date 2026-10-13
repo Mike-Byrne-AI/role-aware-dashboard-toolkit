@@ -1300,7 +1300,7 @@ def test_start_writer_constructor_failure_is_atomic_and_retryable(
     audit.stop_writer()
 
     persisted = FileAuditStore(str(retry_path)).read_all()
-    assert [event["type"] for event in persisted] == ["retry_event"]
+    assert [event["type"] for event in persisted] == ["audit_writer_start", "retry_event", "audit_writer_stop"]
     retry_status = audit.writer_status()
     assert retry_status["writer_active"] is False
     assert retry_status["writer_error_count"] == 0
@@ -1340,7 +1340,7 @@ def test_start_writer_pre_live_failure_clears_state_and_rethrows_original(
     audit.log("retry_event")
     audit.stop_writer()
     assert [event["type"] for event in FileAuditStore(str(retry_path)).read_all()] == [
-        "retry_event"
+        "audit_writer_start", "retry_event", "audit_writer_stop"
     ]
     assert audit.writer_status()["writer_error_count"] == 0
 
@@ -1403,7 +1403,7 @@ def test_start_writer_live_failure_retains_ownership_until_reaped(
         audit_module._WRITER_STOP_TIMEOUT_SECONDS,
     ]
     assert [event["type"] for event in FileAuditStore(str(retry_path)).read_all()] == [
-        "retry_event"
+        "audit_writer_start", "retry_event", "audit_writer_stop"
     ]
     retry_status = audit.writer_status()
     assert retry_status["writer_error_count"] == 0

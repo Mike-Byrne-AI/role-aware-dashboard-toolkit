@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -58,7 +59,7 @@ def _consumer():
 
 @pytest.fixture
 def app():
-    return _healthy(AppTest.from_function(_consumer, default_timeout=15).run())
+    return _healthy(start_as_admin(AppTest.from_function(_consumer, default_timeout=15)).run())
 
 
 def _healthy(app):

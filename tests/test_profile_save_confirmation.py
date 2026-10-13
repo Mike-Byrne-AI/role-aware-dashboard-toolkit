@@ -7,6 +7,7 @@ import pytest
 from role_aware_dashboard_toolkit import InMemoryProfileStore
 from tests.test_authenticated_ui import _host
 from tests.test_profile_menu_refresh import _consumer, _healthy, _profile_events
+from tests.demo_role_helpers import start_as_admin
 
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
@@ -16,9 +17,9 @@ CANCEL = "_radt_profile_replace_cancel"
 
 @pytest.fixture
 def app(tmp_path):
-    app = _healthy(AppTest.from_function(
+    app = _healthy(start_as_admin(AppTest.from_function(
         _consumer, args=(str(tmp_path / "audit"),), default_timeout=15,
-    ).run())
+    )).run())
     app.number_input(key="workers").set_value(18)
     app.text_input(key="_radt_profile_name").set_value("  base  ")
     return _healthy(app.run())

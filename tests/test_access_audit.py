@@ -123,7 +123,9 @@ def test_view_delegates_existing_read_retention_and_clear_behavior():
     copied[0]["user_id"] = "changed"
     assert parent.all_events()[0]["user_id"] == USER_A
     view.clear()
-    assert len(parent) == len(view) == 0
+    # The clear leaves one record of itself in the shared view.
+    assert len(parent) == len(view) == 1
+    assert [event["type"] for event in parent.all_events()] == ["audit_cleared"]
 
 
 def test_writer_lifecycle_delegates_to_shared_parent_and_persists_actor(tmp_path):
@@ -142,7 +144,12 @@ def test_writer_lifecycle_delegates_to_shared_parent_and_persists_actor(tmp_path
     assert parent.writer_status()["writer_active"] is False
     assert view.writer_status() == parent.writer_status()
     saved = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    assert [(event["user_id"], event["session_id"]) for event in saved] == [(USER_A, SESSION_A)]
+    # start_writer/stop_writer record their own lifecycle events. They delegate
+    # to the shared parent, so the view's pinned actor applies to view.log only.
+    assert [event["type"] for event in saved] == [
+        "audit_writer_start", "persisted", "audit_writer_stop",
+    ]
+    assert (saved[1]["user_id"], saved[1]["session_id"]) == (USER_A, SESSION_A)
     parent.dropped = 4
     assert view.dropped == 4
 

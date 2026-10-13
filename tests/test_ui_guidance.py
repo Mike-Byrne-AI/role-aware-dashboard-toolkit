@@ -12,6 +12,7 @@ import pytest
 from role_aware_dashboard_toolkit import DashboardPlugin, PluginRegistry
 from role_aware_dashboard_toolkit.diagnostics import build_diagnostic, diagnostic_text
 from role_aware_dashboard_toolkit.plugins import PluginErrorRecord
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 PAYLOAD = "SECRET-DO-NOT-LEAK C:/private/credential.json"
@@ -42,8 +43,8 @@ def _healthy(app):
 
 @pytest.fixture
 def app(tmp_path):
-    return _healthy(AppTest.from_function(
-        _consumer, args=(str(tmp_path / "audit"),), default_timeout=15).run())
+    return _healthy(start_as_admin(AppTest.from_function(
+        _consumer, args=(str(tmp_path / "audit"),), default_timeout=15)).run())
 
 
 def _assert_help(app, code, capsys):
