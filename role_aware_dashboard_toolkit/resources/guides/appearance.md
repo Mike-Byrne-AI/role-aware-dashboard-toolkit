@@ -23,6 +23,7 @@ For group cards, configure Python:
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry, layout="columns", columns_per_row=2,
     card_background_color="#FFFFFF",
     group_background_colors={"Plan": "#EFF6FF"},

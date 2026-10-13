@@ -63,6 +63,7 @@ for replacement formats and explicit text clearing.
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     title="Service controls",
     subtitle="Changes are explicit and auditable.",
     registry=registry,
@@ -243,7 +244,7 @@ def shared_audit() -> radt.AuditLog:
     return audit
 
 
-config = radt.DashboardConfig(registry=registry, audit=shared_audit(), audit_dir="audit_logs")
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, audit=shared_audit(), audit_dir="audit_logs")
 ```
 
 A dashboard render never starts or stops the writer: not when the writer form
@@ -354,6 +355,7 @@ Group cards have explicit Python options:
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry,
     layout="columns",
     card_background_color="#172554",
@@ -375,6 +377,7 @@ for theme setup and visual checks.
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry,
     sections=radt.DashboardSections(
         profiles=False,
@@ -438,7 +441,7 @@ plugins.register(radt.DashboardPlugin(
     render_panel=project_panel,
     render_sidebar=project_menu,
 ))
-config = radt.DashboardConfig(registry=registry, plugins=plugins)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, plugins=plugins)
 ```
 
 Pass `plugins` to the configuration you render. Call

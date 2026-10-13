@@ -17,7 +17,7 @@ roles = {
          "can_save_profiles": True, "can_load_profiles": True},
     ),
 }
-config = radt.DashboardConfig(registry=registry, custom_roles=roles)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, custom_roles=roles)
 ```
 
 Custom definitions extend/override named built-in roles; they do not remove

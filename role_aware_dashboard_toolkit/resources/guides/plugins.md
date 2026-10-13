@@ -13,7 +13,7 @@ def overview(context):
 
 plugins = radt.PluginRegistry()
 plugins.register(radt.DashboardPlugin(name="overview", render_panel=overview))
-config = radt.DashboardConfig(registry=registry, plugins=plugins)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, plugins=plugins)
 ```
 
 Use `render_sidebar=` for a custom menu. Give widgets stable host-owned keys.

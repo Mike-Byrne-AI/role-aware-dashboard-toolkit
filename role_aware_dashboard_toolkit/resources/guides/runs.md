@@ -4,6 +4,7 @@ Retain a run store, then enable the native runbook:
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry, run_store=retained_run_store,
     sections=radt.DashboardSections(runbook=True),
 )

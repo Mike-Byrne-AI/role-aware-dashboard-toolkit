@@ -12,7 +12,7 @@ observability = radt.ObservabilityConfig(
     },
     history_limit=30,
 )
-config = radt.DashboardConfig(registry=registry, observability=observability)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, observability=observability)
 ```
 
 Replace the example numbers with an authorized data source. Sampling occurs on

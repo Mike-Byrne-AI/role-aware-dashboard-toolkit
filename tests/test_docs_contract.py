@@ -145,3 +145,48 @@ def test_live_docs_are_valid_utf8_without_common_mojibake():
         if "\ufffd" in text or "â€”" in text or "â€œ" in text or "â€\x9d" in text:
             bad.append(path)
     assert bad == []
+
+
+_FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_AUTH_CHOICE_RE = re.compile(r"\b(?:auth_mode|access|auth_hook)\s*=")
+
+
+def _dashboard_config_calls(text: str) -> list[tuple[int, str]]:
+    calls: list[tuple[int, str]] = []
+    for match in re.finditer(r"DashboardConfig\(", text):
+        end, depth = match.end(), 1
+        while end < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[end], 0)
+            end += 1
+        calls.append((text.count("\n", 0, match.start()) + 1, text[match.start():end]))
+    return calls
+
+
+def test_documented_dashboard_configs_choose_an_auth_mode():
+    """A DashboardConfig with neither access nor auth_hook raises unless auth_mode is given.
+
+    Copying an example from the docs, guides, starters or the generated API
+    reference must not hit that error.
+    """
+    package = REPO_ROOT / "role_aware_dashboard_toolkit"
+    markdown = sorted(
+        {REPO_ROOT / path for path in LIVE_DOCS | PUBLIC_ROOT_DOCS}
+        | set((package / "resources").rglob("*.md"))
+        | set((REPO_ROOT / "examples").rglob("*.md"))
+    )
+    python = sorted(
+        set((package / "resources").rglob("*.py"))
+        | set((REPO_ROOT / "examples").rglob("*.py"))
+        | set((package / "public_api_parts").rglob("*.py"))
+    )
+    sources = [(path, block) for path in markdown
+               for block in _FENCE_RE.findall(path.read_text(encoding="utf-8"))]
+    sources += [(path, path.read_text(encoding="utf-8")) for path in python]
+    missing = [
+        f"{path.relative_to(REPO_ROOT).as_posix()}: {' '.join(call.split())[:80]}"
+        for path, text in sources
+        for _line, call in _dashboard_config_calls(text)
+        if "**" not in call and not _AUTH_CHOICE_RE.search(call)
+    ]
+    assert len(sources) > 50
+    assert missing == []

@@ -4,6 +4,7 @@ Use `DashboardSections` when constructing the configuration:
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry,
     sections=radt.DashboardSections(
         profiles=False, audit_writer=False, plugin_details=False,
