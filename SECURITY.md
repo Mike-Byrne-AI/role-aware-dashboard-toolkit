@@ -19,9 +19,7 @@ provider require their own updates as well as toolkit updates.
 
 ## Reporting vulnerabilities
 
-Use GitHub private vulnerability reporting for this repository:
-
-Report a vulnerability at
+Private vulnerability reporting is enabled. Report a vulnerability at
 <https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/security/advisories/new>.
 
 Maintainers use private reports to assess vulnerabilities and coordinate
@@ -29,11 +27,6 @@ fixes and disclosure. If the private form is unavailable, open an
 [issue](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
 asking only for a private contact channel. Wait for a maintainer to arrange
 that channel before sharing any vulnerability details.
-
-The private form must be enabled and checked when the repository is made public.
-Maintainers must also verify the intended account's security notification
-settings. A link in this document does not establish that reporting is live,
-that a notification was delivered, or that somebody has read a report.
 
 Do not disclose credentials, personal information, or exploitable details in
 public issues. In a private vulnerability report, include:

@@ -15,14 +15,14 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 concurrency:
-  group: xl422-candidate-validation
+  group: release-candidate-validation
   cancel-in-progress: false
 
 jobs:
   test:
     name: test (${{ matrix.python-version }})
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -44,7 +44,7 @@ jobs:
 
   coverage-gate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -63,7 +63,7 @@ jobs:
 
   packaging-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -91,6 +91,7 @@ jobs:
               "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
               "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
               "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+              "changelog_unreleased",
           }
           checks = report.get("checks", [])
           if len(checks) != len(required_checks) or {item.get("id") for item in checks} != required_checks:
@@ -445,10 +446,10 @@ jobs:
           name: role_aware_dashboard_toolkit-validated-dist
           path: dist/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
   release-candidate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -487,6 +488,7 @@ jobs:
               "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
               "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
               "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+              "changelog_unreleased",
           }
           checks = report.get("checks", [])
           if len(checks) != len(required_checks) or {item.get("id") for item in checks} != required_checks:
@@ -629,7 +631,7 @@ jobs:
           name: role_aware_dashboard_toolkit-release-candidate-dist
           path: dist/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
       - name: Upload release-candidate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -638,10 +640,10 @@ jobs:
             pre_release_report.json
             release_candidate_evidence.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
   windows-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     needs: [packaging-release-smoke]
     runs-on: windows-latest
     timeout-minutes: 20
@@ -809,4 +811,4 @@ jobs:
           name: role_aware_dashboard_toolkit-windows-artifact-evidence
           path: ${{ runner.temp }}/windows_artifact_evidence.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90

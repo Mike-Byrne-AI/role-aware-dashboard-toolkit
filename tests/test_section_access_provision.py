@@ -24,8 +24,9 @@ SUBJECT = "synthetic-private-account"
 def configured(monkeypatch):
     # Repository tmp_path is deliberately inside the checkout, which must not
     # be accepted for real provisioning. This directory contains only fixtures.
+    # Resolve the system temp root, which sits under the /var symlink on macOS.
     with tempfile.TemporaryDirectory(prefix="radt-section-provision-") as root:
-        directory = Path(root) / "protected"
+        directory = Path(root).resolve(strict=True) / "protected"
         directory.mkdir(mode=0o700)
         initialize_access(directory)
         monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(directory))

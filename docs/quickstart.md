@@ -5,15 +5,28 @@ captures a profile, records a run checkpoint, and exports a validated packet.
 
 ## Install
 
-From a source checkout:
+From a source checkout, create an environment and install the core. In
+PowerShell on Windows:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\Activate.ps1
+```
+
+In bash or zsh on macOS or Linux:
 
 ```bash
-python -m pip install -e .
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+source .venv/bin/activate
 ```
+
+The remaining commands use `python` from that active environment.
 
 Only after a separate PyPI release:
 
-```bash
+```shell
 python -m pip install role-aware-dashboard-toolkit
 ```
 
@@ -100,7 +113,7 @@ rejects non-finite JSON numbers.
 
 ## Run the checked-in example
 
-```bash
+```shell
 python -m examples.core_library
 ```
 

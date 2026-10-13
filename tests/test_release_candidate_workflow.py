@@ -64,7 +64,7 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "id-token: write" not in workflow
     assert "packages: write" not in workflow
 
-    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}\n" in job
+    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}\n" in job
     assert "needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]" in job
     assert (
         "python tools/pre_release_check.py --json --require-clean "
@@ -324,6 +324,7 @@ def _passing_local_report():
         "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
         "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
         "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+        "changelog_unreleased",
     ]
     return {
         "ok": True, "status": "pass", "checks": [{"id": name, "status": "pass"} for name in check_ids],
@@ -395,7 +396,12 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "check out the final remote `main` commit in a clean release checkout" in staging
     assert "repeat the local source checks, artifact build, audits, and install smokes" in staging
     assert "Pull-request-head evidence does not certify a different merge commit." in staging
-    assert "public without changing `main` or adding a metadata commit" in runbook
+    assert "without changing `main` or adding a metadata commit" in runbook
+    assert runbook.splitlines()[2].startswith("**Maintainer-only.**")
+    assert "private repository" not in staging
+    assert "remains private" not in staging
+    for document in (runbook, checklist):
+        assert "`RELEASE_CI_APPROVED_SHA`" in document
     assert "No PyPI name ownership, reservation, or publishing authority is claimed." in runbook
     assert "live_validation_required" in runbook
     assert "twine upload" not in runbook
@@ -404,6 +410,8 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "`workbench`, `auth`, `api`, and `pandas` independently" in checklist
     assert "on Linux and Windows" in checklist
     assert "`auth` wheel on Linux and Windows" in runbook
+    assert "90 days" in runbook and "90-day retention" in checklist
+    assert "one-day" not in runbook + checklist
     assert "authentication checks in the `full` smoke too" in runbook
 
     checklist = _read("docs/release_checklist.md")

@@ -3,9 +3,11 @@
 Work in the user's project and follow its instructions. This handbook describes
 the installed library; it does not grant permission to modify files or services.
 The discovery commands use this Python environment's installed version and need
-no checkout.
+no checkout. `python` below means this environment's interpreter; without an
+active environment, use its path (for example `.venv/bin/python` on macOS or
+Linux, `.\.venv\Scripts\python.exe` on Windows).
 
-```powershell
+```shell
 python -m role_aware_dashboard_toolkit inspect
 python -m role_aware_dashboard_toolkit guide controls
 python -m role_aware_dashboard_toolkit example starter --format json
@@ -13,11 +15,19 @@ python -m role_aware_dashboard_toolkit example starter --format json
 
 Before launching a dashboard, install the toolkit's `workbench` extra in the
 same environment. It applies the supported Streamlit and server dependency
-requirements, including when the core toolkit is already installed. Replace this
-example path with the absolute path to your reviewed toolkit source checkout:
+requirements, including when the core toolkit is already installed. Replace the
+example path with the absolute path to your reviewed toolkit source checkout. In
+PowerShell on Windows:
 
 ```powershell
 python -m pip install "C:\path\to\role-aware-dashboard-toolkit[workbench]"
+python -m pip check
+```
+
+In bash or zsh on macOS or Linux:
+
+```bash
+python -m pip install "/path/to/role-aware-dashboard-toolkit[workbench]"
 python -m pip check
 ```
 
@@ -26,7 +36,7 @@ with `[workbench]` appended to the same `pip install` command. These explicit
 paths work from your application directory. No toolkit package-index release
 is assumed. The toolkit core itself has no mandatory runtime dependencies.
 
-For a new project, preview then explicitly create a new directory:
+For a new project, preview then explicitly create a new directory. In PowerShell:
 
 ```powershell
 python -m role_aware_dashboard_toolkit init my-dashboard --dry-run --format json
@@ -34,6 +44,17 @@ python -m role_aware_dashboard_toolkit init my-dashboard
 Set-Location my-dashboard
 python -m streamlit run app.py
 ```
+
+In bash or zsh:
+
+```bash
+python -m role_aware_dashboard_toolkit init my-dashboard --dry-run --format json
+python -m role_aware_dashboard_toolkit init my-dashboard
+cd my-dashboard
+python -m streamlit run app.py
+```
+
+`init` prints the exact launch command for the interpreter that ran it.
 
 `init` refuses existing destinations; it does not merge or replace an existing
 AGENTS.md. For existing projects, read `example starter` and adapt the relevant

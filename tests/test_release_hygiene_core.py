@@ -31,6 +31,15 @@ def test_changelog_mentions_current_runtime_version():
     assert f"## {__version__}" in changelog
 
 
+def test_changelog_release_headings_are_dated_and_follow_unreleased():
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = re.findall(r"^## (.+)$", changelog, flags=re.MULTILINE)
+    releases = [heading for heading in headings if heading != "Unreleased"]
+    assert releases
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading) for heading in releases), releases
+    assert "Unreleased" not in headings or headings[0] == "Unreleased"
+
+
 def test_changelog_starts_with_canonical_heading():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = changelog.splitlines()
@@ -433,6 +442,17 @@ def test_python_support_policy_is_explicit_and_ci_backed():
     assert set(extract_python_matrix_versions(contributor)) == set(versions)
     assert "3.9" not in versions
     assert any(dep.startswith("tomli>=") and "python_version < '3.11'" in dep for dep in dev_deps)
+
+
+def test_metadata_uses_an_spdx_license_expression_and_declares_typing():
+    pyproject = load_pyproject()
+    project = pyproject["project"]
+    assert project["license"] == "MIT"
+    assert project["license-files"] == ["LICENSE"]
+    assert not any(item.startswith("License ::") for item in project["classifiers"])
+    assert "Typing :: Typed" in project["classifiers"]
+    # Hatchling 1.27 is the first release that writes License-Expression.
+    assert pyproject["build-system"]["requires"] == ["hatchling>=1.27.0"]
 
 
 def test_ci_and_release_checklist_enforce_publication_hygiene():

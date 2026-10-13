@@ -152,7 +152,7 @@ def test_dashboard_example_profile_and_role_workflow(tmp_path, monkeypatch):
 
 def test_streamlit_example_guidance_uses_the_workbench_extra():
     readme = _read("README.md")
-    install = 'python -m pip install -e ".[workbench,dev]"'
+    install = 'python -m pip install ".[workbench]"'
     run = "python -m streamlit run examples/dashboard_admin_controls_app.py"
 
     assert readme.index(install) < readme.index(run)
