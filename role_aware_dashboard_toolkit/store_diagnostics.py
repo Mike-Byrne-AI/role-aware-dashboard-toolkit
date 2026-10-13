@@ -523,6 +523,7 @@ def atomic_write_json_record(path: Path, value: dict[str, Any], *, root_dir: Pat
 def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = None) -> Path:
     target = _resolve_safe_store_write_path(path, root_dir=root_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = _existing_record_mode(target)
 
     fd, tmp_name = tempfile.mkstemp(
         # The temporary name needs its own budget: a valid final filename can
@@ -536,6 +537,9 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
             handle.flush()
+            if existing_mode is not None:
+                # Keep the mode an operator set; mkstemp's 0600 is for new records.
+                os.fchmod(handle.fileno(), existing_mode)
             # The new contents must be durable before the rename publishes them.
             os.fsync(handle.fileno())
         os.replace(tmp_path, target)
@@ -559,6 +563,19 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
     _fsync_directory(target.parent)
     _sweep_stale_store_temps(target.parent)
     return target
+
+
+def _existing_record_mode(target: Path) -> int | None:
+    """Permission bits of the record being replaced (POSIX), else None."""
+    if os.name == "nt" or not hasattr(os, "fchmod"):
+        return None
+    try:
+        target_stat = target.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    if not stat.S_ISREG(target_stat.st_mode):
+        return None
+    return stat.S_IMODE(target_stat.st_mode) & 0o777
 
 
 def _fsync_directory(directory: Path) -> None:
