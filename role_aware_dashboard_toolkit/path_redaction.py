@@ -22,6 +22,10 @@ _WINDOWS_PATH_PATTERN = re.compile(
 # A POSIX path starts at a slash that is not part of a word, URL or double
 # root, extends to the end of its token run, and needs one path character.
 _POSIX_PATH_START_PATTERN = re.compile(r"(?<![:/A-Za-z0-9\]])/(?!/)")
+# In the rest of a repository-relative result, a later path starts only after
+# whitespace, a separator or an opening wrap: "pkg/__pycache__/m.pyc" holds no
+# second path, while "a.pyc:/Users/x" and "a=/Users/x" do.
+_POSIX_PATH_STRICT_START_PATTERN = re.compile(r"(?<![^\s,;|=:'\"(\[{<])/(?!/)")
 _POSIX_PATH_RUN_END_PATTERN = re.compile(r"[\s'\"<>|]")
 _POSIX_PATH_CHARACTER_PATTERN = re.compile(r"[A-Za-z_.~\-]")
 _QUOTE_CHARACTERS = ("'", '"')
@@ -581,6 +585,7 @@ def _redact_text_local_paths(
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache | None = None,
     url_depth: int = 0,
+    strict_starts: bool = False,
 ) -> str:
     value = str(text or "")
     if cache is None:
@@ -610,7 +615,10 @@ def _redact_text_local_paths(
     value = _replace_quoted_absolute_paths(value, repo_root_path=repo_root_path, cache=cache)
     value = _replace_windows_path_substrings(value, repo_root_path=repo_root_path, cache=cache)
     return _TOKEN_PATTERN.sub(
-        lambda match: _redact_token(match.group(0), repo_root_path=repo_root_path, cache=cache, url_depth=url_depth),
+        lambda match: _redact_token(
+            match.group(0), repo_root_path=repo_root_path, cache=cache, url_depth=url_depth,
+            strict_starts=strict_starts,
+        ),
         value,
     )
 
@@ -704,6 +712,7 @@ def _redact_token(
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
     url_depth: int,
+    strict_starts: bool = False,
 ) -> str:
     unwrapped = token.lstrip(_LEADING_WRAP)
     leading = token[:len(token) - len(unwrapped)]
@@ -721,7 +730,9 @@ def _redact_token(
         core,
     )
     with_redacted_urls = _replace_file_uris(with_redacted_urls)
-    redacted_core = _replace_absolute_substrings(with_redacted_urls, repo_root_path=repo_root_path, cache=cache)
+    redacted_core = _replace_absolute_substrings(
+        with_redacted_urls, repo_root_path=repo_root_path, cache=cache, strict_starts=strict_starts,
+    )
     return f"{leading}{redacted_core}{trailing}"
 
 
@@ -793,7 +804,9 @@ def _replace_windows_path_substrings(
     return "".join(output)
 
 
-def _posix_path_spans(text: str) -> list[tuple[int, int]]:
+def _posix_path_spans(
+    text: str, start_pattern: re.Pattern[str] = _POSIX_PATH_START_PATTERN,
+) -> list[tuple[int, int]]:
     """Return the spans a POSIX path match covers, scanning each run once.
 
     A match runs from its start slash to the end of the token run. If the first
@@ -804,7 +817,7 @@ def _posix_path_spans(text: str) -> list[tuple[int, int]]:
     length = len(text)
     position = 0
     while True:
-        slash = _POSIX_PATH_START_PATTERN.search(text, position)
+        slash = start_pattern.search(text, position)
         if slash is None:
             return spans
         start = slash.start()
@@ -820,8 +833,11 @@ def _replace_posix_path_substrings(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
+    strict_starts: bool = False,
 ) -> str:
-    spans = _posix_path_spans(text)
+    spans = _posix_path_spans(
+        text, _POSIX_PATH_STRICT_START_PATTERN if strict_starts else _POSIX_PATH_START_PATTERN,
+    )
     if not spans:
         return text
     urls = _SchemeUrlSpans(text)
@@ -845,10 +861,13 @@ def _replace_absolute_substrings(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
+    strict_starts: bool = False,
 ) -> str:
     text = str(value or "")
     text = _replace_windows_path_substrings(text, repo_root_path=repo_root_path, cache=cache)
-    text = _replace_posix_path_substrings(text, repo_root_path=repo_root_path, cache=cache)
+    text = _replace_posix_path_substrings(
+        text, repo_root_path=repo_root_path, cache=cache, strict_starts=strict_starts,
+    )
     return text
 
 
@@ -959,17 +978,33 @@ def _redact_absolute_path_once(value: str, *, repo_root_path: _RepoRootPath | No
     return _REDACTED_LOCAL_PATH
 
 
+# Where a later path can start inside a repository-relative result: after
+# whitespace, a list separator, a quote, or a PATH/assignment separator.
+_RELATIVE_RESCAN_START = re.compile(r"[\s,;|'\":=]")
+
+
 def _repo_relative_text(relative: str, repo_root_path: _RepoRootPath) -> str:
     """Redact any path a repository-relative result still carries.
 
     A candidate path can run on past a separator that is not a path boundary
     (``/repo/a.txt,/Users/alice/s``), so its relative remainder must not carry
-    a later path through. The remainder is scanned once, without the root: a
-    later path is redacted whole, even one inside the repository, so the scan
-    never recurses again and stays linear however many paths are joined.
+    a later path through. The remainder is scanned from the first such
+    separator, and there a path starts only after whitespace, a separator or
+    an opening wrap, so a slash after "_", "-", "~", ")" or "+" inside a
+    relative path (``pkg/__pycache__/m.pyc``, ``My Folder (copy)/x``) is not
+    taken for a path start. It is
+    scanned once, without the root: a later path is redacted whole, even one
+    inside the repository, so the scan never recurses again and stays linear
+    however many paths are joined.
     """
     del repo_root_path  # deliberately not used: see above
-    return _redact_text_local_paths(relative, repo_root_path=None)
+    match = _RELATIVE_RESCAN_START.search(relative)
+    if match is None:
+        return relative
+    start = match.start()
+    return relative[:start] + _redact_text_local_paths(
+        relative[start:], repo_root_path=None, strict_starts=True,
+    )
 
 
 def _log_resolve_failure(context: str, exc: Exception) -> None:

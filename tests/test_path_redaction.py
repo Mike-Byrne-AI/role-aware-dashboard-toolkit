@@ -754,3 +754,31 @@ def test_a_packet_of_comma_joined_repo_paths_builds():
 def test_a_whole_string_repo_path_with_spaces_stays_relative(repo_root, message, expected):
     # Scanning such a string token by token would split the root at its space.
     assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "repo_root", "expected"),
+    [
+        ("/repo/pkg/__pycache__/m.cpython-312.pyc", "/repo", "pkg/__pycache__/m.cpython-312.pyc"),
+        ("/repo/tests/__snapshots__/a.snap", "/repo", "tests/__snapshots__/a.snap"),
+        ("/repo/build-/x.txt", "/repo", "build-/x.txt"),
+        ("/repo/My Folder (copy)/x.txt", "/repo", "My Folder (copy)/x.txt"),
+        ("/repo/a~/b.txt", "/repo", "a~/b.txt"),
+        ("/repo/v1+/b.txt", "/repo", "v1+/b.txt"),
+        ("see /repo/pkg/__pycache__/m.pyc here", "/repo", "see pkg/__pycache__/m.pyc here"),
+        ("C:\\repo\\pkg\\__pycache__\\m.pyc", "C:\\repo", "pkg/__pycache__/m.pyc"),
+    ],
+)
+def test_a_repo_relative_path_is_not_redacted_inside_itself(message, repo_root, expected):
+    # The rescan for a later path starts at the first separator a path run
+    # can cross, not at a slash after "_", "-", "~", ")" or "+".
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize("separator", [",", ";", "|", " ", "\n", ":", "="])
+def test_a_later_path_after_a_crossable_separator_is_still_redacted(separator):
+    message = f"/repo/pkg/__pycache__/a.pyc{separator}/Users/alice/s"
+
+    assert redact_text_local_paths(message, repo_root="/repo") == (
+        f"pkg/__pycache__/a.pyc{separator}<redacted-local-path>"
+    )

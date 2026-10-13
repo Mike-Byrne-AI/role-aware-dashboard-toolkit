@@ -20,9 +20,10 @@ changes.
 - Path redaction runs in linear time and scans at most 1 MiB of a string;
   `file:` URIs without `//` and editor `file` links are redacted. A path under
   the repository root no longer carries a later path through when it starts
-  the string or runs on past a comma (the later path is redacted whole), and a
-  Windows path glued to a URL (`\\srv\share\vscode://file/...`) is redacted
-  with the URL.
+  the string or runs on past whitespace, `,`, `;`, `|`, `:` or `=` (the later
+  path is redacted whole; the relative path itself, such as
+  `pkg/__pycache__/m.pyc`, is kept), and a Windows path glued to a URL
+  (`\\srv\share\vscode://file/...`) is redacted with the URL.
 - Record and packet validation errors no longer repeat saved values, and an
   oversized schema version no longer raises.
 - The incident timeline narrative renders as plain text, not Markdown.
