@@ -116,8 +116,10 @@ custom_roles = {
 }
 ```
 
-Demo mode permits self-selected roles and does not authenticate users. For a
-shared dashboard, start with `init shared-dashboard --auth` and follow the
+Demo mode permits self-selected roles and does not authenticate users. A new
+demo session starts in its least-privileged role (Viewer for the built-in
+roles); pick another role in the sidebar. Only a role with `can_manage_freeze`
+can change Controls Writable. For a shared dashboard, start with `init shared-dashboard --auth` and follow the
 [authentication guide](../role_aware_dashboard_toolkit/resources/guides/authentication.md).
 Verified users can select only server-assigned roles, and protected writes
 recheck identity, grants and shared freeze. Call the module-level

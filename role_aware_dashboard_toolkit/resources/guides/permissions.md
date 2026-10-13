@@ -1,6 +1,8 @@
 # Preserve authority while customizing
 
-In demo mode the role selector is a local demonstration of authorization.
+In demo mode the role selector is a local demonstration of authorization. A
+new demo session starts in its least-privileged role (Viewer for the built-in
+roles), and only a role with `can_manage_freeze` can change Controls Writable.
 Shared apps should use `init my-dashboard --auth` and `guide authentication`:
 verified identity receives server-owned role grants and can select only assigned
 roles. Shared freeze is checked again at protected writes. The legacy

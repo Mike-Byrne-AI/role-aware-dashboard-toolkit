@@ -37,7 +37,9 @@ already exists.
 
 ## Try it
 
-1. Change Weekly target and Completion. The three summary values update.
+1. A new session starts as Viewer, which can only read. Select Admin in the
+   sidebar, then change Weekly target and Completion. The three summary
+   values update.
 2. Select Progress in the sidebar; change Chart color to recolor the chart.
 3. Switch to Planner. Planning controls remain editable; Intake open is locked.
 4. Turn Controls Writable off. All registered controls freeze.

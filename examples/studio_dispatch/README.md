@@ -22,6 +22,8 @@ services. Stop it with Ctrl+C. Choose another port if 8524 is occupied.
 
 ## Use
 
+- A new session starts as Viewer, which can only read. Select Admin in the
+  sidebar to edit controls and profiles.
 - Adjust weekly hours and completion percentage to update the workload metrics
   and chart. Priority, project name, intake availability and chart color are
   independently configurable.
