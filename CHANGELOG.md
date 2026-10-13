@@ -104,8 +104,11 @@ changes.
   and record the file's name.
 - Building, exporting or loading a packet nested more than 500 levels of
   mappings and lists (counting the envelope) raises `ValueError`, as does one
-  with a cycle; 0.1.0 had no limit and handled about 990 levels before
-  `RecursionError`. Flatten deeper data before putting it in a packet.
+  with a cycle. 0.1.0 had no limit of its own and reached as far as Python's
+  recursion limit allowed: about 990 levels to build or export, about 495 to
+  build a list-nested packet on Python 3.10 and 3.11, and 3,000 or more to
+  load on Python 3.12 and later. Flatten deeper data before putting it in a
+  packet.
 - `AuditLog.clear()` returns the number of events cleared and leaves one
   `audit_cleared` event in the view.
 - `read_errors` keeps the newest 200 errors. Detect new errors with

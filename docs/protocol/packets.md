@@ -67,8 +67,10 @@ the envelope first and uses strict JSON encoding; `NaN`, positive infinity, and
 negative infinity are rejected.
 
 A packet nests at most 500 levels of mappings and lists, counting the envelope
-(`MAX_PACKET_NESTING_DEPTH`), which leaves the host about 490 of Python's
-default 1,000 stack frames on Python 3.10 to 3.14. Construction, import and export raise `ValueError`
+(`MAX_PACKET_NESTING_DEPTH`). Building, exporting, loading and rendering a
+packet at that limit leaves the host about 450 to 490 of Python's default
+1,000 stack frames on Python 3.10 to 3.14; the low end is for a deepest value
+that is itself a URL nested in other URLs' queries. Construction, import and export raise `ValueError`
 for a deeper packet, or for a payload or metadata that contains a cycle, before
 redaction or JSON encoding starts. A value referenced from several places is
 walked once per reference, so they also refuse a packet whose shared values

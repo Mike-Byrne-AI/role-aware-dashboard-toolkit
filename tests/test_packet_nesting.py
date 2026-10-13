@@ -114,3 +114,36 @@ def test_build_and_export_refuse_a_cyclic_payload():
         build_packet("x_probe", payload)
     with pytest.raises(ValueError, match="nest"):
         export_packet_json(_envelope(payload))
+
+
+@pytest.mark.parametrize("kind", ["dict", "list"])
+def test_a_packet_at_the_limit_renders_through_the_ui_json_redaction(kind):
+    # redact_ui_json_payload redacts and then replaces non-finite numbers; the
+    # second pass recursed through comprehensions, two frames per level before
+    # Python 3.12.
+    import json
+
+    from role_aware_dashboard_toolkit.ui_json import redact_ui_json_payload
+
+    packet = build_packet("x_probe", {"schema_version": 1, "n": _nested(LIMIT - 2, kind)})
+    envelope = json.loads(export_packet_json(packet))
+
+    rendered = _with_stack_in_use(HOST_STACK_FRAMES, lambda: redact_ui_json_payload(envelope))
+
+    assert rendered["payload"]["n"] == envelope["payload"]["n"]
+
+
+def test_non_finite_numbers_are_replaced_in_tuples_nested_to_the_limit():
+    # A tuple was rebuilt from a generator, a frame per level on every version.
+    from role_aware_dashboard_toolkit._json_safety import sanitize_non_finite_numbers
+
+    deep = 1.0
+    for _ in range(LIMIT):
+        deep = (deep, float("nan"))
+
+    sanitized = _with_stack_in_use(HOST_STACK_FRAMES, lambda: sanitize_non_finite_numbers(deep))
+
+    for _ in range(LIMIT):
+        assert sanitized[1] is None
+        sanitized = sanitized[0]
+    assert sanitized == 1.0
