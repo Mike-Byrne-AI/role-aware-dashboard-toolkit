@@ -19,8 +19,10 @@ from role_aware_dashboard_toolkit.access_store import SQLiteAccessStore
 def private_directory():
     # Repository tests deliberately redirect tmp_path inside the checkout.
     # Provisioning must keep its real no-repository contract in these tests.
+    # Resolve the system temp root: on macOS it sits under the /var symlink,
+    # and these tests exercise provisioning, not the link policy.
     with tempfile.TemporaryDirectory(prefix="radt-access-cli-test-") as root:
-        directory = Path(root) / "private"
+        directory = Path(root).resolve(strict=True) / "private"
         directory.mkdir(mode=0o700)
         yield directory
 

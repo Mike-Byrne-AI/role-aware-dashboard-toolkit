@@ -78,8 +78,8 @@ verify live rules, including disabled force pushes and deletions. These statuses
 require all contributor test, quality, browser, and dependency audit jobs to succeed, including the
 75% coverage gate. A skipped or cancelled dependency is a failure.
 
-Contributor tests cover Linux Python 3.10–3.14 and the full Windows suite on
-Python 3.11. The required browser job exercises a local Chromium dashboard
+Contributor tests cover Linux Python 3.10–3.14, the full Windows suite on
+Python 3.11, and the full macOS suite on Python 3.12. The required browser job exercises a local Chromium dashboard
 with synthetic state. Dependency CI audits independently resolved `api` and
 `full` installations on every pull request and weekly; a failed scanner or
 incomplete audit must not count as a clean result. Review the retained inventory

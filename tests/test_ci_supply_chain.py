@@ -156,13 +156,19 @@ def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch
         exec(checks, {})
 
 
-def test_contributor_ci_runs_full_suite_on_windows_and_keeps_browser_evidence():
+def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_evidence():
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     tests = workflow.split("  tests:\n", 1)[1].split("  quality:\n", 1)[0]
     assert "    runs-on: ${{ matrix.os }}\n" in tests
     assert "        os: [ubuntu-latest]\n" in tests
     assert re.search(
         r"include:\n\s+- os: windows-latest\n\s+python-version: [\"']3\.11[\"']",
+        tests,
+    )
+    # macOS keeps the system temp directory under the /var symlink; the full
+    # suite must pass there from a clean checkout.
+    assert re.search(
+        r"\n\s+- os: macos-latest\n\s+python-version: [\"']3\.12[\"']",
         tests,
     )
     assert "      fail-fast: false\n" in tests
