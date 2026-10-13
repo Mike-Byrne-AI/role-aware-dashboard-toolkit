@@ -359,7 +359,8 @@ def test_api_profile_activation_returns_applied_sanitized_state(api_registry, mo
     app = create_app(api_registry, profile_store=store, allow_anonymous=True, anonymous_role="Admin")
     client = TestClient(app)
 
-    activated = client.post("/profiles/unsafe/activate")
+    # Anonymous state changes must be non-simple requests (cross-site guard).
+    activated = client.post("/profiles/unsafe/activate", headers={"Content-Type": "application/json"})
     assert activated.status_code == 200
     payload = activated.json()
     assert payload["profile_id"] == "unsafe"

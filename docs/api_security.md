@@ -54,6 +54,21 @@ The key is scoped to a Role-Aware Dashboard Toolkit role. Set `ROLE_AWARE_DASHBO
 
 Anonymous local/demo access is opt-in only. Use `create_app(..., allow_anonymous=True)` or set `ROLE_AWARE_DASHBOARD_TOOLKIT_API_ALLOW_ANONYMOUS=true`. The default anonymous scope can read controls only; pass `anonymous_role=` only for trusted local demos.
 
+## Cross-site requests
+
+Every state-changing route (`POST`, `PATCH`, `DELETE`) refuses a request that
+carries neither an `X-API-Key` header nor `Content-Type: application/json` (or
+another `application/*+json` type) with HTTP 415, before any state or audit
+change. Another web site can make a visitor's browser send a form or `text/plain`
+POST without asking first, but a browser sends a custom header or a JSON content
+type across sites only after a CORS preflight, and this API answers no
+preflight. This matters when anonymous access is enabled: without it, a page the
+operator visits during a local demo could activate a profile on the demo API.
+Clients that send `X-API-Key` need no change. Anonymous clients send
+`Content-Type: application/json`, also on bodyless requests such as profile
+activation and deletion. A host that adds a CORS policy allowing other origins
+removes this protection for those origins.
+
 Public bind examples such as `--host 0.0.0.0` are deployment-only. Keep them
 behind trusted network controls (private network segments, ingress auth, and
 TLS termination) rather than exposing the API directly to the open internet.

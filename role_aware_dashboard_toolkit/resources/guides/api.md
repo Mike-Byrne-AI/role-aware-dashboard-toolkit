@@ -28,6 +28,11 @@ Supply credentials through the host's secret handling; never hardcode or print
 them. `/health` is static liveness only. Anonymous access is an explicit local
 demo opt-in, not the default.
 
+State-changing requests (`POST`, `PATCH`, `DELETE`) without an `X-API-Key`
+header must send `Content-Type: application/json`, including bodyless profile
+activation and deletion; otherwise they receive HTTP 415. This stops another web
+site from making a browser change an anonymous demo API.
+
 Request bodies are exact. `PATCH /controls` takes `{"values": {"key": value}}`;
 a body without `values`, or with any other field, is refused with HTTP 422.
 `POST /profiles` accepts `profile_id`, `role` and `extra` only. It saves the API

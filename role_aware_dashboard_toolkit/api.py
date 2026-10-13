@@ -67,7 +67,7 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
     return missing in _OPTIONAL_API_DEPENDENCIES
 
 try:
-    from fastapi import FastAPI, HTTPException, Depends, Header
+    from fastapi import FastAPI, HTTPException, Depends, Header, Request
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -75,6 +75,7 @@ except ImportError as exc:
     FastAPI = None  # type: ignore
     Depends = None  # type: ignore
     Header = None  # type: ignore
+    Request = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -166,6 +167,37 @@ def _require_permission(ctx: SecurityContext, permission: str) -> None:
         raise HTTPException(status_code=403, detail="Forbidden: no permission is declared")
     if not has_perm(ctx, permission):
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CROSS_SITE_REFUSAL = (
+    "State-changing requests without an X-API-Key header must send "
+    "Content-Type: application/json. This refuses requests that another web "
+    "site could make a browser send."
+)
+
+
+def _is_json_media_type(content_type: str) -> bool:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type == "application/json" or (
+        media_type.startswith("application/") and media_type.endswith("+json")
+    )
+
+
+def _require_preflighted_request(request: Any) -> None:
+    """Refuse a state change that a browser could send cross-site unprompted.
+
+    A cross-site form or no-cors fetch can send POST with no custom header and
+    only a form, multipart or text/plain body, without a CORS preflight. Any
+    X-API-Key header or a JSON Content-Type makes the request non-simple, so a
+    browser must preflight it, and this API answers no preflight. Key-bearing
+    clients are unaffected; anonymous demo clients send a JSON Content-Type.
+    """
+    if request.method in _READ_METHODS or "x-api-key" in request.headers:
+        return
+    if _is_json_media_type(request.headers.get("content-type", "")):
+        return
+    raise HTTPException(status_code=415, detail=_CROSS_SITE_REFUSAL)
 
 
 def _canonical_api_profile_id(profile_id: str) -> str:
@@ -277,8 +309,12 @@ class _AppState:
 
 def _make_require_api_context(app_state: _AppState):
     def require_api_context(permission: str):
-        def dependency(x_api_key: str = Header(default="", alias="X-API-Key")) -> SecurityContext:
+        def dependency(
+            request: Request,
+            x_api_key: str = Header(default="", alias="X-API-Key"),
+        ) -> SecurityContext:
             ctx = _resolve_api_context(app_state, x_api_key)
+            _require_preflighted_request(request)
             _require_permission(ctx, permission)
             return ctx
 
