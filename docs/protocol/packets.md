@@ -69,7 +69,11 @@ negative infinity are rejected.
 A packet nests at most 100 levels of mappings and lists, counting the envelope
 (`MAX_PACKET_NESTING_DEPTH`). Construction, import and export raise `ValueError`
 for a deeper packet, or for a payload or metadata that contains a cycle, before
-redaction or JSON encoding starts.
+redaction or JSON encoding starts. A value referenced from several places is
+walked once per reference, so they also refuse a packet whose shared values
+would add more than 1,000,000 container visits beyond the containers it holds
+(`MAX_SHARED_VALUE_EXPANSION`); a packet without shared values is never limited
+by this.
 
 File URIs, with or without `//` (`file:///x`, `file:/x`, `file:C:/x`), and
 editor links that carry a local path (`vscode://file/...` and the same form in
