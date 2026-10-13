@@ -112,7 +112,9 @@ def test_body_limit_must_be_a_positive_integer(monkeypatch, limit):
         create_app(_registry(), max_body_bytes=limit)
 
 
-@pytest.mark.parametrize("depth,status", [(32, 200), (33, 422), (500, 422), (5000, 422)])
+@pytest.mark.parametrize("depth,status", [
+    (32, 200), (33, 422), (500, 422), (5000, 422), (100_000, 422),
+])
 def test_profile_extra_nesting_is_limited(monkeypatch, depth, status):
     store = InMemoryProfileStore()
     body = '{"profile_id":"deep","extra":{"x":' + _nested(depth - 1) + "}}"
@@ -122,7 +124,13 @@ def test_profile_extra_nesting_is_limited(monkeypatch, depth, status):
     assert response.status_code == status
     assert store.list_ids() == (["deep"] if status == 200 else [])
     if status == 422:
-        assert "extra" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert "nested" in detail and "Nothing was changed" in detail
+        if depth <= 500:
+            # Every supported Python parses this deep; the field check names it.
+            # Deeper JSON can exceed the parser's own recursion limit (about
+            # 1,000 levels before Python 3.12), which is refused before parsing ends.
+            assert "extra" in detail
 
 
 def test_control_value_nesting_is_limited_before_validation(monkeypatch):

@@ -69,8 +69,10 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
 
 try:
     from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
+    from fastapi.exception_handlers import http_exception_handler
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -82,6 +84,8 @@ except ImportError as exc:
     Response = None  # type: ignore
     JSONResponse = None  # type: ignore
     RequestValidationError = None  # type: ignore
+    StarletteHTTPException = None  # type: ignore
+    http_exception_handler = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -235,6 +239,25 @@ def _validation_error_response(_request: Any, exc: Any) -> Any:
          "msg": str(error.get("msg", ""))}
         for error in exc.errors()
     ]})
+
+
+_BODY_TOO_DEEP = (
+    f"Request body JSON is nested too deeply to parse (a field allows {_MAX_JSON_DEPTH} levels). "
+    "Nothing was changed."
+)
+
+
+async def _http_error_response(request: Any, exc: Any) -> Any:
+    """Report JSON too deep for the parser as the depth refusal it is.
+
+    FastAPI turns any body-parsing failure into a generic 400. Python's JSON
+    parser stops at its recursion limit (about 1,000 levels before Python 3.12,
+    deeper on later versions), so a body nested past it never reaches the
+    field depth check; answer it with the same 422 on every version.
+    """
+    if exc.status_code == 400 and isinstance(exc.__cause__, RecursionError):
+        return JSONResponse(status_code=422, content={"detail": _BODY_TOO_DEEP})
+    return await http_exception_handler(request, exc)
 
 
 def _require_json_depth(value: Any, field_name: str) -> None:
@@ -820,6 +843,7 @@ def create_app(
     app = FastAPI(title=title, version=version)
     app.add_middleware(_RequestBodyLimit, max_bytes=body_limit)
     app.add_exception_handler(RequestValidationError, _validation_error_response)
+    app.add_exception_handler(StarletteHTTPException, _http_error_response)
     require_api_context = _make_require_api_context(app_state)
 
     _register_health_route(app)
