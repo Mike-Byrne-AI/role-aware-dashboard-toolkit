@@ -214,3 +214,46 @@ def test_api_audits_a_control_registered_with_sensitive_false(monkeypatch):
     assert (banner["old"], banner["new"]) == ("on", "off")
     assert (session["old"], session["new"]) == (REDACTED_SECRET, REDACTED_SECRET)
     assert [(event["old"], event["new"]) for event in listed] == [("on", "off"), (REDACTED_SECRET, REDACTED_SECRET)]
+
+
+def _imported_event():
+    return {"schema_version": 1, "ts": "2026-10-13T00:00:00+00:00", "type": "control_change",
+            "key": "api_token", "old": "a", "new": "S3CRET", "role": "x", "source": "import",
+            "sensitive": False}
+
+
+def test_a_sensitive_false_field_in_an_event_is_not_a_declaration(tmp_path):
+    # Only the host's own log_control_change(sensitive=False) declares a
+    # control; a mapping that carries "sensitive": false is just data.
+    import json
+
+    from role_aware_dashboard_toolkit import AuditLog
+    from role_aware_dashboard_toolkit.audit_store import FileAuditStore, InMemoryAuditStore, redact_audit_event
+
+    assert redact_audit_event(_imported_event())["new"] == REDACTED_SECRET
+    assert "S3CRET" not in AuditLog().export_jsonl([_imported_event()])
+    memory = InMemoryAuditStore()
+    memory.append(_imported_event())
+    assert memory.read_all()[0]["new"] == REDACTED_SECRET
+    path = tmp_path / "imported.jsonl"
+    FileAuditStore(str(path)).append(_imported_event())
+    assert json.loads(path.read_text())["new"] == REDACTED_SECRET
+
+
+def test_a_declared_control_keeps_its_values_in_the_view_the_file_and_the_export(tmp_path):
+    import json
+
+    from role_aware_dashboard_toolkit import AuditLog
+
+    audit = AuditLog()
+    path = tmp_path / "audit.jsonl"
+    audit.start_writer(str(path))
+    audit.log_control_change("session_cookie_label", "Accept", "Accept all", sensitive=False)
+    audit.stop_writer()
+
+    (event,) = _control_changes(audit)
+    on_disk = [json.loads(line) for line in path.read_text().splitlines()]
+    exported = [json.loads(line) for line in audit.export_jsonl().splitlines()]
+    for record in (event, *[row for row in on_disk + exported if row["type"] == "control_change"]):
+        assert (record["old"], record["new"]) == ("Accept", "Accept all")
+        assert "sensitive" not in record

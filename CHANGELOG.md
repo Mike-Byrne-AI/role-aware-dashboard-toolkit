@@ -84,12 +84,14 @@ changes.
   `access_keyboard` is not sensitive while `accesskeyid` and
   `private_keyfile` are, and a registered name such as `Straße` matches both
   its spelling and its casefold (`STRASSE`).
-- `AuditLog.log_control_change(sensitive=False)` now records the values even
-  when the key looks secret (0.1.0 redacted them by name), and the event
-  carries `"sensitive": false`; the default is now `None`, which keeps the
-  name check. Secret-named fields nested in a value stay redacted. The
-  dashboard and API pass `sensitive=False` only for a control registered with
-  it. Drop an explicit `sensitive=False` where the key's name should decide.
+- `AuditLog.log_control_change(sensitive=False)` now declares the control
+  not secret for that log: its values are recorded even when the key looks
+  secret (0.1.0 redacted them by name), in the view, the writer's file and
+  `export_jsonl`. The default is now `None`, which keeps the name check.
+  Secret-named fields nested in a value stay redacted, and an event's own
+  fields never count as a declaration. The dashboard and API pass
+  `sensitive=False` only for a control registered with it. Drop an explicit
+  `sensitive=False` where the key's name should decide.
 - Demo mode: a new session starts in its least-privileged role (Viewer for the
   built-ins), and only a `can_manage_freeze` role can change Controls
   Writable. Pick Admin in the sidebar to edit.

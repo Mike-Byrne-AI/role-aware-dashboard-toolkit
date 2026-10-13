@@ -310,6 +310,10 @@ class AuditLog:
         self._writer_finalizer: weakref.finalize | None = None
         # A stop that timed out: its record, for the file once the thread ends.
         self._writer_stop_record: dict[str, Any] | None = None
+        # Control keys the host declared not secret (log_control_change with
+        # sensitive=False). Redaction takes them as an argument, never from an
+        # event's own fields.
+        self._declared_public_keys: set[str] = set()
         self.dropped: int = 0
         self._writer_error_count: int = 0
         self._last_writer_error: dict[str, str] = {}
@@ -480,7 +484,7 @@ class AuditLog:
         source = events if events is not None else self.all_events()
         sanitized = [
             sanitize_non_finite_numbers(
-                redact_audit_event(event)
+                redact_audit_event(event, declared_public_keys=self._declared_public_keys)
                 if isinstance(event, Mapping)
                 else redact_payload_local_paths({"event": event}, repo_root="")["event"]
             )
@@ -505,10 +509,10 @@ class AuditLog:
         ``sensitive=True`` replaces both values with the redaction marker. By
         default (``None``) they are redacted when the key looks secret.
         ``sensitive=False`` declares the control not secret, as
-        ``ControlRegistry.register(..., sensitive=False)`` does: its values are
-        kept even when the key looks secret, and the event records
-        ``"sensitive": false``. Secret-named fields nested in a value are
-        redacted either way.
+        ``ControlRegistry.register(..., sensitive=False)`` does: this log then
+        keeps its values even when the key looks secret, in the view, the
+        writer's file and ``export_jsonl``. Secret-named fields nested in a
+        value are redacted either way.
         """
         if sensitive is False:
             self._log_declared_public_change(
@@ -535,9 +539,12 @@ class AuditLog:
             "control_change", key=key, old_value=old_value, new_value=new_value,
             role=role, source=source, user_id=user_id, session_id=session_id,
         )
-        # Every redaction pass (this one, the file writer's) reads the marker.
-        evt["sensitive"] = False
-        self._store_event(redact_audit_event(evt), writer_locked=False)
+        if isinstance(key, str):
+            self._declared_public_keys.add(key)
+        self._store_event(
+            redact_audit_event(evt, declared_public_keys=self._declared_public_keys),
+            writer_locked=False,
+        )
 
     def log_profile_save(
         self, profile_id: str, *, role: str = "", source: str = "ui"
@@ -592,6 +599,7 @@ class AuditLog:
 
             try:
                 writer_store = FileAuditStore(path)
+                writer_store._declared_public_keys = self._declared_public_keys
                 writer_queue = queue.Queue(maxsize=queue_size)
                 writer_thread = threading.Thread(
                     target=_run_writer_loop,
