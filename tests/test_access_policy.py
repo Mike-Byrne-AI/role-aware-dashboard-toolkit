@@ -415,3 +415,43 @@ def test_custom_store_cannot_authorize_reserved_denial_role(identity):
     assert not policy.authorize(
         policy.identify(), "Unauthenticated", "can_view_metrics", custom
     )
+
+
+def _report_owner(monkeypatch, path, uid):
+    """Make os.stat and os.lstat report ``path`` as owned by ``uid``."""
+    import stat as stat_module
+
+    target = os.fspath(path)
+    real_stat, real_lstat = os.stat, os.lstat
+
+    def owned(real):
+        def wrapper(candidate, *args, **kwargs):
+            info = real(candidate, *args, **kwargs)
+            if isinstance(candidate, (str, os.PathLike)) and os.fspath(candidate) == target:
+                values = list(info)
+                values[stat_module.ST_UID] = uid
+                return os.stat_result(values)
+            return info
+        return wrapper
+
+    monkeypatch.setattr(os, "stat", owned(real_stat))
+    monkeypatch.setattr(os, "lstat", owned(real_lstat))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership contract")
+@pytest.mark.parametrize("owner", ["other", "root", "caller"])
+def test_sqlite_store_refuses_a_database_owned_by_another_account(tmp_path, monkeypatch, owner):
+    # Another account that can write the directory could replace the database
+    # with its own 0600 file; the store reopens it by path on every call.
+    path = tmp_path / "access.sqlite3"
+    store = SQLiteAccessStore.create(path)
+    store.replace_grants(PID, ("Viewer",))
+    uid = {"other": os.geteuid() + 1, "root": 0, "caller": os.geteuid()}[owner]
+    _report_owner(monkeypatch, path.absolute(), uid)
+    if owner == "other":
+        with pytest.raises(AccessStoreError):
+            store.read_grants(PID)
+        with pytest.raises(AccessStoreError):
+            SQLiteAccessStore(path)
+    else:
+        assert store.read_grants(PID) == ("Viewer",)

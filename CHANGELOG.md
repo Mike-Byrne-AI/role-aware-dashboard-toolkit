@@ -65,9 +65,10 @@ changes.
 - Record stores check a record's id against its file: a mismatched file is not
   loaded or listed, and `save` or `delete` over it raises
   `StorePathSecurityError` (the API returns 409).
-- On POSIX the protected access directory and `identity.key` must belong to
-  the caller or root, so a root process can no longer use another account's
-  directory. Every directory above the protected directory must also belong to
+- On POSIX the protected access directory, `identity.key` and, on every
+  `SQLiteAccessStore` connection, `access.sqlite3` must belong to the caller
+  or root, so a root process can no longer use another account's directory or
+  database. Every directory above the protected directory must also belong to
   the caller or root, and may be group- or world-writable only when it is
   root-owned and sticky (like `/tmp`). Root-owned system links such as macOS
   `/var` and `/tmp` are accepted. Move a protected directory that sits below

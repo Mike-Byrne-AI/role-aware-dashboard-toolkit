@@ -105,8 +105,9 @@ are found by their `system.posix_acl_access` and `system.posix_acl_default`
 extended attributes. On macOS a directory above the protected directory may
 carry deny entries, as home directories do, but not entries that allow access.
 ACLs on other platforms, such as NFSv4 ACLs, are not detected.
-Direct SQLite store use checks the database file; the host must also protect its
-directory and ancestors. Windows directory permissions remain
+Direct SQLite store use checks the database file on every connection: a regular
+file, mode 0600 or stricter, owned by the dashboard's account or root, without
+an extended ACL. The host must also protect its directory and ancestors. Windows directory permissions remain
 the operator's responsibility. Files, journals and backups need the same access
 restriction; SQLite is for a single application on a local disk, not network
 storage or a distributed deployment.

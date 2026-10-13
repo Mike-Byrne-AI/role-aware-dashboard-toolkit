@@ -4,8 +4,11 @@ Store mutation methods are trusted operator APIs, never browser endpoints.
 Only opaque principal IDs, role names, and freeze metadata are persisted.
 SQLite is intended for a single application on one host, on a local disk.
 Protect its directory and backups with deployment access controls. On POSIX,
-new files use mode 0600; on Windows the operator must restrict the directory
-ACL. Python's chmod does not establish equivalent Windows privacy.
+new files use mode 0600, and every connection refuses a database that is not a
+regular 0600-or-stricter file owned by the caller or root, or that carries an
+extended ACL (macOS ACLs, Linux POSIX ACLs). On Windows the operator must
+restrict the directory ACL. Python's chmod does not establish equivalent
+Windows privacy.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import errno
 import os
 import re
 import sqlite3
+import stat
 import sys
 from collections.abc import Iterable
 from contextlib import closing, contextmanager
@@ -298,9 +302,14 @@ class SQLiteAccessStore:
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         connection = None
         try:
-            if self._path.is_symlink() or not self._path.is_file():
+            info = os.lstat(self._path)
+            if not stat.S_ISREG(info.st_mode):  # also refuses a link
                 raise AccessStoreError()
-            if os.name == "posix" and self._path.stat().st_mode & 0o077:
+            # Another account that owns the file, or can read it through an
+            # ACL, could read or replace the grants.
+            if os.name == "posix" and (
+                info.st_mode & 0o077 or info.st_uid not in {os.geteuid(), 0}
+            ):
                 raise AccessStoreError()
             if _has_extended_acl(self._path):
                 raise AccessStoreError()
