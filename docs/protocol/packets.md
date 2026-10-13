@@ -93,7 +93,11 @@ if not result["ok"]:
 ```
 
 Consumers should validate before trusting packet structure and separately apply
-their own authorization and business rules to the payload.
+their own authorization and business rules to the payload. Validation errors
+name the field and its allowed values or expected type; they never repeat a
+rejected value, so error text can be logged without copying payload content.
+An integer `schema_version` is the one value named, as in
+`Unexpected schema_version for run: expected 1, found 2.`
 
 Built-in packet types also check the types, schema versions and declared states
 of toolkit fields present in their payload, including embedded run checkpoints
