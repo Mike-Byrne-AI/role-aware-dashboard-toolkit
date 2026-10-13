@@ -84,6 +84,7 @@ def _consumer(audit_dir):
         plugins.register(radt.DashboardPlugin(name="section-consumer", setup=setup,
                          render_sidebar=sidebar, render_panel=panel))
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             title="Section consumer", registry=registry, profile_store=profiles,
             run_store=runs, team_store=InMemoryTeamStore(),
             decision_store=InMemoryDecisionStore(), operator_memory_store=InMemoryOperatorMemoryStore(),

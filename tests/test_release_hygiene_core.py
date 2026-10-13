@@ -636,9 +636,9 @@ assert "streamlit" not in sys.modules
 assert role_aware_dashboard_toolkit.DashboardConfig is dashboard_module.DashboardConfig
 assert role_aware_dashboard_toolkit.render is dashboard_module.render
 
-default_config = role_aware_dashboard_toolkit.DashboardConfig()
+default_config = role_aware_dashboard_toolkit.DashboardConfig(auth_mode="demo")
 assert default_config.title == "Dashboard"
-assert default_config.icon == "Control Panel"
+assert default_config.icon == ""
 assert isinstance(default_config.registry, ControlRegistry)
 assert isinstance(default_config.audit, AuditLog)
 assert isinstance(default_config.plugins, PluginRegistry)
@@ -745,7 +745,7 @@ def fail_streamlit_runtime(name, globals=None, locals=None, fromlist=(), level=0
 builtins.__import__ = fail_streamlit_runtime
 dashboard.st = None
 try:
-    dashboard.render(dashboard.DashboardConfig())
+    dashboard.render(dashboard.DashboardConfig(auth_mode="demo"))
 except ModuleNotFoundError as exc:
     assert exc.name == "streamlit.runtime"
     assert str(exc) == "broken nested Streamlit import"

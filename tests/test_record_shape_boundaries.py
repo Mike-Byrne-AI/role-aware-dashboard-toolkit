@@ -241,6 +241,7 @@ def _invalid_profile_consumer():
         profiles = radt.InMemoryProfileStore()
         profiles.save({"profile_id": "saved", "values": {"workers": 8}})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, profile_store=profiles,
             sections=radt.DashboardSections(runbook=False, audit_writer=False,
                                            audit_log=False, plugin_details=False))

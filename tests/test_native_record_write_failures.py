@@ -42,6 +42,7 @@ def _app(*, active=True):
     cases = InMemoryCaseStore()
     cases.save(build_case_record("Existing case", case_id="case-one", linked_run_ids=["run-one"]))
     config = DashboardConfig(
+        auth_mode="demo",
         registry=registry, profile_store=InMemoryProfileStore(), run_store=run_store,
         team_store=InMemoryTeamStore(), operator_memory_store=InMemoryOperatorMemoryStore(),
         decision_store=InMemoryDecisionStore(), case_store=cases,

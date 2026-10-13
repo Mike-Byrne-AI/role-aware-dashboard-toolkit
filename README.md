@@ -183,6 +183,7 @@ config = radt.DashboardConfig(
     title="Service controls",
     registry=registry,
     audit=st.session_state["service_controls_audit"],
+    auth_mode="demo",  # local demo: each user picks a role
 )
 
 radt.render(config)

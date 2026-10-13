@@ -280,7 +280,7 @@ assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README
 assert 'auth_mode="authenticated"' in starter["app.py"]
 assert "access_cli grant" in read_guide("authentication")["content"]
 assert "header_down Set-Cookie" in read_guide("deployment")["content"]
-config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
+config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None, auth_mode="demo")
 run = radt.build_run({"temperature": 0.2}, actor="wheel-smoke")
 packet = radt.build_run_packet(run)
 assert config.icon == "Core"

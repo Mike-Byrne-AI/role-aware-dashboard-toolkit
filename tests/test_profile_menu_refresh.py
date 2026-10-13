@@ -55,6 +55,7 @@ def _consumer(audit_dir):
         plugins.register(radt.DashboardPlugin(name="host-widgets", setup=setup,
                          render_sidebar=sidebar, render_panel=panel))
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, profile_store=profiles, plugins=plugins, audit_dir=audit_dir,
             sections=radt.DashboardSections(runbook=False, audit_writer=False,
                                            audit_log=False, plugin_details=False),

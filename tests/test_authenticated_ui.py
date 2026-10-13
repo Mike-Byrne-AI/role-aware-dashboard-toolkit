@@ -342,7 +342,11 @@ def test_malformed_custom_role_permissions_fail_closed_before_protected_plugins(
     host = _host()
     app = _app(host)
     calls_before = list(host.calls)
-    app.session_state["config"].custom_roles["Admin"] = RoleDef("Admin", None)
+    # RoleDef rejects a malformed map at construction; a definition changed
+    # afterwards must still fail closed at runtime.
+    malformed = RoleDef("Admin", {})
+    malformed.perms = None
+    app.session_state["config"].custom_roles["Admin"] = malformed
     _healthy(app.run())
     assert host.calls == calls_before
     assert "resource" not in app.session_state

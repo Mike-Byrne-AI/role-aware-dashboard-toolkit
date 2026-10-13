@@ -39,6 +39,7 @@ def _app(*, authenticated=True):
     profiles.save({"profile_id": "baseline", "values": {"workers": 20}})
     host.config = DashboardConfig(
         registry=registry, profile_store=profiles, audit=host.audit,
+        auth_mode="authenticated" if authenticated else "demo",
         access=host.policy if authenticated else None,
     )
     app = AppTest.from_function(_consumer, args=(host,), default_timeout=15)

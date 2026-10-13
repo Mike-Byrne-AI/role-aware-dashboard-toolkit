@@ -225,6 +225,7 @@ def _appearance_consumer(layout):
     registry.register("Maintenance", kind="toggle", key="maintenance", group="Safety",
                       default=False)
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, profile_store=radt.InMemoryProfileStore(), layout=layout,
         card_background_color="#DDEEFF", group_background_colors={"Safety": "#FFEEDD"},
     ))
@@ -257,6 +258,7 @@ def _plugin_group_consumer():
 
     plugins.register(radt.DashboardPlugin(name="group-provider", setup=setup))
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, plugins=plugins, profile_store=radt.InMemoryProfileStore(),
         group_background_colors={"Plugin group": "#DDEEFF"}))
     st.caption("Plugin setup complete")
@@ -285,6 +287,7 @@ def _unsupported_style_consumer():
     import role_aware_dashboard_toolkit as radt
 
     config = radt.DashboardConfig(
+        auth_mode="demo",
         card_background_color="#112233", profile_store=radt.InMemoryProfileStore())
     original = st.container
 
@@ -374,6 +377,7 @@ def _plugin_control_lifecycle_consumer(styled):
     if "lifecycle_runs" not in st.session_state:
         st.session_state["lifecycle_runs"] = radt.InMemoryRunStore()
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, plugins=plugins, profile_store=radt.InMemoryProfileStore(),
         run_store=st.session_state["lifecycle_runs"],
         group_background_colors={"Plugin group": "#DDEEFF"} if styled else None,

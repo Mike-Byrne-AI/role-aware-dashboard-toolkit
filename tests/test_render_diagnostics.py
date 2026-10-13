@@ -47,6 +47,7 @@ def _callback_consumer(callback_kind):
                           min_value=1, max_value=10, step=1,
                           callback=fail if callback_kind == "control" else None)
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, on_change=fail if callback_kind == "global" else None,
         )
     radt.render(st.session_state["config"])

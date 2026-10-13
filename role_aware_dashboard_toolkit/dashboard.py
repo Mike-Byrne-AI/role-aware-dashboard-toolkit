@@ -36,7 +36,7 @@ class DashboardConfig:
         self,
         title: str = "Dashboard",
         subtitle: str = "",
-        icon: str = "Control Panel",
+        icon: str = "",
         registry: ControlRegistry | None = None,
         audit: AuditLog | None = None,
         custom_roles: dict[str, RoleDef] | None = None,
@@ -82,7 +82,21 @@ class DashboardConfig:
         self.layout = layout
         self.columns_per_row = max(1, columns_per_row)
         self.auth_hook = auth_hook
-        self.auth_mode = auth_mode if auth_mode is not None else ("authenticated" if access is not None else "host" if auth_hook else "demo")
+        if auth_mode is None:
+            if access is not None:
+                auth_mode = "authenticated"
+            elif auth_hook is not None:
+                auth_mode = "host"
+            else:
+                # A missing access policy (for example from an unset environment
+                # variable) must not silently become the self-selected demo.
+                raise attach_diagnostic(ValueError(
+                    "DashboardConfig needs an explicit auth_mode: pass auth_mode='demo' for "
+                    "the local demo where each user picks a role, auth_mode='authenticated' "
+                    "with an access policy, or auth_mode='host' with an auth_hook. An access "
+                    "policy of None no longer falls back to the demo."
+                ), "RADT-AUTH")
+        self.auth_mode = auth_mode
         if self.auth_mode not in {"authenticated", "demo", "host"}:
             raise ValueError("auth_mode must be authenticated, demo, or host")
         if access is not None and self.auth_mode != "authenticated":

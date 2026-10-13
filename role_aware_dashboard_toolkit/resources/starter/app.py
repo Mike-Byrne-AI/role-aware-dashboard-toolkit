@@ -51,7 +51,8 @@ def build_controls() -> radt.ControlRegistry:
 def build_roles() -> dict[str, radt.RoleDef]:
     """The selector is a local role demo. Shared apps must provide trusted auth."""
     admin = radt.get_role("Admin")
-    assert admin is not None
+    if admin is None:
+        raise RuntimeError("The toolkit's built-in Admin role is missing.")
     return {
         "Admin": radt.RoleDef(
             "Admin", {**admin.perms, "can_manage_intake": True},

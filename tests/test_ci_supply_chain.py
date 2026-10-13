@@ -369,7 +369,7 @@ def test_actual_core_smoke_checks_missing_streamlit_diagnostic(monkeypatch, prob
             raise
 
     monkeypatch.setattr(radt, "render", render)
-    namespace = {"radt": radt, "config": radt.DashboardConfig()}
+    namespace = {"radt": radt, "config": radt.DashboardConfig(auth_mode="demo")}
     if problem is None:
         exec(checks, namespace)
     else:

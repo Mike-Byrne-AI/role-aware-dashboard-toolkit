@@ -160,7 +160,7 @@ def test_rendering_preview_does_not_write_stores_audit_controls_or_callbacks():
     calls = []
     registry = _registry()
     registry.get("workers").callback = lambda *_args: calls.append("callback")
-    config = DashboardConfig(registry=registry, profile_store=store,
+    config = DashboardConfig(auth_mode="demo", registry=registry, profile_store=store,
                              on_change=lambda *_args: calls.append("global"))
     st = RecordingStreamlit()
     st.session_state.update({"_radt_profile_choice": "saved", "workers": 3})
@@ -183,7 +183,7 @@ def test_selecting_malformed_profile_warns_without_crashing_or_exposing_contents
     profile = {"profile_id": "private-profile-canary", "values": values}
     store.save(profile)
     registry = _registry()
-    config = DashboardConfig(registry=registry, profile_store=store)
+    config = DashboardConfig(auth_mode="demo", registry=registry, profile_store=store)
     st = RecordingStreamlit()
     st.session_state.update({"_radt_profile_choice": profile["profile_id"], "workers": 3})
     before = registry.snapshot(st.session_state)
@@ -212,7 +212,7 @@ def test_preview_does_not_mask_unrelated_registry_errors(monkeypatch):
     st = RecordingStreamlit()
     st.session_state["_radt_profile_choice"] = "saved"
     with pytest.raises(ValueError, match="registry failure"):
-        _render_profile_controls(st, DashboardConfig(registry=registry), _context(), store)
+        _render_profile_controls(st, DashboardConfig(auth_mode="demo", registry=registry), _context(), store)
 
 
 def _preview_consumer():
@@ -226,6 +226,7 @@ def _preview_consumer():
         store = radt.InMemoryProfileStore()
         store.save({"profile_id": "old", "values": {"workers": 25, "removed": "secret-canary"}})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, profile_store=store,
             sections=radt.DashboardSections(runbook=False, audit_writer=False,
                                            audit_log=False, plugin_details=False),

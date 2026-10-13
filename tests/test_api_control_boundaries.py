@@ -55,16 +55,17 @@ def test_secret_string_coercion_rejects_entire_batch_before_state_or_audit(kind,
     assert registry.get("settings").sensitive is False
 
 
-def test_color_sanitation_can_discard_structured_input_without_exposing_it():
+def test_color_refuses_structured_input_without_exposing_it():
     from fastapi.testclient import TestClient
 
     registry = ControlRegistry()
     registry.register("Color", kind="color", key="color", default="#112233")
     with TestClient(create_app(registry, api_role="Admin")) as client:
         response = client.patch("/controls", headers=HEADERS, json={"values": {"color": NESTED}})
-        assert response.status_code == 200
-        assert response.json()[0]["value"] == "#112233"
-        assert "CANARY" not in client.get("/audit", headers=HEADERS).text
+        assert response.status_code == 422
+        assert "CANARY" not in response.text
+        assert client.get("/controls/color", headers=HEADERS).json()["value"] == "#112233"
+        assert client.get("/audit", headers=HEADERS).json() == []
 
 
 @pytest.mark.parametrize("kind,safe", [("text", "public replacement"), ("color", "#abcdef")])
@@ -120,7 +121,10 @@ def test_structured_select_defaults_and_options_keep_safe_siblings(valid_default
     registry.register("Settings", kind="select", key="settings", default=default,
                       options=[deepcopy(NESTED)])
     with TestClient(create_app(registry, profile_store=InMemoryProfileStore(), api_role="Admin")) as client:
-        updated = client.patch("/controls", headers=HEADERS, json={"values": {"settings": None}})
+        refused = client.patch("/controls", headers=HEADERS, json={"values": {"settings": None}})
+        assert refused.status_code == 422
+        assert "CANARY" not in refused.text
+        updated = client.patch("/controls", headers=HEADERS, json={"values": {"settings": deepcopy(NESTED)}})
         after = client.get("/controls/settings", headers=HEADERS)
         history = client.get("/audit", headers=HEADERS)
         saved = client.post("/profiles", headers=HEADERS, json={"profile_id": "structured"})
@@ -141,7 +145,10 @@ def test_explicitly_sensitive_structured_text_updates_remain_write_only():
     registry = ControlRegistry()
     registry.register("Settings", kind="text", key="settings", default=deepcopy(NESTED), sensitive=True)
     with TestClient(create_app(registry, profile_store=InMemoryProfileStore(), api_role="Admin")) as client:
-        response = client.patch("/controls", headers=HEADERS, json={"values": {"settings": None}})
+        refused = client.patch("/controls", headers=HEADERS, json={"values": {"settings": None}})
+        assert refused.status_code == 422
+        assert "CANARY" not in refused.text
+        response = client.patch("/controls", headers=HEADERS, json={"values": {"settings": "rotated"}})
         assert response.status_code == 200
         assert response.json()[0]["value"] == REDACTED_SECRET
         assert response.json()[0]["sensitive"] is True
@@ -151,36 +158,41 @@ def test_explicitly_sensitive_structured_text_updates_remain_write_only():
         assert saved.json()["values"] == {}
 
 
-def test_blind_writes_hide_server_fallbacks_and_preserve_authorized_updates():
+def test_blind_writes_hide_values_and_refusals_hide_server_defaults():
     from fastapi.testclient import TestClient
 
     registry = ControlRegistry()
     definitions = [
-        ("text", "PRIVATE-DEFAULT-CANARY", {}, None),
-        ("number", 17, {"min_value": 1, "max_value": 40}, "invalid"),
-        ("slider", 0.75, {}, []),
-        ("select", "PRIVATE-OPTION-CANARY", {"options": ["PRIVATE-OPTION-CANARY"]}, None),
-        ("color", "#ab19ef", {}, "invalid"),
-        ("toggle", True, {}, "invalid"),
+        ("text", "PRIVATE-DEFAULT-CANARY", {}, None, "public replacement"),
+        ("number", 17, {"min_value": 1, "max_value": 40}, "invalid", 23),
+        ("slider", 0.75, {}, [], 0.25),
+        ("select", "PRIVATE-OPTION-CANARY", {"options": ["PRIVATE-OPTION-CANARY", "public"]},
+         None, "public"),
+        ("color", "#ab19ef", {}, "invalid", "#123456"),
+        ("toggle", True, {}, "invalid", False),
     ]
-    for kind, default, options, _requested in definitions:
+    for kind, default, options, _refused, _accepted in definitions:
         registry.register(kind, kind=kind, key=kind, default=default, **options)
     role = RoleDef("BlindWriter", {"can_edit_controls": True, "can_view_metrics": False})
     with TestClient(create_app(registry, profile_store=InMemoryProfileStore(),
                                custom_roles={role.name: role}, api_role=role.name)) as client:
         assert client.get("/controls", headers=HEADERS).status_code == 403
-        response = client.patch("/controls", headers=HEADERS,
-                                json={"values": {kind: requested for kind, _, _, requested in definitions}})
+        for kind, _default, _options, refused, _accepted in definitions:
+            response = client.patch("/controls", headers=HEADERS, json={"values": {kind: refused}})
+            assert response.status_code == 422
+            assert f"Control '{kind}'" in response.json()["detail"]
+            assert "CANARY" not in response.text
+        response = client.patch("/controls", headers=HEADERS, json={
+            "values": {kind: accepted for kind, _, _, _, accepted in definitions},
+        })
         assert response.status_code == 200
         assert all(row["value"] == REDACTED_SECRET for row in response.json())
         assert all(row["sensitive"] is False for row in response.json())
         assert "CANARY" not in response.text
-        # Gaining read permission exposes the successfully applied real values.
+        # Gaining read permission exposes exactly the applied values.
         role.perms["can_view_metrics"] = True
         values = {row["key"]: row["value"] for row in client.get("/controls", headers=HEADERS).json()}
-        assert values == {kind: default for kind, default, _, _ in definitions}
-        response = client.patch("/controls", headers=HEADERS, json={"values": {"text": "public replacement"}})
-        assert response.json()[0]["value"] == "public replacement"
+        assert values == {kind: accepted for kind, _, _, _, accepted in definitions}
 
 
 @pytest.mark.parametrize("key", [None, "plant/rate", "/plant/rate", "plant//rate", "plant/rate/"])
