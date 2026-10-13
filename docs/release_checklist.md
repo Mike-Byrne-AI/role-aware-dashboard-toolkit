@@ -12,7 +12,8 @@ publication is a separate future decision.
 - `[tool.role_aware_dashboard_toolkit.release]` selects `github-source`, names
   the repository, and sets `package-index-publication = false`
 - `SECURITY.md` documents the configured GitHub private vulnerability reporting
-  route and the need to check live availability and notification settings
+  route; confirm live that reporting is still enabled and that the maintainer's
+  security notification settings are current
 - `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, and `SECURITY.md` are
   included and current
 - no placeholder, localhost, private, or example public coordinates remain
