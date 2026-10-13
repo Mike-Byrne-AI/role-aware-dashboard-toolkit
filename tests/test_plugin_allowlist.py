@@ -41,7 +41,8 @@ def test_same_named_entry_point_from_another_distribution_is_not_loaded(monkeypa
     ])
     registry = PluginRegistry()
 
-    loaded = registry.discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"])
+    with pytest.warns(RuntimeWarning, match=f"skipped {PANELS}:panel_ep"):
+        loaded = registry.discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"])
 
     assert loaded == ["acme-panel"]
     assert loads == ["acme-panel"], "the impostor's code must never be imported"
@@ -115,3 +116,21 @@ def test_discovery_without_trust_names_the_allowlist_form(monkeypatch):
 
     with pytest.raises(PermissionError, match="distribution:group:name"):
         PluginRegistry().discover()
+
+
+def test_an_allowlisted_name_from_the_wrong_distribution_is_reported(monkeypatch):
+    loads = []
+    _install(monkeypatch, [
+        _EntryPoint("panel_ep", "evil-panels", "impostor", loads),
+        _EntryPoint("other_ep", "evil-panels", "unrelated", loads),
+    ])
+    registry = PluginRegistry()
+
+    with pytest.warns(RuntimeWarning, match=f"skipped {PANELS}:panel_ep"):
+        loaded = registry.discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"])
+
+    assert loaded == [] and loads == []
+    (error,) = registry.discovery_errors()
+    assert error.source == f"{PANELS}:panel_ep"
+    assert error.stage == "discover"
+    assert error.exception_type == "PermissionError"

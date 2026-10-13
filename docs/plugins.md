@@ -48,9 +48,12 @@ Each allowlist entry is `distribution:group:name`: the installed distribution
 and the entry-point name. An entry point is imported only when its own
 distribution, group and name all match an entry; distribution names compare
 case-insensitively, with `-`, `_` and `.` treated alike. A same-named entry
-point published by another installed distribution is never imported. An entry
-point whose distribution metadata is missing or unreadable is not trusted by an
-allowlist.
+point published by another installed distribution is never imported; it is
+reported as a discovery error (`PermissionError`) with a `RuntimeWarning`, so a
+misnamed distribution or an impostor is visible. An entry point whose
+distribution metadata is missing or unreadable is not trusted by an allowlist.
+Trust is by distribution name within the environment: anyone who can install a
+distribution under the allowlisted name can also replace its code.
 
 Since 0.2.0 a `group:name` entry (the 0.1.0 form) is refused: `discover()`
 raises `ValueError` naming the entry before importing anything, as it does for

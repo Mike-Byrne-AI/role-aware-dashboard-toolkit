@@ -204,7 +204,8 @@ class PluginRegistry:
         Each ``trusted_entry_points`` entry names ``distribution:group:name``.
         An entry point loads only when its own installed distribution, group
         and name all match an entry, so a same-named entry point from another
-        distribution is never imported. A ``group:name`` entry, or any other
+        distribution is never imported; it is recorded as a discovery error
+        with a RuntimeWarning instead. A ``group:name`` entry, or any other
         malformed entry, raises ValueError before anything is loaded.
         """
         allowlist = _parse_trusted_entry_points(trusted_entry_points)
@@ -213,6 +214,7 @@ class PluginRegistry:
                 "Plugin discovery executes trusted in-process code. "
                 f"Pass trusted_entry_points=['{_ALLOWLIST_FORM}'] or allow_untrusted=True."
             )
+        allowlisted_names = {(group, name) for _distribution, group, name in allowlist}
         self.clear_discovery_errors()
         loaded: list[str] = []
         for group in _PLUGIN_GROUPS:
@@ -222,6 +224,12 @@ class PluginRegistry:
                     _normalized_distribution(distribution), group, str(getattr(entry_point, "name", ""))
                 ) in allowlist
                 if not allow_untrusted and not allowlisted:
+                    if (group, str(getattr(entry_point, "name", ""))) in allowlisted_names:
+                        # An allowlisted name from another (or an unknown)
+                        # distribution: never imported, but reported.
+                        self._record_discovery_error(entry_point, group, PermissionError(
+                            "Entry point distribution is not allowlisted."
+                        ))
                     continue
                 try:
                     obj = entry_point.load()
