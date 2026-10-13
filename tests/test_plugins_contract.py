@@ -192,7 +192,9 @@ def test_plugin_discovery_uses_allowlist_and_records_source_metadata(monkeypatch
         lambda group: [EntryPoint()] if group == "role_aware_dashboard_toolkit.panels" else [],
     )
     registry = PluginRegistry()
-    loaded = registry.discover(trusted_entry_points=["role_aware_dashboard_toolkit.panels:panel_ep"])
+    loaded = registry.discover(
+        trusted_entry_points=["role_aware_dashboard_toolkit-plugin-fixture:role_aware_dashboard_toolkit.panels:panel_ep"]
+    )
 
     assert loaded == ["from-entry-point"]
     described = registry.describe()[0]
@@ -203,15 +205,21 @@ def test_plugin_discovery_uses_allowlist_and_records_source_metadata(monkeypatch
     assert registry.describe_sources()[0]["plugin_name"] == "from-entry-point"
 
 
+class _FixtureDist:
+    metadata = {"Name": "fixture-plugins"}
+
+
 def test_plugin_discovery_skips_broken_entry_points_and_records_warning(monkeypatch):
     class BrokenEntryPoint:
         name = "broken_ep"
+        dist = _FixtureDist()
 
         def load(self):
             raise RuntimeError("entry point exploded")
 
     class GoodEntryPoint:
         name = "good_ep"
+        dist = _FixtureDist()
 
         def load(self):
             return DashboardPlugin(name="good-plugin", capabilities=["panel"])
@@ -224,7 +232,10 @@ def test_plugin_discovery_skips_broken_entry_points_and_records_warning(monkeypa
 
     with pytest.warns(RuntimeWarning, match="Role-Aware Dashboard Toolkit plugin discovery skipped role_aware_dashboard_toolkit.panels:broken_ep"):
         loaded = registry.discover(
-            trusted_entry_points=["role_aware_dashboard_toolkit.panels:broken_ep", "role_aware_dashboard_toolkit.panels:good_ep"]
+            trusted_entry_points=[
+                "fixture-plugins:role_aware_dashboard_toolkit.panels:broken_ep",
+                "fixture-plugins:role_aware_dashboard_toolkit.panels:good_ep",
+            ]
         )
 
     assert loaded == ["good-plugin"]
@@ -242,6 +253,7 @@ def test_plugin_discovery_errors_redact_local_paths(monkeypatch, tmp_path):
 
     class BrokenEntryPoint:
         name = "broken_ep"
+        dist = _FixtureDist()
 
         def load(self):
             raise RuntimeError(f"cannot import {secret_path}")
@@ -253,7 +265,7 @@ def test_plugin_discovery_errors_redact_local_paths(monkeypatch, tmp_path):
     registry = PluginRegistry()
 
     with pytest.warns(RuntimeWarning, match="Role-Aware Dashboard Toolkit plugin discovery skipped role_aware_dashboard_toolkit.panels:broken_ep"):
-        loaded = registry.discover(trusted_entry_points=["role_aware_dashboard_toolkit.panels:broken_ep"])
+        loaded = registry.discover(trusted_entry_points=["fixture-plugins:role_aware_dashboard_toolkit.panels:broken_ep"])
 
     assert loaded == []
     errors = registry.discovery_errors()

@@ -43,7 +43,15 @@ callbacks must not overlap. Keep plugin names stable while registered.
 
 Plugins execute as trusted Python in the host process. Entry-point discovery
 is explicit opt-in; allowlist reviewed entry points rather than assuming that
-installation grants trust.
+installation grants trust. Each allowlist entry names
+`distribution:group:name`, so a same-named entry point from another installed
+distribution is never imported; a `group:name` entry raises `ValueError`:
+
+```python
+registry.discover(trusted_entry_points=[
+    "acme-dashboard-plugins:role_aware_dashboard_toolkit.panels:my_plugin",
+])
+```
 
 Verify the panel/menu appears, actually changes its intended view, respects
 permissions, and disappears after unregistering. A failing setup skips its render
