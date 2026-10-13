@@ -1,6 +1,9 @@
 # Role-Aware Dashboard Toolkit API security
 
 Role-Aware Dashboard Toolkit's optional FastAPI surface is secure by default. Protected routes require `ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY` and the request must send the same value in the `X-API-Key` header.
+The key is read on each request. When `create_app()` runs with neither the key
+nor anonymous access configured, it logs a warning that every protected route
+will return HTTP 401; the key value is never logged.
 Dashboard setup and first-run control flows are documented in `docs/dashboard_tools.md`; this page focuses on API trust boundaries and permissions.
 
 API keys must contain only ASCII characters. When a key is configured, non-ASCII

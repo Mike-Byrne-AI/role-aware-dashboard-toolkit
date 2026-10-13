@@ -699,6 +699,16 @@ def create_app(
         field_name="api_role",
     )
 
+    if not os.getenv(_API_KEY_ENV, "") and not app_state.allow_anonymous:
+        # The key is read per request, so this is a warning, not an error: a
+        # host may set it after creating the app. Never log the key itself.
+        logger.warning(
+            "%s is not set and anonymous access is off, so every protected route "
+            "returns 401 until it is set in the server's environment. Set it, or "
+            "pass allow_anonymous=True for a trusted local demo.",
+            _API_KEY_ENV,
+        )
+
     app = FastAPI(title=title, version=version)
     require_api_context = _make_require_api_context(app_state)
 
