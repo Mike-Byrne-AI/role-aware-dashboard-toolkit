@@ -218,7 +218,7 @@ class PluginRegistry:
                 f"Pass trusted_entry_points=['{_ALLOWLIST_FORM}'] or allow_untrusted=True."
             )
         allowlisted_names = {(group, name) for _distribution, group, name in allowlist}
-        shared_names = _shared_distribution_names() if allowlist and not allow_untrusted else set()
+        conflicts = _conflicting_entry_points(allowlist) if allowlist and not allow_untrusted else set()
         self.clear_discovery_errors()
         loaded: list[str] = []
         for group in _PLUGIN_GROUPS:
@@ -227,13 +227,16 @@ class PluginRegistry:
                 allowlisted = bool(distribution) and (
                     _normalized_distribution(distribution), group, str(getattr(entry_point, "name", ""))
                 ) in allowlist
-                if allowlisted and _normalized_distribution(distribution) in shared_names:
+                key = (_normalized_distribution(distribution), group, str(getattr(entry_point, "name", "")))
+                if allowlisted and key in conflicts:
                     # A distribution's name is what its own metadata declares,
-                    # so another installed distribution can claim it. Neither
-                    # copy can be told apart: load none, report each.
+                    # so another installed distribution can claim it and point
+                    # the entry point elsewhere. Neither can be told apart:
+                    # load none, report each.
                     self._record_discovery_error(entry_point, group, PermissionError(
-                        "Entry point not loaded: more than one installed distribution is named "
-                        f"{_diagnostic_label(distribution)}; remove the copy you did not install."
+                        "Entry point not loaded: installed distributions named "
+                        f"{_diagnostic_label(distribution)} point it at different code; remove the "
+                        "copy you did not install."
                     ), trust=True)
                     continue
                 if not allow_untrusted and not allowlisted:
@@ -444,9 +447,13 @@ def _entry_point_distribution(entry_point: Any) -> str:
         return ""
 
 
-def _installed_distribution_names() -> list[str]:
-    """Return the metadata name of each installed distribution, once per location."""
-    names: list[str] = []
+def _installed_entry_point_targets() -> list[tuple[str, str, str, str]]:
+    """Return (distribution, group, name, target) for every installed plugin entry point.
+
+    Every installed distribution is read, once per real location, including
+    those that ``metadata.entry_points()`` hides behind a same-named one.
+    """
+    rows: list[tuple[str, str, str, str]] = []
     seen: set[str] = set()
     for dist in metadata.distributions():
         try:
@@ -457,20 +464,31 @@ def _installed_distribution_names() -> list[str]:
                     continue
                 seen.add(location)
             name = str(dist.metadata.get("Name") or "")
+            if not name:
+                continue
+            for entry_point in dist.entry_points:
+                if entry_point.group in _PLUGIN_GROUPS:
+                    rows.append((name, entry_point.group, entry_point.name, str(entry_point.value)))
         except Exception:
             continue
-        if name:
-            names.append(name)
-    return names
+    return rows
 
 
-def _shared_distribution_names() -> set[str]:
-    """Return normalized names that more than one installed distribution declares."""
-    counts: dict[str, int] = {}
-    for name in _installed_distribution_names():
-        key = _normalized_distribution(name)
-        counts[key] = counts.get(key, 0) + 1
-    return {name for name, count in counts.items() if count > 1}
+def _conflicting_entry_points(allowlist: set[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
+    """Return allowlisted entry points that same-named distributions point at different code.
+
+    An editable install (``pip install -e .`` with setuptools) leaves
+    ``<name>.egg-info`` on the path beside the installed ``.dist-info``: two
+    distributions with one name and the same target, which count as one. A
+    second distribution that claims the name with another target is the
+    impostor case.
+    """
+    targets: dict[tuple[str, str, str], set[str]] = {}
+    for name, group, entry_name, target in _installed_entry_point_targets():
+        key = (_normalized_distribution(name), group, entry_name)
+        if key in allowlist:
+            targets.setdefault(key, set()).add("".join(target.split()))
+    return {key for key, values in targets.items() if len(values) > 1}
 
 
 def _iter_entry_points(group: str):

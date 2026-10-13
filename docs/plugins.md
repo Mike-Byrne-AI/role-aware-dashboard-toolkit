@@ -52,10 +52,13 @@ point published by another installed distribution is never imported; it is
 reported as a discovery error (`PermissionError`, diagnostic
 `RADT-PLUGIN-TRUST`) with a `RuntimeWarning`. A distribution's name is whatever
 its own metadata declares, so a second installed distribution can claim an
-allowlisted name: when more than one installed distribution has an allowlisted
-name, no entry point under that name is loaded and each is reported the same
-way. Remove the copy you did not install (a stale `.egg-info` or `.dist-info`
-directory also counts). An entry point whose distribution metadata is missing
+allowlisted name: when installed distributions with an allowlisted name point
+an allowlisted entry point at different code, none of them is loaded and each
+is reported the same way. Remove the copy you did not install (a stale
+`.egg-info` or `.dist-info` directory with an old target also counts). Copies
+that point it at the same code count as one, such as the `.egg-info` that
+`pip install -e .` with setuptools leaves beside the installed `.dist-info`;
+which file is imported is then up to Python's import path, as for any module. An entry point whose distribution metadata is missing
 or unreadable is not trusted by an allowlist. Trust is by distribution name
 within the environment: anyone who can install packages there can also replace
 an allowlisted distribution's code, so the allowlist guards against

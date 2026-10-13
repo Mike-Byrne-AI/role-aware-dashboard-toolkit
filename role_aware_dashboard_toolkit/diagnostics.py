@@ -65,7 +65,7 @@ _CATALOG = {
     "RADT-PLUGIN-TRUST": (
         "plugins", "discover_plugins",
         "A plugin entry point was not loaded: its distribution is not allowlisted, "
-        "or more than one installed distribution has its name.",
+        "or installed distributions with its name point it at different code.",
         "Nothing from that entry point was imported or run; other plugins are unaffected.",
     ),
 }

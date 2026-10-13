@@ -65,10 +65,12 @@ changes.
   denies a control without one.
 - Plugin allowlist entries are `distribution:group:name`; an old
   `group:name` entry raises `ValueError` before anything loads, and a
-  same-named entry point from another distribution is not loaded. When more
-  than one installed distribution declares an allowlisted name, none of its
-  entry points loads. Add the distribution name to each entry, and remove a
-  duplicate or stale copy of an allowlisted distribution.
+  same-named entry point from another distribution is not loaded. When
+  installed distributions with an allowlisted name point an allowlisted entry
+  point at different code (a second distribution claiming the name, or a
+  stale copy), none of them loads; copies with the same target, such as an
+  editable install's `.egg-info`, count as one. Add the distribution name to
+  each entry, and remove a stale copy of an allowlisted distribution.
 - The built-in Close case button honours governance's `close_case` block and
   is refused when governance cannot be evaluated. With a governance store
   configured, evaluating it needs `can_view_team_ops`, `can_view_decisions`

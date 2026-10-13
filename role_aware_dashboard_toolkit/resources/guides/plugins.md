@@ -45,9 +45,11 @@ Plugins execute as trusted Python in the host process. Entry-point discovery
 is explicit opt-in; allowlist reviewed entry points rather than assuming that
 installation grants trust. Each allowlist entry names
 `distribution:group:name`, so a same-named entry point from another installed
-distribution is never imported; when two installed distributions declare the
-allowlisted name, neither is loaded and both are reported (`RADT-PLUGIN-TRUST`);
-a `group:name` entry raises `ValueError`:
+distribution is never imported; when installed distributions with the
+allowlisted name point the entry point at different code, neither is loaded and
+both are reported (`RADT-PLUGIN-TRUST`), while an editable install's leftover
+`.egg-info` pointing at the same code is fine; a `group:name` entry raises
+`ValueError`:
 
 ```python
 registry.discover(trusted_entry_points=[

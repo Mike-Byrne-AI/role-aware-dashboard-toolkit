@@ -163,8 +163,10 @@ def test_two_distributions_with_an_allowlisted_name_are_both_refused(monkeypatch
         _EntryPoint("panel_ep", "acme-panels", "acme-panel", loads),
     ])
     monkeypatch.setattr(
-        "role_aware_dashboard_toolkit.plugins._installed_distribution_names",
-        lambda: ["acme-panels", "Acme_Panels", "other"],
+        "role_aware_dashboard_toolkit.plugins._installed_entry_point_targets",
+        lambda: [("acme-panels", PANELS, "panel_ep", "acme_panels:panel"),
+                 ("Acme_Panels", PANELS, "panel_ep", "impostor_mod:panel"),
+                 ("other", PANELS, "panel_ep", "other:panel")],
     )
     registry = PluginRegistry()
 
@@ -174,7 +176,7 @@ def test_two_distributions_with_an_allowlisted_name_are_both_refused(monkeypatch
     assert loaded == [] and loads == []
     errors = registry.discovery_errors()
     assert len(errors) == 2
-    assert all("more than one installed distribution" in error.message for error in errors)
+    assert all("point it at different code" in error.message for error in errors)
 
 
 def test_a_self_declared_distribution_name_on_disk_is_refused(tmp_path, monkeypatch):
@@ -206,3 +208,50 @@ def test_a_self_declared_distribution_name_on_disk_is_refused(tmp_path, monkeypa
     assert loaded == []
     assert registry.describe_sources() == []
     assert "radt_good_mod" not in sys.modules and "radt_evil_mod" not in sys.modules
+
+
+def _write_distribution(directory, metadata_file, module):
+    directory.mkdir()
+    (directory / metadata_file).write_text("Metadata-Version: 2.1\nName: good-plugin\nVersion: 1.0\n")
+    (directory / "entry_points.txt").write_text(f"[{PANELS}]\nstatus = {module}:panel\n")
+
+
+def test_an_editable_install_with_its_egg_info_still_loads(tmp_path, monkeypatch):
+    # `pip install -e .` with setuptools leaves src/<name>.egg-info on the
+    # path its .pth adds, beside the .dist-info in site-packages: two
+    # distributions with one name, pointing at the same code.
+    import importlib
+    import sys
+
+    site, src = tmp_path / "site", tmp_path / "src"
+    site.mkdir()
+    src.mkdir()
+    _write_distribution(site / "good_plugin-1.0.dist-info", "METADATA", "radt_editable_mod")
+    _write_distribution(src / "good_plugin.egg-info", "PKG-INFO", "radt_editable_mod")
+    (src / "radt_editable_mod.py").write_text(
+        "from role_aware_dashboard_toolkit.plugins import DashboardPlugin\n"
+        "panel = DashboardPlugin(name='editable-panel', capabilities=['panel'])\n"
+    )
+    monkeypatch.syspath_prepend(str(site))
+    monkeypatch.syspath_prepend(str(src))
+    monkeypatch.delitem(sys.modules, "radt_editable_mod", raising=False)
+    importlib.invalidate_caches()
+    registry = PluginRegistry()
+
+    loaded = registry.discover(trusted_entry_points=[f"good-plugin:{PANELS}:status"])
+
+    assert loaded == ["editable-panel"]
+    assert registry.discovery_errors() == []
+    assert registry.describe_sources()[0]["trusted"] is True
+
+
+def test_same_named_distributions_pointing_at_the_same_code_count_as_one(monkeypatch):
+    loads = []
+    _install(monkeypatch, [_EntryPoint("panel_ep", "acme-panels", "acme-panel", loads)])
+    monkeypatch.setattr(
+        "role_aware_dashboard_toolkit.plugins._installed_entry_point_targets",
+        lambda: [("acme-panels", PANELS, "panel_ep", "acme_panels:panel"),
+                 ("Acme_Panels", PANELS, "panel_ep", "acme_panels : panel")],
+    )
+
+    assert PluginRegistry().discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"]) == ["acme-panel"]
