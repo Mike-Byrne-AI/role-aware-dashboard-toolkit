@@ -328,13 +328,14 @@ def _sanitize_control_value(ctrl: ControlDef, value: Any) -> Any:
 def _sanitize_numeric(ctrl: ControlDef, value: Any) -> Any:
     num = _finite_float(value)
     if num is None:
+        # The literal 0.0 fallback is always finite. The explicit check below
+        # states that without an assert, which python -O would remove.
         for fallback in (ctrl.default, ctrl.min_value, ctrl.max_value, 0.0):
             num = _finite_float(fallback)
             if num is not None:
                 break
-
-    # The final literal fallback above is always finite.
-    assert num is not None
+    if num is None:
+        num = 0.0
     min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
     if min_value is not None and num < min_value:
         num = min_value
