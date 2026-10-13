@@ -53,7 +53,7 @@ from .security import (
     BUILTIN_ROLES,
 )
 from .sensitive_values import REDACTED_SECRET
-from .store_diagnostics import store_read_error_total
+from .store_diagnostics import StorePathSecurityError, store_read_error_total
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -710,7 +710,19 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         profile_id: str,
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
-        ok = delete_profile(profile_id, profile_dir=app_state.profile_dir, store=app_state.profile_store)
+        try:
+            ok = delete_profile(profile_id, profile_dir=app_state.profile_dir, store=app_state.profile_store)
+        except StorePathSecurityError:
+            # The store refuses, for example, to delete a file that holds another
+            # record's id. Fixed text: its diagnostic names local paths.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Profile '{profile_id}' was not deleted: its stored file failed a safety check "
+                    "(for example, it holds a different record). Nothing was changed; repair the "
+                    "stored record."
+                ),
+            ) from None
         if not ok:
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         app_state.audit.log("profile_delete", detail=profile_id, role=ctx.role or "api", source="api")

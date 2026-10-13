@@ -106,3 +106,32 @@ def test_stores_without_read_diagnostics_keep_not_found():
 
     assert response.status_code == 404
     assert "X-Unreadable-Records" not in listing.headers
+
+
+def test_deleting_a_profile_whose_file_holds_another_record_is_refused_cleanly(tmp_path):
+    # A wrong-backup copy: staging's file now holds prod's record. The store
+    # refuses to delete it (that would remove prod's record); the API must
+    # say so instead of failing with an unhandled server error.
+    from fastapi.testclient import TestClient
+
+    registry = _registry()
+    store = FileProfileStore(str(tmp_path / "profiles"))
+    save_profile("prod", registry, {"limit": 42}, store=store)
+    save_profile("staging", registry, {"limit": 7}, store=store)
+    staging = Path(store.resolve_path("staging"))
+    staging.write_bytes(Path(store.resolve_path("prod")).read_bytes())
+    audit = AuditLog()
+    app = create_app(registry, audit=audit, api_role="Admin", profile_dir=str(tmp_path / "profiles"))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        read = client.get("/profiles/staging", headers=HEADERS)
+        deleted = client.request("DELETE", "/profiles/staging", headers=HEADERS)
+
+    assert read.status_code == 500
+    assert deleted.status_code == 409
+    assert deleted.json() == {"detail": (
+        "Profile 'staging' was not deleted: its stored file failed a safety check "
+        "(for example, it holds a different record). Nothing was changed; repair the stored record."
+    )}
+    assert str(tmp_path) not in deleted.text
+    assert staging.exists() and Path(store.resolve_path("prod")).exists()
+    assert audit.all_events() == []
