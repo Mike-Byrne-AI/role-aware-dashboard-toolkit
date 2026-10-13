@@ -16,7 +16,9 @@ case closure and remain subject to incident severity checks. Mitigation alone
 does not close an incident. Allowed next actions exclude every blocked action,
 including when an otherwise admissible case still has unresolved incidents or
 missing approvals. These records provide review guidance; hosts must enforce
-their actual action permissions.
+their actual action permissions. The native **Close case** button is the one
+toolkit action that enforces a block itself: it is refused while governance
+blocks `close_case` (see [caseboard](caseboard.md#closing-a-case)).
 
 ## View and write model
 

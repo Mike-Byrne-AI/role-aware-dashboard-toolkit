@@ -15,7 +15,34 @@ from ..caseboard import (
 from ..security import can_mutate, has_perm
 from .._evidence_reads import EvidenceUnavailable, read_records, warn_incomplete_evidence
 from .._record_projection import project_record
+from .review_models import build_governance_panel_preview
 from .shared import _record_actor, _render_table, _save_record
+
+
+def _close_case_block(st: Any, config: Any, ctx: Any, case: dict[str, Any], runs: list[dict[str, Any]]) -> str | None:
+    """Return why governance blocks closing ``case`` now, or None when it does not.
+
+    With a governance store configured, the case is evaluated as the governance
+    panel would preview it. If that evaluation cannot run for this user or its
+    evidence cannot be read, closing is refused rather than allowed blind.
+    """
+    if getattr(config, "governance_store", None) is None:
+        return None
+    try:
+        preview = build_governance_panel_preview(
+            config, case, actor=_record_actor(ctx, st.session_state), role=ctx.role, ctx=ctx, runs=runs,
+        )
+    except EvidenceUnavailable:
+        return (
+            "Close case is unavailable: governance could not be evaluated for this case with your access. "
+            "Check access and the linked evidence, then retry."
+        )
+    if preview is None:
+        return None
+    governance = preview["governance"]
+    if "close_case" not in list(governance.get("blocked_actions") or []):
+        return None
+    return f"Governance blocks closing this case. {governance.get('summary_text') or ''}".strip()
 
 
 def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str, Any]], selected_run: dict[str, Any]) -> None:
@@ -116,7 +143,15 @@ def _render_caseboard_panel(st: Any, config: Any, ctx: Any, runs: list[dict[str,
             st.toast(f"Case reopened: {updated['case_id']}")
             st.rerun()
 
-    if st.button("Close case", key=f"_radt_close_case_{selected_case_id}", disabled=not can_manage_runs) and can_mutate(ctx, "can_manage_runs"):
+    close_block = _close_case_block(st, config, ctx, selected_case, runs) if can_manage_runs else None
+    if close_block is not None:
+        st.caption(close_block)
+    if (
+        st.button("Close case", key=f"_radt_close_case_{selected_case_id}",
+                  disabled=not can_manage_runs or close_block is not None)
+        and close_block is None
+        and can_mutate(ctx, "can_manage_runs")
+    ):
         updated = close_case(
             selected_case,
             reason="Closed from caseboard UI.",
