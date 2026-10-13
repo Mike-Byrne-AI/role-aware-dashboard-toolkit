@@ -56,8 +56,10 @@ changes.
   non-string `permission`, and the API denies a control without one.
 - Plugin allowlist entries are `distribution:group:name`; an old
   `group:name` entry raises `ValueError` before anything loads, and a
-  same-named entry point from another distribution is not loaded. Add the
-  distribution name to each entry.
+  same-named entry point from another distribution is not loaded. When more
+  than one installed distribution declares an allowlisted name, none of its
+  entry points loads. Add the distribution name to each entry, and remove a
+  duplicate or stale copy of an allowlisted distribution.
 - The built-in Close case button honours governance's `close_case` block and
   is refused when governance cannot be evaluated.
 - Controls and fields named like `private_key`, `passwd`, `pwd`,

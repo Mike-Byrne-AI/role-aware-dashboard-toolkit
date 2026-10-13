@@ -57,6 +57,7 @@ expose the same guidance through `.diagnostic` and their `to_dict()` output.
 | `RADT-AUDIT-IO` | `persist_audit` | `guide troubleshooting` |
 | `RADT-AUTH` | `authenticate` | `guide permissions` |
 | `RADT-CALLBACK` | `call_callback` | `guide troubleshooting` |
+| `RADT-PLUGIN-TRUST` | `discover_plugins` | `guide plugins` |
 
 Read the specific validation detail first, then use the linked guide. A plugin
 or callback can fail after making changes; the library does not roll back host

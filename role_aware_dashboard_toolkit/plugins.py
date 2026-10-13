@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import metadata
+import os
 import re
 from threading import Condition, local
 import warnings
@@ -30,16 +31,18 @@ class PluginErrorRecord:
     source: str
     exception_type: str
     message: str
+    # RADT-PLUGIN-TRUST marks an entry point refused before import.
+    code: str = "RADT-PLUGIN"
 
     @property
     def diagnostic(self) -> dict[str, Any]:
         """Installed help and effect scope; never includes callback payloads."""
-        return build_diagnostic("RADT-PLUGIN")
+        return build_diagnostic(self.code)
 
     def __str__(self) -> str:
         return (
             f"{_diagnostic_label(self.plugin_name)} ({_exception_label(self.exception_type)}): "
-            + diagnostic_text("RADT-PLUGIN")
+            + diagnostic_text(self.code)
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -215,6 +218,7 @@ class PluginRegistry:
                 f"Pass trusted_entry_points=['{_ALLOWLIST_FORM}'] or allow_untrusted=True."
             )
         allowlisted_names = {(group, name) for _distribution, group, name in allowlist}
+        shared_names = _shared_distribution_names() if allowlist and not allow_untrusted else set()
         self.clear_discovery_errors()
         loaded: list[str] = []
         for group in _PLUGIN_GROUPS:
@@ -223,13 +227,22 @@ class PluginRegistry:
                 allowlisted = bool(distribution) and (
                     _normalized_distribution(distribution), group, str(getattr(entry_point, "name", ""))
                 ) in allowlist
+                if allowlisted and _normalized_distribution(distribution) in shared_names:
+                    # A distribution's name is what its own metadata declares,
+                    # so another installed distribution can claim it. Neither
+                    # copy can be told apart: load none, report each.
+                    self._record_discovery_error(entry_point, group, PermissionError(
+                        "Entry point not loaded: more than one installed distribution is named "
+                        f"{_diagnostic_label(distribution)}; remove the copy you did not install."
+                    ), trust=True)
+                    continue
                 if not allow_untrusted and not allowlisted:
                     if (group, str(getattr(entry_point, "name", ""))) in allowlisted_names:
                         # An allowlisted name from another (or an unknown)
                         # distribution: never imported, but reported.
                         self._record_discovery_error(entry_point, group, PermissionError(
-                            "Entry point distribution is not allowlisted."
-                        ))
+                            "Entry point not loaded: its distribution is not allowlisted."
+                        ), trust=True)
                     continue
                 try:
                     obj = entry_point.load()
@@ -328,8 +341,10 @@ class PluginRegistry:
                 self._condition.notify_all()
         return attempt.succeeded
 
-    def _record_discovery_error(self, entry_point: Any, group: str, exc: Exception) -> None:
-        error = _entry_point_error(entry_point=entry_point, group=group, exc=exc)
+    def _record_discovery_error(
+        self, entry_point: Any, group: str, exc: Exception, *, trust: bool = False,
+    ) -> None:
+        error = _entry_point_error(entry_point=entry_point, group=group, exc=exc, trust=trust)
         with self._condition:
             self._discovery_errors.append(error)
         warnings.warn(
@@ -352,7 +367,9 @@ def _plugin_error(plugin: DashboardPlugin, stage: str, exc: Exception) -> Plugin
     )
 
 
-def _entry_point_error(*, entry_point: Any, group: str, exc: Exception) -> PluginErrorRecord:
+def _entry_point_error(
+    *, entry_point: Any, group: str, exc: Exception, trust: bool = False,
+) -> PluginErrorRecord:
     entry_name = str(getattr(entry_point, "name", "") or "entry_point")
     source_ref = f"{group}:{entry_name}"
     return PluginErrorRecord(
@@ -360,7 +377,9 @@ def _entry_point_error(*, entry_point: Any, group: str, exc: Exception) -> Plugi
         stage="discover",
         source=_diagnostic_label(source_ref),
         exception_type=_exception_label(type(exc).__name__),
-        message=_diagnostic_message(exc),
+        # A trust refusal's text is the toolkit's own, never a plugin's.
+        message=_diagnostic_label(str(exc)) if trust else _diagnostic_message(exc),
+        code="RADT-PLUGIN-TRUST" if trust else "RADT-PLUGIN",
     )
 
 
@@ -423,6 +442,35 @@ def _entry_point_distribution(entry_point: Any) -> str:
     except Exception:
         # Unreadable metadata cannot establish trust.
         return ""
+
+
+def _installed_distribution_names() -> list[str]:
+    """Return the metadata name of each installed distribution, once per location."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for dist in metadata.distributions():
+        try:
+            location = str(getattr(dist, "_path", "") or "")
+            if location:
+                location = os.path.realpath(location)
+                if location in seen:  # one directory reached through two sys.path entries
+                    continue
+                seen.add(location)
+            name = str(dist.metadata.get("Name") or "")
+        except Exception:
+            continue
+        if name:
+            names.append(name)
+    return names
+
+
+def _shared_distribution_names() -> set[str]:
+    """Return normalized names that more than one installed distribution declares."""
+    counts: dict[str, int] = {}
+    for name in _installed_distribution_names():
+        key = _normalized_distribution(name)
+        counts[key] = counts.get(key, 0) + 1
+    return {name for name, count in counts.items() if count > 1}
 
 
 def _iter_entry_points(group: str):

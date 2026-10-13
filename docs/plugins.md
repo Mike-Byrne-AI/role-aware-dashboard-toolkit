@@ -49,11 +49,18 @@ and the entry-point name. An entry point is imported only when its own
 distribution, group and name all match an entry; distribution names compare
 case-insensitively, with `-`, `_` and `.` treated alike. A same-named entry
 point published by another installed distribution is never imported; it is
-reported as a discovery error (`PermissionError`) with a `RuntimeWarning`, so a
-misnamed distribution or an impostor is visible. An entry point whose
-distribution metadata is missing or unreadable is not trusted by an allowlist.
-Trust is by distribution name within the environment: anyone who can install a
-distribution under the allowlisted name can also replace its code.
+reported as a discovery error (`PermissionError`, diagnostic
+`RADT-PLUGIN-TRUST`) with a `RuntimeWarning`. A distribution's name is whatever
+its own metadata declares, so a second installed distribution can claim an
+allowlisted name: when more than one installed distribution has an allowlisted
+name, no entry point under that name is loaded and each is reported the same
+way. Remove the copy you did not install (a stale `.egg-info` or `.dist-info`
+directory also counts). An entry point whose distribution metadata is missing
+or unreadable is not trusted by an allowlist. Trust is by distribution name
+within the environment: anyone who can install packages there can also replace
+an allowlisted distribution's code, so the allowlist guards against
+unreviewed and same-named installs, not against an account that can write to
+the environment.
 
 Since 0.2.0 a `group:name` entry (the 0.1.0 form) is refused: `discover()`
 raises `ValueError` naming the entry before importing anything, as it does for

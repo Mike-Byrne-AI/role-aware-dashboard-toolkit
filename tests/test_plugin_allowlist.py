@@ -134,3 +134,75 @@ def test_an_allowlisted_name_from_the_wrong_distribution_is_reported(monkeypatch
     assert error.source == f"{PANELS}:panel_ep"
     assert error.stage == "discover"
     assert error.exception_type == "PermissionError"
+
+
+def test_a_refused_entry_point_is_not_reported_as_a_failed_callback(monkeypatch):
+    # Nothing from a refused entry point runs: "A plugin callback failed" and
+    # "host effects may be partial" would send the operator looking for one.
+    from role_aware_dashboard_toolkit.diagnostics import diagnostic_text
+
+    _install(monkeypatch, [_EntryPoint("panel_ep", "evil-panels", "impostor", [])])
+    registry = PluginRegistry()
+
+    with pytest.warns(RuntimeWarning, match="RADT-PLUGIN-TRUST"):
+        registry.discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"])
+
+    (error,) = registry.discovery_errors()
+    assert "callback failed" not in str(error)
+    assert str(error).endswith(diagnostic_text("RADT-PLUGIN-TRUST"))
+    assert error.diagnostic["code"] == "RADT-PLUGIN-TRUST"
+    assert "not allowlisted" in error.message
+
+
+def test_two_distributions_with_an_allowlisted_name_are_both_refused(monkeypatch):
+    # A distribution's name is whatever its own METADATA says, so a second
+    # installed distribution can claim the allowlisted one's name.
+    loads = []
+    _install(monkeypatch, [
+        _EntryPoint("panel_ep", "acme-panels", "impostor", loads),
+        _EntryPoint("panel_ep", "acme-panels", "acme-panel", loads),
+    ])
+    monkeypatch.setattr(
+        "role_aware_dashboard_toolkit.plugins._installed_distribution_names",
+        lambda: ["acme-panels", "Acme_Panels", "other"],
+    )
+    registry = PluginRegistry()
+
+    with pytest.warns(RuntimeWarning, match="RADT-PLUGIN-TRUST"):
+        loaded = registry.discover(trusted_entry_points=[f"acme-panels:{PANELS}:panel_ep"])
+
+    assert loaded == [] and loads == []
+    errors = registry.discovery_errors()
+    assert len(errors) == 2
+    assert all("more than one installed distribution" in error.message for error in errors)
+
+
+def test_a_self_declared_distribution_name_on_disk_is_refused(tmp_path, monkeypatch):
+    # The review's p5/spoof.py: a second dist-info whose METADATA declares the
+    # allowlisted name loaded marked trusted, with no warning.
+    import importlib
+    import sys
+
+    site = tmp_path / "site"
+    site.mkdir()
+    for directory, module, marker in (
+        ("good_plugin-1.0.dist-info", "radt_good_mod", "GOOD"),
+        ("aaa_evil-1.0.dist-info", "radt_evil_mod", "EVIL"),
+    ):
+        info = site / directory
+        info.mkdir()
+        (info / "METADATA").write_text("Metadata-Version: 2.1\nName: good-plugin\nVersion: 1.0\n")
+        (info / "entry_points.txt").write_text(f"[{PANELS}]\nstatus = {module}:panel\n")
+        (site / f"{module}.py").write_text(
+            "raise AssertionError('a refused entry point must not be imported')\n"
+        )
+    monkeypatch.syspath_prepend(str(site))
+    importlib.invalidate_caches()
+    registry = PluginRegistry()
+
+    with pytest.warns(RuntimeWarning, match="RADT-PLUGIN-TRUST"):
+        loaded = registry.discover(trusted_entry_points=[f"good-plugin:{PANELS}:status"])
+
+    assert loaded == []
+    assert registry.describe_sources() == []
+    assert "radt_good_mod" not in sys.modules and "radt_evil_mod" not in sys.modules
