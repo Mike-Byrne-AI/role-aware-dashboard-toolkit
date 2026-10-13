@@ -161,3 +161,27 @@ def test_full_window_api_read_save_and_activate_report_the_unreadable_profile(tm
     assert path.read_text(encoding="utf-8") == "{oops"
     assert limit == 5
     assert audit.all_events() == []
+
+
+def test_copies_keep_the_total_and_every_way_of_adding_counts():
+    import copy
+    import pickle
+
+    from role_aware_dashboard_toolkit.store_diagnostics import _ReadErrorLog
+
+    log = _ReadErrorLog()
+    for number in range(250):
+        log.append({"error_type": "X", "n": number})
+    assert (log.total, len(log)) == (250, 200)
+
+    # deepcopy rebuilt the deque by appending its items onto the copied total.
+    for clone in (copy.copy(log), copy.deepcopy(log), pickle.loads(pickle.dumps(log))):
+        assert type(clone) is _ReadErrorLog
+        assert (clone.total, clone.maxlen, list(clone)) == (250, 200, list(log))
+
+    log += [{"error_type": "Y"}, {"error_type": "Z"}]  # deque's += skipped append
+    log.extend([{"error_type": "W"}])
+    log.appendleft({"error_type": "V"})
+    log.extendleft([{"error_type": "U"}])
+    assert log.total == 255
+    assert len(log) == 200

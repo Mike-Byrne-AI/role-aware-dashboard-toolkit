@@ -75,7 +75,11 @@ _READ_ERRORS_RETAINED = 200
 
 
 class _ReadErrorLog(collections.deque):
-    """Newest store read errors, bounded, with a total of every error recorded."""
+    """Newest store read errors, bounded, with a total of every error recorded.
+
+    Every way of adding an error counts it. A copy or pickle keeps the total
+    rather than recounting the retained errors.
+    """
 
     def __init__(self, iterable: Iterable[StoreReadError] = (), maxlen: int | None = _READ_ERRORS_RETAINED) -> None:
         super().__init__(maxlen=maxlen)
@@ -87,9 +91,41 @@ class _ReadErrorLog(collections.deque):
         self.total += 1
         super().append(item)
 
+    def appendleft(self, item: StoreReadError) -> None:
+        self.total += 1
+        super().appendleft(item)
+
     def extend(self, items: Iterable[StoreReadError]) -> None:
         for item in items:
             self.append(item)
+
+    def extendleft(self, items: Iterable[StoreReadError]) -> None:
+        for item in items:
+            self.appendleft(item)
+
+    def insert(self, index: int, item: StoreReadError) -> None:
+        super().insert(index, item)
+        self.total += 1
+
+    def __iadd__(self, items: Iterable[StoreReadError]) -> _ReadErrorLog:  # type: ignore[override]
+        self.extend(items)
+        return self
+
+    def __copy__(self) -> _ReadErrorLog:
+        # deque's own copy re-appends every retained error through __init__.
+        return _restore_read_error_log(list(self), self.maxlen, self.total)
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_read_error_log, (list(self), self.maxlen, self.total))
+
+
+def _restore_read_error_log(
+    items: list[StoreReadError], maxlen: int | None, total: int,
+) -> _ReadErrorLog:
+    log = _ReadErrorLog(maxlen=maxlen)
+    collections.deque.extend(log, items)  # already counted in ``total``
+    log.total = total
+    return log
 
 
 class StoreReadDiagnosticsMixin:
