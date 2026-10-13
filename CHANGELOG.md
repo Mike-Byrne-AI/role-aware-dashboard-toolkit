@@ -54,8 +54,11 @@ changes.
   `localhost` or `127.0.0.1`, or set an API key to serve it under another name
   (a LAN address, a container name, or a test client's default host).
 - `RoleDef` permission values must be `True` or `False` (`TypeError`
-  otherwise), and only `True` grants. `register()` refuses an empty or
-  non-string `permission`, and the API denies a control without one.
+  otherwise), and only `True` grants. `RoleDef` also raises `TypeError` when
+  `perms` is not a mapping (`RoleDef("Guest", None)`: pass `{}` for a role
+  with no permissions) or a permission name is empty or not a string.
+  `register()` refuses an empty or non-string `permission`, and the API
+  denies a control without one.
 - Plugin allowlist entries are `distribution:group:name`; an old
   `group:name` entry raises `ValueError` before anything loads, and a
   same-named entry point from another distribution is not loaded. When more
@@ -63,7 +66,11 @@ changes.
   entry points loads. Add the distribution name to each entry, and remove a
   duplicate or stale copy of an allowlisted distribution.
 - The built-in Close case button honours governance's `close_case` block and
-  is refused when governance cannot be evaluated.
+  is refused when governance cannot be evaluated. With a governance store
+  configured, evaluating it needs `can_view_team_ops`, `can_view_decisions`
+  and `can_view_governance`, so a custom role that closed cases in 0.1.0
+  with `can_manage_runs` alone is now refused (built-in roles are
+  unaffected). Grant those view permissions to roles that close cases.
 - Controls and fields named like `private_key`, `passwd`, `pwd`,
   `access_key_id`, `cookie`, `jwt`, `dsn` or `connection_string` are now
   sensitive, so profiles stop saving them and audit hides their values. Pass

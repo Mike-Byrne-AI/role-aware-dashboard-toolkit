@@ -143,3 +143,21 @@ def test_an_unexpected_governance_error_refuses_close_without_breaking_the_caseb
     assert any("governance could not be evaluated" in text for text in captions)
     assert not any("/srv/private" in str(event) for event in st.events)
     assert any(event[0] == "button" and event[1] == "Append finding to selected case" for event in st.events)
+
+
+_CLOSER = {"can_manage_runs": True, "can_view_team_ops": True, "can_view_decisions": True,
+           "can_view_governance": True}
+
+
+@pytest.mark.parametrize("missing", [None, "can_view_decisions", "can_view_governance"])
+def test_a_custom_role_needs_decision_and_governance_views_to_close(missing):
+    # Listed under Changed (BREAKING): with a governance store, closing reads
+    # decision-derived governance evidence, so a custom role that could close
+    # cases in 0.1.0 with can_manage_runs alone now needs both view grants.
+    perms = {name: name != missing for name in _CLOSER}
+    config, run = _scenario(incident_status="closed", severity="low")
+
+    _st, button = _render(config, run, _context("Closer", perms))
+
+    assert button[3] is (missing is not None)
+    assert _case_state(config) == ("open" if missing else "closed")
