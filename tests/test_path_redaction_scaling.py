@@ -139,14 +139,33 @@ def json_text(value):
     return json.dumps(value)
 
 
-def test_comma_joined_repo_paths_scan_in_linear_time():
+# Measured on an Apple M2, Python 3.12, for the text below: this code resolves
+# 2.0x the text's characters in 0.21 s; the rescanning code it replaced
+# resolved 50.6x in 7.58 s. Resolution costs a file-system call per path
+# component, two on Windows, where a CI runner took 1.96 s for the same
+# amount of resolution (about 10x the M2). The bound leaves that runner about
+# 2x headroom and is still under the old code on the fastest machine; the
+# character count is the oracle that does not depend on the runner.
+_COMMA_RUN_BOUND_SECONDS = 4.0
+
+
+def test_comma_joined_repo_paths_scan_in_linear_time(monkeypatch):
     # Distinct in-repository paths joined by commas form one long candidate;
     # its relative remainder is scanned once more, not once per path.
     text = "log: " + " ".join(
-        ",".join(f"/srv/repo/pkg{run}/mod{index}.py" for index in range(60)) for run in range(80)
+        ",".join(f"/srv/repo/pkg{run}/mod{index}.py" for index in range(100)) for run in range(47)
     )
+    resolved: list[int] = []
+    resolve = path_redaction._redact_absolute_path_once
+
+    def counting(value, *, repo_root_path):
+        resolved.append(len(value))
+        return resolve(value, repo_root_path=repo_root_path)
+
+    monkeypatch.setattr(path_redaction, "_redact_absolute_path_once", counting)
     started = time.perf_counter()
     redact_text_local_paths(text, repo_root="/srv/repo")
     elapsed = time.perf_counter() - started
 
-    assert elapsed < _BOUND_SECONDS, f"redaction took {elapsed:.2f}s for {len(text)} characters"
+    assert sum(resolved) <= 3 * len(text), f"resolved {sum(resolved) / len(text):.1f}x the text"
+    assert elapsed < _COMMA_RUN_BOUND_SECONDS, f"redaction took {elapsed:.2f}s for {len(text)} characters"
