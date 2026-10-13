@@ -426,6 +426,11 @@ def test_trusted_links_resolve_like_the_kernel(private_directory, simulated_owne
     assert (private_directory / "identity.key").is_file()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows resolves '..' in text before the file system sees the path, so "
+           "'regular\\..\\private' opens 'private' there; accepting it matches the kernel",
+)
 def test_path_through_a_file_is_refused_like_the_kernel(private_directory, capsys):
     regular = private_directory.parent / "regular"
     regular.write_text("not a directory", encoding="utf-8")
