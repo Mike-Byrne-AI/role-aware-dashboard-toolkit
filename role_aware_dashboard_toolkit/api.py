@@ -350,17 +350,21 @@ _REMOTE_HOST_REFUSAL = (
 )
 
 
+def _is_port(text: str) -> bool:
+    return text.isascii() and text.isdigit()
+
+
 def _is_loopback_host(host: str) -> bool:
     """Return whether a Host header names localhost or a loopback address."""
     text = host.strip().lower()
     if text.startswith("["):
         end = text.find("]")
         name, port = (text[1:end], text[end + 1:]) if end > 0 else ("", "")
-        if port and not (port.startswith(":") and port[1:].isdigit()):
+        if port and not (port.startswith(":") and _is_port(port[1:])):
             return False
     else:
         name, _, port = text.partition(":")
-        if port and not port.isdigit():
+        if port and not _is_port(port):
             return False
     if name.rstrip(".") == "localhost":
         return True

@@ -51,9 +51,11 @@ changes.
   browser cannot send it cross-site. Send JSON with that header.
 - With `allow_anonymous=True` and no API key set, a `POST`, `PATCH` or
   `DELETE` whose `Host` header is not `localhost`, a `127.x` address or
-  `[::1]` gets 403, which stops DNS rebinding. Address an anonymous demo as
-  `localhost` or `127.0.0.1`, or set an API key to serve it under another name
-  (a LAN address, a container name, or a test client's default host).
+  `[::1]` gets 403, so a DNS-rebinding page cannot change state (it can still
+  read what anonymous access reads; see `docs/api_security.md`). Address an
+  anonymous demo as `localhost` or `127.0.0.1`, or set an API key to serve it
+  under another name (a LAN address, a container name, or a test client's
+  default host).
 - `RoleDef` permission values must be `True` or `False` (`TypeError`
   otherwise), and only `True` grants. `RoleDef` also raises `TypeError` when
   `perms` is not a mapping (`RoleDef("Guest", None)`: pass `{}` for a role

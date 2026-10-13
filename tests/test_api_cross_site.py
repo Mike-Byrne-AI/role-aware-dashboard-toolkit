@@ -176,3 +176,11 @@ def test_key_clients_and_reads_are_not_host_checked(monkeypatch):
             headers={"X-API-Key": "synthetic-cross-site-key", "Host": "dashboard.example.com"},
         )
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:８０", "localhost:٨٠", "[::1]:８"])
+def test_a_port_must_be_ascii_digits(host):
+    # str.isdigit accepts fullwidth and Arabic-Indic digits; a Host port does not.
+    from role_aware_dashboard_toolkit.api import _is_loopback_host
+
+    assert _is_loopback_host(host) is False
