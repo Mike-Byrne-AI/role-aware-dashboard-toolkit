@@ -57,6 +57,15 @@ The key is scoped to a Role-Aware Dashboard Toolkit role. Set `ROLE_AWARE_DASHBO
 
 Anonymous local/demo access is opt-in only. Use `create_app(..., allow_anonymous=True)` or set `ROLE_AWARE_DASHBOARD_TOOLKIT_API_ALLOW_ANONYMOUS=true`. The default anonymous scope can read controls only; pass `anonymous_role=` only for trusted local demos.
 
+## Request limits
+
+Request bodies larger than `max_body_bytes` (an argument to `create_app()`,
+1 MiB by default) receive HTTP 413 before a route reads them; a streamed body
+without `Content-Length` is counted as it arrives. JSON values nested more than
+32 levels deep in a control update or a profile's `extra` receive HTTP 422. Both
+refusals happen before any state or audit change. Raise `max_body_bytes` only
+for trusted clients that need it; a reverse proxy can enforce its own limit too.
+
 ## Cross-site requests
 
 Every state-changing route (`POST`, `PATCH`, `DELETE`) refuses a request that

@@ -50,3 +50,86 @@ def test_create_app_is_quiet_when_requests_can_succeed(monkeypatch, caplog, conf
         create_app(_registry(), **kwargs)
 
     assert _key_warnings(caplog) == []
+
+
+HEADERS = {"X-API-Key": "synthetic-limit-key", "Content-Type": "application/json"}
+
+
+def _client(monkeypatch, store, **kwargs):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv(KEY_ENV, HEADERS["X-API-Key"])
+    return TestClient(create_app(_registry(), profile_store=store, api_role="Admin", **kwargs))
+
+
+def _nested(depth: int) -> str:
+    return "[" * depth + "]" * depth
+
+
+def test_default_body_limit_refuses_an_oversized_request(monkeypatch):
+    store = InMemoryProfileStore()
+    body = '{"profile_id":"big","extra":{"x":"' + "A" * (2 * 1024 * 1024) + '"}}'
+
+    response = _client(monkeypatch, store).post("/profiles", headers=HEADERS, content=body)
+
+    assert response.status_code == 413
+    assert "1048576 bytes" in response.json()["detail"]
+    assert store.list_ids() == []
+
+
+def test_body_limit_counts_a_streamed_body_without_content_length(monkeypatch):
+    store = InMemoryProfileStore()
+    client = _client(monkeypatch, store, max_body_bytes=1024)
+
+    def chunks():
+        yield b'{"profile_id":"streamed","extra":{"x":"'
+        for _ in range(8):
+            yield b"A" * 512
+        yield b'"}}'
+
+    response = client.post("/profiles", headers=HEADERS, content=chunks())
+
+    assert response.status_code == 413
+    assert store.list_ids() == []
+
+
+def test_body_limit_is_configurable_and_allows_requests_within_it(monkeypatch):
+    store = InMemoryProfileStore()
+    client = _client(monkeypatch, store, max_body_bytes=4096)
+    small = '{"profile_id":"small","extra":{"x":"' + "A" * 1024 + '"}}'
+    large = '{"profile_id":"large","extra":{"x":"' + "A" * 8192 + '"}}'
+
+    assert client.post("/profiles", headers=HEADERS, content=small).status_code == 200
+    assert client.post("/profiles", headers=HEADERS, content=large).status_code == 413
+    assert store.list_ids() == ["small"]
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, "1024"])
+def test_body_limit_must_be_a_positive_integer(monkeypatch, limit):
+    monkeypatch.setenv(KEY_ENV, "synthetic-limit-key")
+
+    with pytest.raises(ValueError, match="max_body_bytes"):
+        create_app(_registry(), max_body_bytes=limit)
+
+
+@pytest.mark.parametrize("depth,status", [(32, 200), (33, 422), (500, 422), (5000, 422)])
+def test_profile_extra_nesting_is_limited(monkeypatch, depth, status):
+    store = InMemoryProfileStore()
+    body = '{"profile_id":"deep","extra":{"x":' + _nested(depth - 1) + "}}"
+
+    response = _client(monkeypatch, store).post("/profiles", headers=HEADERS, content=body)
+
+    assert response.status_code == status
+    assert store.list_ids() == (["deep"] if status == 200 else [])
+    if status == 422:
+        assert "extra" in response.json()["detail"]
+
+
+def test_control_value_nesting_is_limited_before_validation(monkeypatch):
+    store = InMemoryProfileStore()
+    body = '{"values":{"banner":' + _nested(500) + "}}"
+
+    response = _client(monkeypatch, store).patch("/controls", headers=HEADERS, content=body)
+
+    assert response.status_code == 422
+    assert "banner" in response.json()["detail"]

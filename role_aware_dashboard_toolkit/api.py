@@ -68,6 +68,7 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
 
 try:
     from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
+    from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -77,6 +78,7 @@ except ImportError as exc:
     Header = None  # type: ignore
     Request = None  # type: ignore
     Response = None  # type: ignore
+    JSONResponse = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -168,6 +170,74 @@ def _require_permission(ctx: SecurityContext, permission: str) -> None:
         raise HTTPException(status_code=403, detail="Forbidden: no permission is declared")
     if not has_perm(ctx, permission):
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
+
+
+_DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+_MAX_JSON_DEPTH = 32
+
+
+def _body_too_large(max_bytes: int) -> str:
+    return f"Request body exceeds the API's limit of {max_bytes} bytes. Nothing was changed."
+
+
+class _RequestBodyLimit:
+    """Refuse a request body over the limit before a route stores or copies it.
+
+    A declared Content-Length over the limit is refused without reading the
+    body; a streamed body is counted as it arrives.
+    """
+
+    def __init__(self, app: Any, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        for name, value in scope.get("headers", ()):
+            if name.lower() == b"content-length" and value.strip().isdigit() and int(value) > self.max_bytes:
+                response = JSONResponse({"detail": _body_too_large(self.max_bytes)}, status_code=413)
+                await response(scope, receive, send)
+                return
+        received = 0
+
+        async def limited_receive() -> Any:
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise HTTPException(status_code=413, detail=_body_too_large(self.max_bytes))
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+def _require_json_depth(value: Any, field_name: str) -> None:
+    """Refuse deeply nested JSON before profile copies or audit records recurse."""
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if not isinstance(item, (dict, list)):
+            continue
+        if depth > _MAX_JSON_DEPTH:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Field '{field_name}' is nested more than {_MAX_JSON_DEPTH} levels deep. "
+                    "Nothing was changed."
+                ),
+            )
+        children = item.values() if isinstance(item, dict) else item
+        pending.extend((child, depth + 1) for child in children)
+
+
+def _validated_body_limit(max_body_bytes: Any) -> int:
+    if (isinstance(max_body_bytes, bool) or not isinstance(max_body_bytes, int)
+            or max_body_bytes <= 0):
+        raise ValueError("max_body_bytes must be a positive whole number of bytes")
+    return max_body_bytes
 
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -394,6 +464,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
         """Update one or more control values. Returns the updated controls."""
         pending_updates = []
         for key, value in req.values.items():
+            _require_json_depth(value, key)
             ctrl = app_state.registry.get(key)
             if ctrl is None:
                 raise HTTPException(
@@ -546,6 +617,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
         profile_id = _canonical_api_profile_id(req.profile_id)
+        _require_json_depth(req.extra, "extra")
         store = _api_profile_store(app_state)
         watch = _ReadErrorWatch(store)
         existing = load_profile_data(profile_id, profile_dir=app_state.profile_dir, store=store)
@@ -663,6 +735,7 @@ def create_app(
     api_role: str | None = None,
     allow_anonymous: bool | None = None,
     anonymous_role: str = _ANONYMOUS_ROLE,
+    max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
 ) -> FastAPI:
     """
     Create a FastAPI app exposing Role-Aware Dashboard Toolkit controls, profiles, and roles.
@@ -678,8 +751,12 @@ def create_app(
 
         app = create_app(reg)
         # Run: uvicorn myapp:app --port 8000
+
+    Request bodies over ``max_body_bytes`` (1 MiB by default) receive HTTP 413,
+    and JSON nested more than 32 levels deep receives HTTP 422.
     """
     _require_fastapi()
+    body_limit = _validated_body_limit(max_body_bytes)
     resolved_api_role = str(api_role or os.getenv(_API_ROLE_ENV, _DEFAULT_AUTHENTICATED_ROLE) or _DEFAULT_AUTHENTICATED_ROLE)
 
     app_state = _AppState(
@@ -710,6 +787,7 @@ def create_app(
         )
 
     app = FastAPI(title=title, version=version)
+    app.add_middleware(_RequestBodyLimit, max_bytes=body_limit)
     require_api_context = _make_require_api_context(app_state)
 
     _register_health_route(app)
