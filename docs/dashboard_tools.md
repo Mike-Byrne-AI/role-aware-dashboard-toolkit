@@ -254,6 +254,19 @@ session, as in the minimal README dashboard, the toggle governs only that
 session's log and other sessions' events do not reach the file. Start each
 session's writer where you create its log if those sessions must be persisted.
 
+### Shut down the writer
+
+Call `audit.stop_writer()` or `cleanup_runtime(audit=audit)` when the host
+shuts down. It drains the queued events, then records `audit_writer_stop` as
+the file's last line. A writer still running at a normal interpreter exit is
+drained the same way, bounded to three seconds, and its stop record has the
+source `atexit`. A killed process (`SIGKILL`, `os._exit`, power loss) loses
+events still queued. When a host drops an `AuditLog` with a running writer,
+the log is collected and its writer drains and exits without a stop record.
+Events logged faster than the writer persists them are queued up to
+`queue_size` (1000 by default); beyond that they are dropped and counted in
+`writer_status()["dropped_events"]`.
+
 ## Plugins
 
 Plugins are trusted in-process Python:

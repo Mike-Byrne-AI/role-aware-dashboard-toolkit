@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import atexit
 import copy
+import functools
 import json
 import logging
 import queue
 import threading
+import weakref
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -176,6 +179,65 @@ def _is_well_formed_audit_event(event: Any) -> bool:
     )
 
 
+def _run_writer_loop(
+    owner_ref: Any,
+    queue_ref: queue.Queue,
+    store: BaseAuditStore,
+    stop_event: threading.Event,
+) -> None:
+    """Persist queued events until stopped and drained.
+
+    The loop holds only a weak reference to its ``AuditLog``, so a log the
+    host drops can be collected; its finalizer then stops this thread.
+    """
+    while True:
+        try:
+            item = queue_ref.get(timeout=0.2)
+        except queue.Empty:
+            if stop_event.is_set():
+                break
+            continue
+        try:
+            store.append(item)
+        except Exception as exc:
+            owner = owner_ref()
+            if owner is not None:
+                owner._record_writer_error(exc)
+            del owner
+
+
+def _abandon_writer(stop_event: threading.Event, exit_hook: Any) -> None:
+    """Finalizer for a collected ``AuditLog``: let its thread drain and exit."""
+    stop_event.set()
+    atexit.unregister(exit_hook)
+
+
+def _drain_writer_at_exit(
+    owner_ref: Any, writer_thread: threading.Thread, stop_event: threading.Event,
+) -> None:
+    """Bounded drain at interpreter exit for a writer nobody stopped."""
+    owner = owner_ref()
+    if owner is not None and owner._writer_lock.acquire(timeout=_WRITER_STOP_TIMEOUT_SECONDS):
+        try:
+            if owner._writer_thread is writer_thread:
+                owner._stop_writer_locked(_lifecycle_attribution("", "atexit", "", ""))
+        except Exception as exc:
+            _LOGGER.warning(
+                "Audit writer could not be drained at exit (%s: %s)",
+                type(exc).__name__,
+                _safe_writer_error_message(exc),
+            )
+        finally:
+            owner._writer_lock.release()
+        # A replaced writer is not this hook's to stop: the shared stop event
+        # would end the current one.
+        return
+    del owner
+    # The log is gone or its lock is held: stop this thread without recording.
+    stop_event.set()
+    writer_thread.join(timeout=_WRITER_STOP_TIMEOUT_SECONDS)
+
+
 def _lifecycle_attribution(
     role: Any, source: Any, user_id: Any, session_id: Any,
 ) -> dict[str, str]:
@@ -240,6 +302,8 @@ class AuditLog:
         self._writer_stop = threading.Event()
         self._writer_store: BaseAuditStore | None = None
         self._writer_path: str | None = None
+        self._writer_exit_hook: Any = None
+        self._writer_finalizer: weakref.finalize | None = None
         self.dropped: int = 0
         self._writer_error_count: int = 0
         self._last_writer_error: dict[str, str] = {}
@@ -471,7 +535,12 @@ class AuditLog:
             try:
                 writer_store = FileAuditStore(path)
                 writer_queue = queue.Queue(maxsize=queue_size)
-                writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+                writer_thread = threading.Thread(
+                    target=_run_writer_loop,
+                    args=(weakref.ref(self), writer_queue, writer_store, self._writer_stop),
+                    name="radt-audit-writer",
+                    daemon=True,
+                )
             except Exception as exc:
                 self._writer_stop.set()
                 self._clear_writer_state_locked()
@@ -489,9 +558,23 @@ class AuditLog:
                 self._rollback_failed_writer_start_locked(writer_thread)
                 self._record_writer_startup_error(exc)
                 raise
+            self._register_writer_shutdown_locked(writer_thread)
             # The first line this writer persists names who started it.
             self._log_lifecycle_locked("audit_writer_start", path, attribution)
             return True
+
+    def _register_writer_shutdown_locked(self, writer_thread: threading.Thread) -> None:
+        # A daemon thread is killed at exit with events still queued: drain it
+        # (bounded) unless stop_writer() ran first. Neither hook keeps this log
+        # alive, so a dropped log is collected and its finalizer stops the thread.
+        exit_hook = functools.partial(
+            _drain_writer_at_exit, weakref.ref(self), writer_thread, self._writer_stop,
+        )
+        atexit.register(exit_hook)
+        finalizer = weakref.finalize(self, _abandon_writer, self._writer_stop, exit_hook)
+        finalizer.atexit = False
+        self._writer_exit_hook = exit_hook
+        self._writer_finalizer = finalizer
 
     def stop_writer(
         self,
@@ -545,6 +628,12 @@ class AuditLog:
         self._writer_queue = None
         self._writer_store = None
         self._writer_path = None
+        if self._writer_finalizer is not None:
+            self._writer_finalizer.detach()
+            self._writer_finalizer = None
+        if self._writer_exit_hook is not None:
+            atexit.unregister(self._writer_exit_hook)
+            self._writer_exit_hook = None
 
     def _rollback_failed_writer_start_locked(
         self, writer_thread: threading.Thread
@@ -591,17 +680,7 @@ class AuditLog:
         store = self._writer_store
         if queue_ref is None or store is None:
             return
-        while True:
-            try:
-                item = queue_ref.get(timeout=0.2)
-            except queue.Empty:
-                if self._writer_stop.is_set():
-                    break
-                continue
-            try:
-                store.append(item)
-            except Exception as exc:
-                self._record_writer_error(exc)
+        _run_writer_loop(weakref.ref(self), queue_ref, store, self._writer_stop)
 
     def _record_writer_error(self, exc: Exception) -> dict[str, str]:
         record = {
