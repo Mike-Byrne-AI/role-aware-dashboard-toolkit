@@ -85,6 +85,9 @@ Useful `DashboardConfig` collaborators include:
 - `observability` for telemetry sampling
 - `run_store` for run/checkpoint panels
 - explicit team, decision, memory, case, and governance stores
+- `auth_mode="demo"` for the local demo where each user picks a role; it is
+  required when neither `access` nor `auth_hook` is given, so a missing access
+  policy never falls back to the demo
 - `access` and `auth_mode="authenticated"` for verified identity, assigned roles,
   and shared freeze
 - `auth_hook` for existing host-managed role integrations

@@ -24,7 +24,9 @@ config = radt.DashboardConfig(auth_mode="demo", registry=registry, custom_roles=
 
 Custom definitions extend/override named built-in roles; they do not remove
 other built-ins. A custom permission is not automatically granted to Admin:
-define that grant explicitly when the application needs it.
+define that grant explicitly when the application needs it. Permission values
+must be `True` or `False`; other values raise `TypeError`, and only an explicit
+`True` grants.
 
 A registered control requires its declared permission and an enabled writable
 switch. Native profile loads and replays check every affected control before
