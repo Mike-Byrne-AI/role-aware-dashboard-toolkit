@@ -1501,7 +1501,10 @@ class TestDashboardPanels:
         allowed_ctx = make_security_context("Admin", {"can_manage_audit": True})
         dashboard_panels.render_audit_panel(fake_st, audit, allowed_ctx)
 
-        assert audit.all_events() == []
+        # Clearing leaves one attributed record of the clear.
+        assert [(e["type"], e["old"], e["role"]) for e in audit.all_events()] == [
+            ("audit_cleared", 1, "Admin"),
+        ]
         assert fake_st.rerun_calls == 1
         assert fake_st.button_calls[-1] == {
             "key": "_radt_audit_clear_btn",

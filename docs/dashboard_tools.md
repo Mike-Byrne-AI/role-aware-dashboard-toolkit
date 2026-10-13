@@ -190,6 +190,11 @@ while `can_manage_audit` permits clearing the in-memory log and changing the
 JSONL writer lifecycle. The built-in `Admin` role is the only role granted
 `can_manage_audit`; custom roles must opt in explicitly.
 
+The JSONL file is append-only; the in-memory view is bounded and clearable.
+`AuditLog.clear()` records an `audit_cleared` event (`old` holds the number of
+events cleared) as the view's first entry and sends it to a running writer, so
+the file shows who cleared the view and when. The file is never truncated.
+
 The audit CSV download is a spreadsheet-oriented view: fields are quoted and
 formula-like text is prefixed with an apostrophe, including formula prefixes
 after whitespace or Unicode formatting characters. This formula escaping changes

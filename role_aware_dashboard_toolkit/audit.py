@@ -290,7 +290,11 @@ def audit_event_view(event: Any) -> dict[str, Any]:
 
 
 class AuditLog:
-    """Append-only event log with in-memory history and optional JSONL persistence writer."""
+    """Audit events with a bounded in-memory view and an optional JSONL writer.
+
+    The JSONL file is append-only. The in-memory view keeps the newest
+    ``max_events`` and can be cleared; a clear records ``audit_cleared``.
+    """
 
     def __init__(self, max_events: int = 500) -> None:
         self._events: list[Any] = []
@@ -387,9 +391,34 @@ class AuditLog:
         with self._lock:
             return copy.deepcopy(self._events)
 
-    def clear(self) -> None:
-        with self._lock:
-            self._events.clear()
+    def clear(
+        self,
+        *,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> int:
+        """Empty the in-memory view and record an ``audit_cleared`` event.
+
+        The record (``old`` = events cleared, ``new`` = 0) stays as the view's
+        first entry and also goes to a running writer. The JSONL file is never
+        truncated. Returns the number of events cleared.
+        """
+        attribution = _lifecycle_attribution(role, source, user_id, session_id)
+        with self._writer_lock:
+            with self._lock:
+                cleared = len(self._events)
+                self._events.clear()
+            evt = _make_event(
+                "audit_cleared",
+                old_value=cleared,
+                new_value=0,
+                detail="in-memory audit history cleared",
+                **attribution,
+            )
+            self._store_event(redact_audit_event(evt), writer_locked=True)
+        return cleared
 
     def filter_events(
         self,

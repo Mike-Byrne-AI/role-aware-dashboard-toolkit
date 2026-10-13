@@ -13,7 +13,7 @@ from ._optional_pandas import load_optional_pandas
 from ._record_projection import project_audit_events, project_record
 from ._ui_state import last_authorized_control_value, remember_authorized_control_values
 from .appearance import group_background_color, styled_group_container
-from .audit import audit_event_view
+from .audit import _ui_attribution, audit_event_view
 from .controls import ControlDef, _looks_like_hex_color, _looks_like_int, _numeric_bounds, _validate_numeric_configuration
 from .diagnostics import attach_diagnostic, diagnostic_text
 from .security import SecurityContext, can_write, can_mutate
@@ -92,7 +92,7 @@ def render_audit_panel(
                 disabled=not can_clear,
             )
             if clear_requested and can_mutate(ctx, "can_manage_audit"):
-                audit.clear()
+                audit.clear(**_ui_attribution(audit, ctx))
                 st.rerun()
             return
 
@@ -111,7 +111,7 @@ def render_audit_panel(
                 disabled=not can_clear,
             )
             if clear_requested and can_mutate(ctx, "can_manage_audit"):
-                audit.clear()
+                audit.clear(**_ui_attribution(audit, ctx))
                 st.rerun()
 
         source_events = project_audit_events(audit.all_events(), registry) if hasattr(audit, "all_events") else events

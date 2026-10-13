@@ -123,7 +123,9 @@ def test_view_delegates_existing_read_retention_and_clear_behavior():
     copied[0]["user_id"] = "changed"
     assert parent.all_events()[0]["user_id"] == USER_A
     view.clear()
-    assert len(parent) == len(view) == 0
+    # The clear leaves one record of itself in the shared view.
+    assert len(parent) == len(view) == 1
+    assert [event["type"] for event in parent.all_events()] == ["audit_cleared"]
 
 
 def test_writer_lifecycle_delegates_to_shared_parent_and_persists_actor(tmp_path):
