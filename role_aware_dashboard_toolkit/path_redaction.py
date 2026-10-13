@@ -627,14 +627,41 @@ def _redact_text_local_paths(
     )
 
 
+def _ends_line(value: str, index: int) -> bool:
+    """Return whether the character at ``index`` ends a line for every path form.
+
+    A quoted path body continues past a carriage return escaped by an odd
+    run of backslashes, so only an unescaped CR, or any LF, ends a line.
+    """
+    char = value[index]
+    if char == "\n":
+        return True
+    if char != "\r":
+        return False
+    run_start = index
+    while run_start > 0 and value[run_start - 1] == "\\":
+        run_start -= 1
+    backslashes = index - run_start
+    return backslashes % 2 == 0
+
+
 def _scan_cut(value: str, limit: int) -> int:
     """Return where to cut an oversize string: the start of the line crossing ``limit``.
 
-    A line that ends exactly at the limit is complete and is kept.
+    A line that ends exactly at the limit is complete and is kept. Each
+    backslash run is counted only for the CR it precedes, so this stays linear.
     """
-    if value[limit] in "\r\n":
+    if _ends_line(value, limit):
         return limit
-    return max(value.rfind("\n", 0, limit), value.rfind("\r", 0, limit)) + 1
+    newline = value.rfind("\n", 0, limit)
+    position = limit
+    while True:
+        carriage_return = value.rfind("\r", newline + 1, position)
+        if carriage_return < 0:
+            return newline + 1
+        if _ends_line(value, carriage_return):
+            return carriage_return + 1
+        position = carriage_return
 
 
 def _decode_url_field(value: str) -> str:

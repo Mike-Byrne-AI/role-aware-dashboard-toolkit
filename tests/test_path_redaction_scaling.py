@@ -169,3 +169,22 @@ def test_comma_joined_repo_paths_scan_in_linear_time(monkeypatch):
 
     assert sum(resolved) <= 3 * len(text), f"resolved {sum(resolved) / len(text):.1f}x the text"
     assert elapsed < _COMMA_RUN_BOUND_SECONDS, f"redaction took {elapsed:.2f}s for {len(text)} characters"
+
+
+def test_an_escaped_carriage_return_inside_quotes_is_not_a_cut_point(monkeypatch):
+    # A quoted body continues past a backslash-escaped CR, so cutting after
+    # that CR split the quoted path and leaked the part before the cut.
+    head = "ok\n"
+    line = '"C:\\Users\\alice smith\\pay roll\\\r' + "z" * 60 + '" tail'
+    monkeypatch.setattr(path_redaction, "_MAX_SCAN_CHARACTERS", len(head) + line.index("\r") + 5, raising=False)
+
+    redacted = redact_text_local_paths(head + line)
+
+    assert redacted == f"ok\n<redacted-oversize-text: {len(line)} characters omitted>"
+
+
+def test_an_unescaped_carriage_return_still_ends_a_line(monkeypatch):
+    # Two backslashes escape each other, so the CR after them is a line end.
+    monkeypatch.setattr(path_redaction, "_MAX_SCAN_CHARACTERS", 10, raising=False)
+
+    assert redact_text_local_paths("ab\\\\\rcdefghijkl") == "ab\\\\\r<redacted-oversize-text: 10 characters omitted>"
