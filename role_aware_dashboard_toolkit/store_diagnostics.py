@@ -703,6 +703,12 @@ def _append_validated_store_text(
             raise StorePathSecurityError(_STORE_RECORD_APPEND_CHANGED_MESSAGE)
 
         payload = text.replace("\n", os.linesep).encode("utf-8")
+        if not _store_file_ends_at_line_boundary(path, opened_stat):
+            # A failed short write or a crash left a torn last line. Start
+            # this record on its own line so it stays readable; the torn line
+            # remains for read diagnostics. Truncating it instead could drop
+            # another appender's complete line written after it.
+            payload = os.linesep.encode("utf-8") + payload
         _write_all_store_bytes(fd, payload)
     except BaseException as exc:
         primary_error = exc
@@ -710,6 +716,35 @@ def _append_validated_store_text(
     finally:
         if fd is not None:
             _close_store_record_descriptor(fd, primary_error)
+
+
+def _store_file_ends_at_line_boundary(path: Path, opened_stat: os.stat_result) -> bool:
+    """Report whether an append target is empty or ends with a newline.
+
+    Reads the last byte through a separate read-only descriptor of the same
+    file. When the tail cannot be read (for example a write-only file), keep
+    the previous behaviour and append without a separator.
+    """
+    if opened_stat.st_size <= 0:
+        return True
+    fd: int | None = None
+    try:
+        fd = os.open(path, _STORE_RECORD_OPEN_FLAGS)
+        tail_stat = os.fstat(fd)
+        if not _same_stable_store_file_identity(opened_stat, tail_stat):
+            return True
+        if tail_stat.st_size <= 0:
+            return True
+        os.lseek(fd, -1, os.SEEK_END)
+        return os.read(fd, 1) == b"\n"
+    except OSError:
+        return True
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _write_all_store_bytes(fd: int, payload: bytes) -> None:

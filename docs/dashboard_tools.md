@@ -218,7 +218,10 @@ print(audit.recent(10))
 ```
 
 Persistence failures remain visible through writer status and runtime
-diagnostics; in-memory events stay available.
+diagnostics; in-memory events stay available. If an append fails partway (a
+full disk) or a process dies mid-append, the next event starts on a new line;
+`FileAuditStore.read_all()` skips the torn line and reports it in
+`read_errors`.
 
 ### Persist every session's events
 
