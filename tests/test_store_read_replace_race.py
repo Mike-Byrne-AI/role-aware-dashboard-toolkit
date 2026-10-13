@@ -11,15 +11,21 @@ from role_aware_dashboard_toolkit.profile_store import FileProfileStore
 def _racing_open(monkeypatch, target: Path, replace_times: int, root: Path):
     real_open = os.open
     replaced: list[int] = []
+    writing: list[bool] = []
 
     def racing_open(path, flags, *args, **kwargs):
-        if Path(path) == target and len(replaced) < replace_times:
+        if Path(path) == target and len(replaced) < replace_times and not writing:
             # Another writer atomically replaces the record after the reader
-            # validated it and before the reader opens it.
+            # validated it and before the reader opens it. That writer's own
+            # reads of the record (its overwrite check) are not raced.
             replaced.append(len(replaced))
-            FileProfileStore(str(root)).save(
-                {"profile_id": "ops", "values": {"v": 100 + len(replaced)}}
-            )
+            writing.append(True)
+            try:
+                FileProfileStore(str(root)).save(
+                    {"profile_id": "ops", "values": {"v": 100 + len(replaced)}}
+                )
+            finally:
+                writing.pop()
         return real_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(store_diagnostics.os, "open", racing_open)
