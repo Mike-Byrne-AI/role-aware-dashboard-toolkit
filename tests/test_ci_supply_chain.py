@@ -115,7 +115,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert "permissions:\n  contents: read\n" in workflow
     assert "    permissions: {}\n" in workflow
     for forbidden in (
-        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "pull_request_target", "secrets.", "vars.", "RELEASE_CI_APPROVED_SHA", "contents: write",
         "id-token:", "continue-on-error", "twine upload", "actions/cache@",
     ):
         assert forbidden not in workflow
@@ -196,7 +196,7 @@ def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
     assert "permissions:\n  contents: read\n" in workflow
     assert "    permissions: {}\n" in workflow
     for forbidden in (
-        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "pull_request_target", "secrets.", "vars.", "RELEASE_CI_APPROVED_SHA", "contents: write",
         "id-token:", "continue-on-error", "twine upload", "actions/cache@",
     ):
         assert forbidden not in workflow
@@ -271,11 +271,11 @@ def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
     assert {name for name, _block in job_blocks} == set(expected_timeouts)
     for name, block in job_blocks:
         guards = re.findall(r"^    if:\s*(.+)$", block, flags=re.MULTILINE)
-        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}"], name
+        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}"], name
         assert re.findall(r"^    timeout-minutes: (\d+)$", block, flags=re.MULTILINE) == [str(expected_timeouts[name])]
     assert "permissions:\n  contents: read\n" in workflow
     assert len(re.findall(r"^\s*permissions:", workflow, flags=re.MULTILINE)) == 1
-    assert "concurrency:\n  group: xl422-candidate-validation\n  cancel-in-progress: false\n" in workflow
+    assert "concurrency:\n  group: release-candidate-validation\n  cancel-in-progress: false\n" in workflow
     assert "continue-on-error" not in workflow
     assert not re.search(r"^        if:", workflow, flags=re.MULTILINE)
     assert workflow.count("          retention-days: 1\n") == ACTION_PINS["actions/upload-artifact"][2]

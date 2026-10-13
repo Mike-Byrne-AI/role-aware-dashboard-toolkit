@@ -64,7 +64,7 @@ def test_ci_release_candidate_lane_is_non_publish_and_uploads_evidence():
     assert "id-token: write" not in workflow
     assert "packages: write" not in workflow
 
-    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}\n" in job
+    assert "\n    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}\n" in job
     assert "needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]" in job
     assert (
         "python tools/pre_release_check.py --json --require-clean "
@@ -396,7 +396,12 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "check out the final remote `main` commit in a clean release checkout" in staging
     assert "repeat the local source checks, artifact build, audits, and install smokes" in staging
     assert "Pull-request-head evidence does not certify a different merge commit." in staging
-    assert "public without changing `main` or adding a metadata commit" in runbook
+    assert "without changing `main` or adding a metadata commit" in runbook
+    assert runbook.splitlines()[2].startswith("**Maintainer-only.**")
+    assert "private repository" not in staging
+    assert "remains private" not in staging
+    for document in (runbook, checklist):
+        assert "`RELEASE_CI_APPROVED_SHA`" in document
     assert "No PyPI name ownership, reservation, or publishing authority is claimed." in runbook
     assert "live_validation_required" in runbook
     assert "twine upload" not in runbook

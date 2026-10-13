@@ -1,10 +1,11 @@
 # Release publication runbook
 
-This runbook prepares a GitHub-source release at
+**Maintainer-only.** This runbook prepares a GitHub-source release of
 [Mike-Byrne-AI/role-aware-dashboard-toolkit](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit).
-Use the existing private repository for staging and verify its identity and
-visibility before making changes. Completing local preparation does not authorize
-repository creation, network pushes, hosted CI, merging, or publication.
+Contributors do not need it; see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Completing local preparation does not authorize network pushes, merging,
+hosted release CI, tagging, or publication; each needs a separate maintainer
+decision.
 
 ## Freeze the source identity
 
@@ -72,11 +73,10 @@ digest mismatches, and checks per-file hashes before and after its install
 smokes. The evidence job requires the Windows receipt to match its source SHA,
 run identifier, run attempt, and artifact hashes before recording a candidate.
 
-## Stage on a private GitHub repository
+## Stage through a pull request
 
-After separate authorization, use the private repository at the configured
-destination. If it does not exist, creating it also requires authorization.
-Push the reviewed candidate branch and open a pull request targeting `main`.
+Pushing and merging each need separate authorization. Push the reviewed
+candidate branch and open a pull request targeting `main`.
 Require the protected-branch checks and an up-to-date branch before an authorized
 merge. Review the commits and refs being introduced; keep application data and
 unrelated history outside the public source.
@@ -85,8 +85,8 @@ After merging, check out the final remote `main` commit in a clean release
 checkout. If the merge or rebase changed the SHA, capture that final SHA as
 `$releaseCommit` and repeat the local source checks, artifact build, audits, and
 install smokes above for that commit. Pull-request-head evidence does not certify
-a different merge commit. Confirm remote `main` equals `$releaseCommit` and the
-repository remains private. Do not add another metadata commit before the hosted run.
+a different merge commit. Confirm remote `main` equals `$releaseCommit`. Do not
+add another metadata commit before the hosted run.
 
 Check branch protection using live GitHub evidence: require the stable
 `contributor-checks` status from `contributor-ci.yml` and `dependency-checks`
@@ -96,16 +96,15 @@ Contributor CI runs on pull requests and pushes to `main` without the release
 approval variable. Keep the manually gated release jobs separate from required
 PR status checks. Verify the intended security settings as well.
 
-GitHub private vulnerability reporting is a public-repository
-feature: record the configured policy before the visibility change, then
-verify activation and the public form immediately afterward. Check the
-maintainer's notification configuration without describing it as proof of
-message delivery or a response-time commitment.
+Verify that GitHub private vulnerability reporting is still enabled and its
+public form is reachable. Check the maintainer's notification configuration
+without describing it as proof of message delivery or a response-time
+commitment.
 
 ## Run CI on the final main commit
 
 Only after authorization to consume hosted CI, set the repository variable
-`XL422_CI_APPROVED_SHA` to the full `$releaseCommit` and manually dispatch the
+`RELEASE_CI_APPROVED_SHA` to the full `$releaseCommit` and manually dispatch the
 workflow on `main`. The workflow permits only `candidate` or `main`, an exact
 approved SHA, and `workflow_dispatch`; push and pull-request events do not
 start this release workflow. Leave the variable unset until the approved run
@@ -123,16 +122,17 @@ checks affected by it. Never reuse hosted evidence from an older SHA or attempt.
 
 ## Publish the same commit
 
-After a separate visibility-change approval, verify private staging, required
-branch protections, hosted evidence, and artifact identity. Make the repository
-public without changing `main` or adding a metadata commit. Confirm the public
-URLs are anonymously reachable at the approved SHA. Verify GitHub private
-vulnerability reporting is enabled, its public reporting form is reachable,
-and the maintainer's security notification configuration is set.
+After a separate publication approval, verify the required branch protections,
+hosted evidence, and artifact identity. Tag `$releaseCommit` and publish the
+GitHub release from that tag
+without changing `main` or adding a metadata commit. Confirm the release and
+source URLs are anonymously reachable at the approved SHA. Verify GitHub private vulnerability reporting is enabled, its
+public reporting form is reachable, and the maintainer's security notification
+configuration is set.
 
 If a live requirement is unavailable, record the failure and resolve it;
-do not claim publication is complete. The visibility change itself does not
-require a second CI run when the source SHA and workflow are unchanged.
+do not claim publication is complete. Publishing the release does not require
+a second CI run when the source SHA and workflow are unchanged.
 
 ## Separate package-index release
 

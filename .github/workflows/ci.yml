@@ -15,14 +15,14 @@ env:
   PYTHONDONTWRITEBYTECODE: "1"
 
 concurrency:
-  group: xl422-candidate-validation
+  group: release-candidate-validation
   cancel-in-progress: false
 
 jobs:
   test:
     name: test (${{ matrix.python-version }})
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -44,7 +44,7 @@ jobs:
 
   coverage-gate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -63,7 +63,7 @@ jobs:
 
   packaging-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -449,7 +449,7 @@ jobs:
           retention-days: 1
   release-candidate:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     needs: [test, coverage-gate, packaging-release-smoke, windows-release-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -643,7 +643,7 @@ jobs:
           retention-days: 1
   windows-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
     needs: [packaging-release-smoke]
     runs-on: windows-latest
     timeout-minutes: 20

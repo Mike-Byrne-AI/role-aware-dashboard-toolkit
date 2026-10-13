@@ -1,14 +1,14 @@
 # Release checklist
 
-Use this checklist for the GitHub-source release channel. Package-index
-publication is a separate future decision.
+**Maintainer-only.** Use this checklist for the GitHub-source release channel.
+Contributors do not need it. Package-index publication is a separate future
+decision.
 
 ## Public metadata
 
 - `pyproject.toml` version matches `role_aware_dashboard_toolkit/version.py` and the changelog
 - repository, issues, documentation, and homepage URLs match the configured
-  `Mike-Byrne-AI/role-aware-dashboard-toolkit` destination; they remain planned
-  coordinates until the repository is reachable
+  `Mike-Byrne-AI/role-aware-dashboard-toolkit` repository
 - `[tool.role_aware_dashboard_toolkit.release]` selects `github-source`, names
   the repository, and sets `package-index-publication = false`
 - `SECURITY.md` documents the configured GitHub private vulnerability reporting
@@ -91,7 +91,7 @@ provider or deployment acceptance.
 
 Release CI is manual-only and unarmed by default. It requires
 `workflow_dispatch`, a `candidate` or `main` ref, and the repository variable
-`XL422_CI_APPROVED_SHA` equal to that run's exact commit SHA. Setting the
+`RELEASE_CI_APPROVED_SHA` equal to that run's exact commit SHA. Setting the
 variable and dispatching a run require separate maintainer authorization.
 The dedicated `coverage-gate` job keeps coverage instrumentation out of the
 ordinary Python matrix. Local verification does not establish hosted success.
@@ -176,6 +176,8 @@ responsibilities described in the authentication guide.
 - SHA-256 digests are recorded for every uploaded artifact, along with the
   source commit, branch, run identifier, and run attempt
 - live repository settings and evidence refer to that same final commit
-- public visibility is changed without a subsequent metadata commit
+- the release tag names that same final commit, with no subsequent metadata
+  commit
 
-Continue with [release_runbook.md](release_runbook.md) for the staged launch.
+Continue with [release_runbook.md](release_runbook.md) for staging and
+publication.
