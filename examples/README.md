@@ -9,10 +9,16 @@ surface.
 Admin sees A/B/C, AOnly sees A, AB sees A/B, and COnly sees C. Protected reads
 and the admin action recheck server-owned grants. The authenticated entry point
 requires OIDC and explicit provisioning; the separate simulation lets you try
-all roles with invented records:
+all roles with invented records. From the repository root, in PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run examples/section_access/demo.py --server.address 127.0.0.1
+```
+
+In bash or zsh:
+
+```bash
+.venv/bin/python -m streamlit run examples/section_access/demo.py --server.address 127.0.0.1
 ```
 
 The simulation's account selector is deliberately open and must stay local.
@@ -23,10 +29,17 @@ Use `app.py` and the linked setup instructions for actual authenticated access.
 [Operator Review Lab](operator_review/README.md) connects a saved baseline,
 synthetic AI settings, timestamped outcome comparisons, an explicit human
 decision, and a portable read-only HTML report. It requires no model account or
-external service. Start here to see the control and review pieces work together:
+external service. Start here to see the control and review pieces work together.
+In PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
+```
+
+In bash or zsh:
+
+```bash
+.venv/bin/python -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
 ```
 
 Its metrics are teaching formulas, not performance measurements. Role selection

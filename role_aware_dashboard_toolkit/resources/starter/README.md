@@ -8,13 +8,24 @@ and audit history. It uses the installed Role-Aware Dashboard Toolkit package.
 Install the toolkit's `workbench` extra in the environment that will run this
 dashboard. It applies the supported Streamlit and server dependency requirements.
 From this application directory, replace the example path below with the absolute
-path to your reviewed toolkit source checkout:
+path to your reviewed toolkit source checkout. In PowerShell on Windows:
 
 ```powershell
 python -m pip install "C:\path\to\role-aware-dashboard-toolkit[workbench]"
 python -m pip check
 python -m streamlit run app.py
 ```
+
+In bash or zsh on macOS or Linux:
+
+```bash
+python -m pip install "/path/to/role-aware-dashboard-toolkit[workbench]"
+python -m pip check
+python -m streamlit run app.py
+```
+
+`python` means the environment's interpreter; without an active environment,
+use its path (for example `.venv/bin/python` or `.\.venv\Scripts\python.exe`).
 
 Alternatively, pass the absolute filename of your reviewed local toolkit wheel
 with `[workbench]` appended to the same `pip install` command. Both forms apply
@@ -57,7 +68,7 @@ does not automatically write these records to disk.
 Keep stable field keys when renaming labels. The chart color field affects the
 chart only. Group overrides use exact group names.
 
-```powershell
+```shell
 python -m role_aware_dashboard_toolkit guide
 python -m role_aware_dashboard_toolkit guide appearance
 python -m role_aware_dashboard_toolkit inspect --format json
