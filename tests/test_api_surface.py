@@ -545,8 +545,10 @@ def test_api_numeric_update_cannot_store_or_emit_nonfinite_values(api_registry, 
         )
         for response in responses
     ]
-    assert decoded[0] == {
-        "detail": "Control 'temp' needs a finite number. Nothing was changed.",
+    # "NaN" and "Infinity" strings are not JSON numbers; 1e9999 parses as infinity.
+    assert decoded[0]["detail"] in {
+        "Control 'temp' needs a number. Nothing was changed.",
+        "Control 'temp' needs a finite number. Nothing was changed.",
     }
     assert decoded[1]["value"] == 0.5
     assert math.isfinite(decoded[1]["value"])

@@ -185,3 +185,35 @@ def test_profile_activation_still_repairs_a_stale_profile(typed_api):
     assert values["maint"] is False
     assert values["accent"] == "#112233"
     assert [event["type"] for event in audit.all_events()] == ["profile_load"]
+
+
+@pytest.mark.parametrize("value", [9007199254740993, "9007199254740993", "1_000", "0x10", " 1e3 x"])
+def test_api_refuses_integers_it_cannot_store_exactly_and_non_json_numbers(value):
+    from fastapi.testclient import TestClient
+
+    registry = ControlRegistry()
+    registry.register("Sequence", kind="number", key="sequence", default=0,
+                      min_value=0, max_value=2**62, step=1)
+    audit = AuditLog()
+    with TestClient(create_app(registry, audit=audit, api_role="Admin")) as client:
+        response = client.patch("/controls", headers=HEADERS, json={"values": {"sequence": value}})
+        current = client.get("/controls/sequence", headers=HEADERS).json()["value"]
+
+    assert response.status_code == 422
+    assert "Control 'sequence'" in response.json()["detail"]
+    assert current == 0
+    assert audit.all_events() == []
+
+
+@pytest.mark.parametrize("value,stored", [(9007199254740992, 9007199254740992), ("-12", None), ("1000", 1000)])
+def test_api_keeps_large_and_string_integers_exactly(value, stored):
+    from fastapi.testclient import TestClient
+
+    registry = ControlRegistry()
+    registry.register("Sequence", kind="number", key="sequence", default=0,
+                      min_value=-100, max_value=2**62, step=1)
+    with TestClient(create_app(registry, api_role="Admin")) as client:
+        response = client.patch("/controls", headers=HEADERS, json={"values": {"sequence": value}})
+
+    assert response.status_code == 200
+    assert response.json()[0]["value"] == (int(value) if stored is None else stored)

@@ -15,6 +15,7 @@ from __future__ import annotations
 from .diagnostics import attach_diagnostic
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 from collections.abc import Callable, Sequence
@@ -337,6 +338,9 @@ class _RejectedControlValue(ValueError):
     """
 
 
+# A numeric string must be a JSON number: no "1_000", "0x10", "NaN" or "Infinity".
+_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+_JSON_INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)")
 _TOGGLE_TEXT = {"1": True, "true": True, "yes": True, "on": True,
                 "0": False, "false": False, "no": False, "off": False}
 
@@ -377,17 +381,22 @@ def _exact_control_value(ctrl: ControlDef, value: Any) -> Any:
     return sanitized
 
 
-def _exact_numeric(ctrl: ControlDef, value: Any) -> float:
-    try:
-        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-            raise ValueError
-        num = float(value)
-    except (ValueError, OverflowError):
-        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number") from None
-    if not math.isfinite(num):
+def _exact_numeric(ctrl: ControlDef, value: Any) -> int | float:
+    if isinstance(value, str):
+        text = value.strip()
+        if not _JSON_NUMBER.fullmatch(text):
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number")
+        try:
+            value = int(text) if _JSON_INTEGER.fullmatch(text) else float(text)
+        except ValueError:  # an integer string beyond Python's digit limit
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number") from None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number")
+    if isinstance(value, float) and not math.isfinite(value):
         raise _RejectedControlValue(f"Control '{ctrl.key}' needs a finite number")
+    # Python compares int and float exactly, so large integers are not rounded here.
     min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
-    if (min_value is not None and num < min_value) or (max_value is not None and num > max_value):
+    if (min_value is not None and value < min_value) or (max_value is not None and value > max_value):
         if min_value is not None and max_value is not None:
             limits = f"from {_bound_text(min_value)} to {_bound_text(max_value)}"
         elif min_value is not None:
@@ -395,9 +404,21 @@ def _exact_numeric(ctrl: ControlDef, value: Any) -> float:
         else:
             limits = f"of at most {_bound_text(max_value)}"
         raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number {limits}")
-    if _is_integer_control(ctrl) and not num.is_integer():
-        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a whole number")
-    return num
+    if _is_integer_control(ctrl):
+        if isinstance(value, float):
+            if not value.is_integer():
+                raise _RejectedControlValue(f"Control '{ctrl.key}' needs a whole number")
+            value = int(value)
+        return value
+    if isinstance(value, int):
+        try:
+            converted = float(value)
+        except OverflowError:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a finite number") from None
+        if converted != value:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' cannot keep that value unchanged")
+        return converted
+    return value
 
 
 def _bound_text(value: float | None) -> str:

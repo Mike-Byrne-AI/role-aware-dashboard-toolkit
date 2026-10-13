@@ -54,9 +54,10 @@ Control updates are exact: each value is stored as sent, or the whole request
 is refused with HTTP 422 naming the control, before any value or audit event
 changes. The API never substitutes a default or clamps a value.
 
-- `number` and `slider`: a finite JSON number, or a numeric string, within the
-  control's bounds. A `number` control whose default, step and bounds are all
-  whole numbers takes whole numbers only.
+- `number` and `slider`: a finite JSON number, or a string holding one, within
+  the control's bounds. A `number` control whose default, step and bounds are
+  all whole numbers takes whole numbers only, and refuses one too large to keep
+  exactly.
 - `toggle`: `true` or `false`, `0` or `1`, or the strings `true`/`false`,
   `yes`/`no`, `on`/`off`, `1`/`0`.
 - `select`: one of the configured options.
