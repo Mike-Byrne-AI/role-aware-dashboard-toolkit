@@ -199,6 +199,7 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
     {
         ".github/workflows/ci.yml",
         ".github/workflows/contributor-ci.yml",
+        ".github/workflows/dependency-audit.yml",
         ".gitignore",
         "ARCHITECTURE_SCOPE.md",
         "CHANGELOG.md",
@@ -263,6 +264,8 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "schemas/replay.schema.json",
         "schemas/run.schema.json",
         "tools/pre_release_check.py",
+        "tools/audit_dependencies.py",
+        "tools/browser_smoke.py",
     }
 )
 

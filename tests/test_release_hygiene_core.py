@@ -108,8 +108,9 @@ def test_lint_selection_is_explicit_across_ruff_default_changes():
 
 
 def test_ci_and_contributor_commands_disable_bytecode_before_python_startup():
-    workflow = read_ci_workflow()
-    assert re.search(r'^env:\n  PYTHONDONTWRITEBYTECODE: "1"$', workflow, re.MULTILINE)
+    for workflow_name in ("ci.yml", "contributor-ci.yml", "dependency-audit.yml"):
+        workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        assert re.search(r'^env:\n  PYTHONDONTWRITEBYTECODE: "1"$', workflow, re.MULTILINE)
     for relative_path in (
         "CONTRIBUTING.md", "docs/release_checklist.md",
     ):
@@ -317,7 +318,7 @@ def test_ci_proves_declared_python_matrix_and_clean_wheel_import():
     for _indent, block in permission_blocks:
         assert "id-token" not in block
         assert "packages" not in block
-    assert set(versions) == {"3.10", "3.11", "3.12"}
+    assert set(versions) == {"3.10", "3.11", "3.12", "3.13", "3.14"}
     assert "3.9" not in versions
     action_refs = re.findall(r"uses:\s+actions/[^@\s]+@([0-9a-f]+)", workflow)
     assert action_refs
@@ -424,8 +425,12 @@ def test_python_support_policy_is_explicit_and_ci_backed():
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
     }.issubset(classifiers)
-    assert set(versions) == {"3.10", "3.11", "3.12"}
+    assert set(versions) == {"3.10", "3.11", "3.12", "3.13", "3.14"}
+    contributor = (REPO_ROOT / ".github" / "workflows" / "contributor-ci.yml").read_text(encoding="utf-8")
+    assert set(extract_python_matrix_versions(contributor)) == set(versions)
     assert "3.9" not in versions
     assert any(dep.startswith("tomli>=") and "python_version < '3.11'" in dep for dep in dev_deps)
 

@@ -89,7 +89,8 @@ a different merge commit. Confirm remote `main` equals `$releaseCommit` and the
 repository remains private. Do not add another metadata commit before the hosted run.
 
 Check branch protection using live GitHub evidence: require the stable
-`contributor-checks` status from `contributor-ci.yml`, require branches to be
+`contributor-checks` status from `contributor-ci.yml` and `dependency-checks`
+from `dependency-audit.yml`, require branches to be
 up to date before merging, and disable force pushes and branch deletions.
 Contributor CI runs on pull requests and pushes to `main` without the release
 approval variable. Keep the manually gated release jobs separate from required
@@ -110,7 +111,7 @@ approved SHA, and `workflow_dispatch`; push and pull-request events do not
 start this release workflow. Leave the variable unset until the approved run
 is ready. The automatic contributor workflow is independent of this variable.
 
-Require every expected Linux Python 3.10-3.12, coverage, packaging, Windows,
+Require every expected Linux Python 3.10-3.14, coverage, packaging, Windows,
 and release-evidence job and required step to succeed for the same run attempt
 and final SHA. A skipped, cancelled, or merely green-looking incomplete run
 is not proof. Review artifact digests, source SHA, branch, run ID, and attempt.
