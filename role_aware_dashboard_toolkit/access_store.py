@@ -10,12 +10,15 @@ ACL. Python's chmod does not establish equivalent Windows privacy.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import sqlite3
+import sys
 from collections.abc import Iterable
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from itertools import islice
 from pathlib import Path
 from threading import RLock
@@ -53,6 +56,86 @@ class AccessStore(Protocol):
     def compare_and_set_freeze(
         self, frozen: bool, expected_revision: int, changed_by: str
     ) -> FreezeState: ...
+
+
+# macOS <sys/acl.h>: ACL_TYPE_EXTENDED, ACL_FIRST_ENTRY, ACL_NEXT_ENTRY and
+# the ACL_EXTENDED_ALLOW tag.
+_DARWIN_ACL_TYPE_EXTENDED = 0x00000100
+_DARWIN_ACL_FIRST_ENTRY = 0
+_DARWIN_ACL_NEXT_ENTRY = -1
+_DARWIN_ACL_EXTENDED_ALLOW = 1
+_LINUX_ACL_ATTRIBUTES = frozenset({"system.posix_acl_access", "system.posix_acl_default"})
+
+
+@lru_cache(maxsize=1)
+def _darwin_acl_library():
+    import ctypes
+    import ctypes.util
+
+    library = ctypes.CDLL(ctypes.util.find_library("c") or "/usr/lib/libSystem.B.dylib", use_errno=True)
+    library.acl_get_link_np.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    library.acl_get_link_np.restype = ctypes.c_void_p
+    library.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+    library.acl_get_entry.restype = ctypes.c_int
+    library.acl_get_tag_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)]
+    library.acl_get_tag_type.restype = ctypes.c_int
+    library.acl_free.argtypes = [ctypes.c_void_p]
+    library.acl_free.restype = ctypes.c_int
+    return library
+
+
+def _darwin_acl_tags(path: str | os.PathLike[str]) -> list[int]:
+    """Return the tag of each extended ACL entry on ``path`` (not following links)."""
+    import ctypes
+
+    library = _darwin_acl_library()
+    ctypes.set_errno(0)
+    acl = library.acl_get_link_np(os.fsencode(path), _DARWIN_ACL_TYPE_EXTENDED)
+    if not acl:
+        error = ctypes.get_errno()
+        if error == errno.ENOENT:  # no extended ACL
+            return []
+        raise OSError(error, "cannot read the access control list")
+    try:
+        tags: list[int] = []
+        entry = ctypes.c_void_p()
+        which = _DARWIN_ACL_FIRST_ENTRY
+        while library.acl_get_entry(acl, which, ctypes.byref(entry)) == 0:
+            tag = ctypes.c_int()
+            if library.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+                raise OSError(ctypes.get_errno(), "cannot read an access control entry")
+            tags.append(tag.value)
+            which = _DARWIN_ACL_NEXT_ENTRY
+        return tags
+    finally:
+        library.acl_free(acl)
+
+
+def _has_extended_acl(path: str | os.PathLike[str], *, allow_entries_only: bool = False) -> bool:
+    """Return whether ``path`` carries an extended ACL that POSIX modes do not show.
+
+    macOS: any entry of its extended ACL (``ls -le`` lists them); with
+    ``allow_entries_only``, only entries that allow access, so a deny-only ACL
+    such as a home directory's "everyone deny delete" passes. Linux: a POSIX
+    ACL in the ``system.posix_acl_access`` or ``system.posix_acl_default``
+    extended attribute (``getfacl`` shows it); a file system without extended
+    attributes has none. Other platforms report none. An ACL that cannot be
+    read raises OSError, so callers fail closed.
+    """
+    if sys.platform == "darwin":
+        tags = _darwin_acl_tags(path)
+        if allow_entries_only:
+            return _DARWIN_ACL_EXTENDED_ALLOW in tags
+        return bool(tags)
+    if sys.platform.startswith("linux") and not allow_entries_only:
+        try:
+            names = os.listxattr(path, follow_symlinks=False)
+        except OSError as exc:
+            if exc.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+                return False
+            raise
+        return not _LINUX_ACL_ATTRIBUTES.isdisjoint(names)
+    return False
 
 
 _DEFAULT_ROLES = ("Admin", "Operator", "Approver", "Auditor", "Viewer")
@@ -218,6 +301,8 @@ class SQLiteAccessStore:
             if self._path.is_symlink() or not self._path.is_file():
                 raise AccessStoreError()
             if os.name == "posix" and self._path.stat().st_mode & 0o077:
+                raise AccessStoreError()
+            if _has_extended_acl(self._path):
                 raise AccessStoreError()
             connection = sqlite3.connect(
                 self._path.as_uri() + "?mode=rw", uri=True, timeout=5

@@ -19,7 +19,7 @@ from typing import Sequence
 import warnings
 
 from .access import Identity, principal_id
-from .access_store import SQLiteAccessStore
+from .access_store import SQLiteAccessStore, _has_extended_acl
 
 _ROLES = ("Admin", "Operator", "Approver", "Auditor", "Viewer")
 _FAILED = "Provisioning failed"
@@ -45,10 +45,17 @@ _OWNER_MESSAGE = (
 )
 _ANCESTOR_MESSAGE = (
     f"{_FAILED}: another account could replace the protected directory, because "
-    "{path} above it belongs to another account or lets group or other accounts "
-    "write to it. Every directory above the protected directory must belong to this "
+    "{path} above it belongs to another account or lets other accounts write to it "
+    "(through group or other permissions, or an access control list entry that allows "
+    "access). Every directory above the protected directory must belong to this "
     "account or root, and only a root-owned sticky directory such as /tmp may be "
     "group- or world-writable."
+)
+_ACL_MESSAGE = (
+    f"{_FAILED}: "
+    "{what} carries an extended access control list (ACL), which can give other "
+    "accounts access that its permissions do not show. Remove it (macOS: chmod -N; "
+    "Linux: setfacl -b) or use a new protected directory."
 )
 _PERMISSIONS_MESSAGE = (
     f"{_FAILED}: the protected directory allows group or other access. "
@@ -158,7 +165,15 @@ def _changeable_ancestor(path: Path) -> Path | None:
             return parent
         if info.st_mode & 0o022 and not (info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
             return parent
+        # A deny-only ACL (macOS home directories deny "delete") changes nothing.
+        if _has_extended_acl(parent, allow_entries_only=True):
+            return parent
     return None
+
+
+def _refuse_extended_acl(path: Path, what: str) -> None:
+    if _has_extended_acl(path):
+        raise ProvisioningError(_ACL_MESSAGE.format(what=what))
 
 
 def _directory(value: str | Path) -> Path:
@@ -185,6 +200,7 @@ def _directory(value: str | Path) -> Path:
         raise ProvisioningError(_OWNER_MESSAGE)
     if os.name == "posix" and real_info.st_mode & 0o077:
         raise ProvisioningError(_PERMISSIONS_MESSAGE)
+    _refuse_extended_acl(real, "the protected directory")
     return real
 
 
@@ -192,8 +208,9 @@ def read_identity_key(directory: str | Path) -> bytes:
     """Read the host-only binary key from a directory checked like provisioning.
 
     Links a non-root account could change, broad POSIX permissions, a key or
-    directory owned by another account (other than root) and a parent directory
-    another account could change are refused.
+    directory owned by another account (other than root), a parent directory
+    another account could change and an extended ACL on the directory or key
+    (macOS ACLs, Linux POSIX ACLs) are refused.
 
     Windows operators must restrict the directory ACL themselves. This helper
     does not claim that chmod provides equivalent Windows access control.
@@ -211,6 +228,7 @@ def read_identity_key(directory: str | Path) -> bytes:
             or (os.name == "posix" and info.st_mode & 0o077)
         ):
             raise ProvisioningError(_KEY_MESSAGE)
+        _refuse_extended_acl(path, "identity.key")
         with path.open("rb") as handle:
             key = handle.read(4097)
         if not 32 <= len(key) <= 4096:
@@ -291,6 +309,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Created an empty, frozen access store and a private identity key. No users were granted access.")
             return 0
         directory = _directory(args.directory)
+        for name in ("identity.key", "access.sqlite3"):
+            if os.path.lexists(directory / name):
+                _refuse_extended_acl(directory / name, name)
         store = SQLiteAccessStore(directory / "access.sqlite3")
         principal = args.principal or _subject_principal(directory, args.issuer)
         store.replace_grants(principal, args.role if args.command == "grant" else ())

@@ -72,6 +72,10 @@ changes.
   root-owned and sticky (like `/tmp`). Root-owned system links such as macOS
   `/var` and `/tmp` are accepted. Move a protected directory that sits below
   another account's directory or a shared writable one.
+- Provisioning, `read_identity_key` and `SQLiteAccessStore` refuse a protected
+  directory, `identity.key` or `access.sqlite3` that carries an extended ACL
+  (macOS ACLs, Linux POSIX ACLs), and on macOS a parent directory whose ACL
+  allows access. Remove the ACL (`chmod -N` on macOS, `setfacl -b` on Linux).
 - Release CI reads `RELEASE_CI_APPROVED_SHA`; maintainers set it before
   arming a release run.
 

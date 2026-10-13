@@ -97,6 +97,14 @@ every link or reparse point except root-owned POSIX system links (such as macOS
 /var and /tmp) whose directories only root can change. Every directory above the
 protected directory must belong to the operator's account or root, and may be
 group- or world-writable only when it is root-owned and sticky, like /tmp.
+They also refuse an extended access control list (ACL), which POSIX permissions
+do not show, on the protected directory, `identity.key` or `access.sqlite3`:
+macOS ACLs (`ls -le` lists them; remove with `chmod -N`) are read through the
+system ACL library, and Linux POSIX ACLs (`getfacl`; remove with `setfacl -b`)
+are found by their `system.posix_acl_access` and `system.posix_acl_default`
+extended attributes. On macOS a directory above the protected directory may
+carry deny entries, as home directories do, but not entries that allow access.
+ACLs on other platforms, such as NFSv4 ACLs, are not detected.
 Direct SQLite store use checks the database file; the host must also protect its
 directory and ancestors. Windows directory permissions remain
 the operator's responsibility. Files, journals and backups need the same access

@@ -554,3 +554,114 @@ def test_a_writable_directory_after_a_trusted_link_is_refused(private_directory,
     assert "another account" in output.err
     assert str(shared) in output.err
     assert not (protected / "identity.key").exists()
+
+
+# Extended access control lists are not visible in POSIX mode bits. macOS ACLs
+# grant other accounts access whatever the mode, and an inheritable entry on a
+# parent flows into a directory created later, then into its key and database.
+
+def _add_acl_or_skip(path, *, inheritable=False, allow=True):
+    import shutil
+    import subprocess
+
+    if sys.platform == "darwin":
+        flags = ",file_inherit,directory_inherit" if inheritable else ""
+        entry = (
+            f"everyone allow list,search,add_file,add_subdirectory,delete_child,read,write{flags}"
+            if allow else f"everyone deny delete{flags}"
+        )
+        command = ["chmod", "+a", entry, str(path)]
+    elif sys.platform.startswith("linux") and shutil.which("setfacl") and allow:
+        command = ["setfacl", *(["-d"] if inheritable else []), "-m", "u:65534:rwx", str(path)]
+    else:
+        pytest.skip("Needs macOS ACLs or Linux POSIX ACLs (setfacl)")
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        pytest.skip(f"This file system does not take ACLs: {result.stderr.strip()[:80]}")
+
+
+def _remove_acls(*paths):
+    import subprocess
+
+    for path in paths:
+        if sys.platform == "darwin":
+            subprocess.run(["chmod", "-N", str(path)], capture_output=True, check=False)
+        else:
+            subprocess.run(["setfacl", "-b", str(path)], capture_output=True, check=False)
+
+
+def test_a_protected_directory_with_an_acl_is_refused(private_directory, capsys):
+    _add_acl_or_skip(private_directory)
+    try:
+        assert access_cli.main(["init", "--directory", str(private_directory)]) == 1
+        output = capsys.readouterr()
+        assert output.err.startswith("Provisioning failed:")
+        assert "access control list" in output.err
+        assert "protected directory" in output.err
+        assert not (private_directory / "identity.key").exists()
+    finally:
+        _remove_acls(private_directory)
+
+
+def test_an_acl_inherited_from_a_parent_is_refused(private_directory, capsys):
+    # The review's repro: the operator runs mkdir and chmod 700 on a directory
+    # whose parent passes an "everyone" entry down; the mode looks private.
+    parent = private_directory.parent / "parent"
+    parent.mkdir(mode=0o755)
+    _add_acl_or_skip(parent, inheritable=True)
+    protected = parent / "protected"
+    try:
+        protected.mkdir()
+        protected.chmod(0o700)
+        assert access_cli.main(["init", "--directory", str(protected)]) == 1
+        assert "access control list" in capsys.readouterr().err
+        assert not (protected / "identity.key").exists()
+    finally:
+        _remove_acls(protected, parent)
+
+
+@pytest.mark.parametrize("name", ["identity.key", "access.sqlite3"])
+def test_a_key_or_database_with_an_acl_is_refused(private_directory, capsys, name):
+    access_cli.initialize_access(private_directory)
+    target = private_directory / name
+    _add_acl_or_skip(target)
+    try:
+        assert access_cli.main([
+            "grant", "--directory", str(private_directory), "--principal", "b" * 64, "--role", "Viewer",
+        ]) == 1
+        output = capsys.readouterr()
+        assert "access control list" in output.err
+        assert name in output.err
+        if name == "identity.key":
+            with pytest.raises(access_cli.ProvisioningError, match="access control list"):
+                access_cli.read_identity_key(private_directory)
+        else:
+            from role_aware_dashboard_toolkit.access_store import AccessStoreError
+
+            with pytest.raises(AccessStoreError):
+                SQLiteAccessStore(target)
+    finally:
+        _remove_acls(target)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACLs on parent directories")
+@pytest.mark.parametrize("allow", [True, False])
+def test_a_parent_acl_may_deny_but_not_allow(private_directory, capsys, allow):
+    # macOS home directories carry "everyone deny delete"; an allow entry on a
+    # parent would let another account replace the protected directory.
+    parent = private_directory.parent / "home"
+    parent.mkdir(mode=0o755)
+    protected = parent / "protected"
+    protected.mkdir(mode=0o700)
+    _add_acl_or_skip(parent, allow=allow)
+    try:
+        status = access_cli.main(["init", "--directory", str(protected)])
+        output = capsys.readouterr()
+        if allow:
+            assert status == 1
+            assert "another account" in output.err
+            assert str(parent) in output.err
+        else:
+            assert status == 0, output.err
+    finally:
+        _remove_acls(parent)
