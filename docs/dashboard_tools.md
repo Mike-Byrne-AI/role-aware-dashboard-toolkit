@@ -198,8 +198,10 @@ the file shows who cleared the view and when. The file is never truncated.
 The audit CSV download is a spreadsheet-oriented view: fields are quoted and
 formula-like text is prefixed with an apostrophe, including formula prefixes
 after whitespace or Unicode formatting characters. This formula escaping changes
-only the CSV view. Both native downloads first redact currently sensitive
-historical values; the stored audit events remain unchanged.
+only the CSV view. The Timeline table shows the same protected cells, so its
+built-in CSV download carries the same protection. Both native downloads first
+redact currently sensitive historical values; the stored audit events remain
+unchanged.
 NUL characters are displayed as literal `\x00` text so CSV readers, including
 Python 3.10's reader, can import the download. Use JSONL for faithful
 machine-readable evidence. Spreadsheet applications and
