@@ -165,7 +165,10 @@ would replace it returns HTTP 409, and `GET /profiles` returns the readable
 records with an `X-Unreadable-Records` header counting the skipped ones. None of
 these change state or write audit events, and messages never include store
 paths or exception text; inspect the store's `read_errors` on the server.
-Deleting the record remains available as a repair. Stores without `read_errors`
+Deleting the record remains available as a repair, except for a file that
+holds a different record's id (for example a wrong backup): the store refuses
+to delete it and `DELETE` returns HTTP 409, so repair that file on the server.
+Stores without `read_errors`
 cannot report this and keep returning 404 for a record they cannot load.
 
 API control updates, profile saves, activations and successful deletions record

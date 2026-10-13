@@ -80,7 +80,9 @@ also hide historical values for controls that are now sensitive.
 A stored profile that exists but cannot be read is never reported as missing:
 reads and activation return HTTP 500, a save over it returns HTTP 409, and
 `GET /profiles` lists the readable records with an `X-Unreadable-Records` count
-header. Nothing changes in any of these cases; repair or delete the record. This
+header. Nothing changes in any of these cases; repair or delete the record. A
+file that holds a different record's id cannot be deleted through the API
+(HTTP 409); repair it on the server. This
 applies to stores that record `read_errors`, including `FileProfileStore` and the
 default `profile_dir` store.
 
