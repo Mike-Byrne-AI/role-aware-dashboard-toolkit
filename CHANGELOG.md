@@ -16,7 +16,10 @@ changes.
 - The audit Timeline table and its CSV download get the audit CSV's formula
   protection.
 - Path redaction runs in linear time and scans at most 1 MiB of a string;
-  `file:` URIs without `//` and editor `file` links are redacted.
+  `file:` URIs without `//` and editor `file` links are redacted. A path under
+  the repository root no longer carries a later path through when it starts
+  the string or runs on past a comma, and a Windows path glued to a URL
+  (`\\srv\share\vscode://file/...`) is redacted with the URL.
 - Record and packet validation errors no longer repeat saved values, and an
   oversized schema version no longer raises.
 - The incident timeline narrative renders as plain text, not Markdown.

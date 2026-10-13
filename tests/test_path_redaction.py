@@ -677,3 +677,40 @@ def test_redact_text_local_paths_logs_absolute_path_resolve_failure_without_leak
     assert redacted == "<redacted-local-path>"
     assert messages == ["Role-Aware Dashboard Toolkit path redaction could not resolve absolute path (OSError)."]
     assert "/secret/report.txt" not in messages[0]
+
+
+@pytest.mark.parametrize("separator", [" and ", ",", ";", " | ", "\n"])
+def test_a_repo_path_at_the_start_of_text_does_not_carry_later_paths_through(separator):
+    # The whole text was read as one path under the repository root, and its
+    # relative remainder kept every later path unredacted.
+    message = f"/srv/repo/notes.txt{separator}/Users/alice/secret.txt"
+
+    redacted = redact_text_local_paths(message, repo_root="/srv/repo")
+
+    assert redacted == f"notes.txt{separator}<redacted-local-path>"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("C:\\repo\\notes.txt and C:\\Users\\alice\\secret.txt", "notes.txt and <redacted-local-path>"),
+        ("/srv/repo/a.txt and vscode://file/Users/alice/s", "a.txt and <redacted-local-path>"),
+    ],
+)
+def test_a_repo_path_at_the_start_does_not_hide_a_later_path_or_link(message, expected):
+    repo_root = "C:\\repo" if message.startswith("C:") else "/srv/repo"
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("q=\\\\srv\\share\\vscode://file//Users/alice/s", "q=<redacted-local-path>"),
+        ("x \\\\fs01\\vscode://file/C:/Users/alice/a", "x <redacted-local-path>"),
+        ("see C:\\work\\cursor://file/Users/alice/s now", "see <redacted-local-path> now"),
+    ],
+)
+def test_a_windows_path_glued_to_an_editor_link_is_redacted_with_it(message, expected):
+    # The Windows path took the link's scheme, and what was left no longer
+    # read as a link or a path.
+    assert redact_text_local_paths(message) == expected

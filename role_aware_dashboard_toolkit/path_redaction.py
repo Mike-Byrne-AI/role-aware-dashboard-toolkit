@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Mapping
 import logging
 import ntpath
@@ -607,8 +607,12 @@ def _redact_text_local_paths(
         unit = "character" if omitted == 1 else "characters"
         return f"{scanned}<redacted-oversize-text: {omitted} {unit} omitted>"
     if _looks_absolute_path(value):
-        return _redact_absolute_path(value, repo_root_path=repo_root_path, cache=cache)
-    if not value:
+        whole = _redact_absolute_path(value, repo_root_path=repo_root_path, cache=cache)
+        if whole == _REDACTED_LOCAL_PATH:
+            return whole
+        # Under the repository root, the relative remainder of the whole text
+        # would keep any later path in it: scan the text path by path instead.
+    elif not value:
         return value
     value = _replace_oserror_double_root_paths(value, repo_root_path=repo_root_path, cache=cache)
     value = _replace_quoted_absolute_paths(value, repo_root_path=repo_root_path, cache=cache)
@@ -757,6 +761,15 @@ class _SchemeUrlSpans:
         index = bisect_right(self._starts, position) - 1
         return index >= 0 and position < self._ends[index]
 
+    def end_of_url_starting_inside(self, start: int, end: int) -> int | None:
+        """Return the end of the last URL that starts inside (start, end), if any."""
+        if self._starts is None:
+            _ = start in self  # finds the spans once
+        starts = self._starts or []
+        first = bisect_right(starts, start)
+        last = bisect_left(starts, end) - 1
+        return self._ends[last] if last >= first else None
+
 
 def _replace_windows_path_substrings(
     text: str,
@@ -765,14 +778,27 @@ def _replace_windows_path_substrings(
     cache: _AbsolutePathCache,
 ) -> str:
     urls = _SchemeUrlSpans(text)
-    return _WINDOWS_PATH_PATTERN.sub(
-        lambda match: (
-            match.group(0)
-            if match.start() in urls
-            else _redact_windows_path_match(match.group(0), repo_root_path=repo_root_path, cache=cache)
-        ),
-        text,
-    )
+    output: list[str] = []
+    emitted = 0
+    for match in _WINDOWS_PATH_PATTERN.finditer(text):
+        start, end = match.span()
+        if start < emitted or start in urls:
+            continue
+        output.append(text[emitted:start])
+        glued_url_end = urls.end_of_url_starting_inside(start, end)
+        if glued_url_end is not None:
+            # A path glued to a URL (\\srv\share\vscode://file/...) takes the
+            # URL's scheme, and the rest no longer reads as a URL or a path:
+            # redact the URL with the path.
+            output.append(_REDACTED_LOCAL_PATH)
+            emitted = max(end, glued_url_end)
+        else:
+            output.append(_redact_windows_path_match(match.group(0), repo_root_path=repo_root_path, cache=cache))
+            emitted = end
+    if not output:
+        return text
+    output.append(text[emitted:])
+    return "".join(output)
 
 
 def _posix_path_spans(text: str) -> list[tuple[int, int]]:
@@ -924,7 +950,7 @@ def _redact_absolute_path_once(value: str, *, repo_root_path: _RepoRootPath | No
                 relative = path.relative_to(repo_root_path)
             except ValueError:
                 return _REDACTED_LOCAL_PATH
-            return relative.as_posix() or "."
+            return _repo_relative_text(relative.as_posix() or ".", repo_root_path)
         return _REDACTED_LOCAL_PATH
     try:
         path = Path(value).resolve(strict=False)
@@ -937,8 +963,19 @@ def _redact_absolute_path_once(value: str, *, repo_root_path: _RepoRootPath | No
         and path.is_relative_to(repo_root_path)
     ):
         relative = path.relative_to(repo_root_path)
-        return relative.as_posix() or "."
+        return _repo_relative_text(relative.as_posix() or ".", repo_root_path)
     return _REDACTED_LOCAL_PATH
+
+
+def _repo_relative_text(relative: str, repo_root_path: _RepoRootPath) -> str:
+    """Scan a repository-relative result for a path it still carries.
+
+    A candidate path can run on past a separator that is not a path boundary
+    (``/repo/a.txt,/Users/alice/s``); its relative remainder must not carry the
+    later path through. The remainder is shorter than the candidate, so the
+    scan ends.
+    """
+    return _redact_text_local_paths(relative, repo_root_path=repo_root_path)
 
 
 def _log_resolve_failure(context: str, exc: Exception) -> None:
