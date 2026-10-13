@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- Pull-request CI now runs the full Windows test suite, Linux tests on Python
+  3.13 and 3.14, and a Chromium dashboard smoke with retained diagnostics.
+- Dependency CI audits resolved API and full runtime installations on pull
+  requests and weekly, retaining inventories and advisory reports. Incomplete
+  scans and vulnerability findings both block its required check.
+
 ### Fixed
 
 - API control writes preserve nested-secret confidentiality and withhold values

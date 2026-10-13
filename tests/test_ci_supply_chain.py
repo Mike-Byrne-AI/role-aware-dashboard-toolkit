@@ -14,6 +14,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 CONTRIBUTOR_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "contributor-ci.yml"
+DEPENDENCY_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "dependency-audit.yml"
 ACTION_PINS = {
     "actions/checkout": (
         "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0",
@@ -118,30 +119,31 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
         "id-token:", "continue-on-error", "twine upload", "actions/cache@",
     ):
         assert forbidden not in workflow
-    refs = re.findall(r"^\s*- uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
+    refs = re.findall(r"^\s*-?\s*uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
     assert Counter(refs) == Counter({
-        f"{action}@{ACTION_PINS[action][0]}": 2
-        for action in ("actions/checkout", "actions/setup-python")
+        f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 3,
+        f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 3,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 1,
     })
-    assert workflow.count("persist-credentials: false") == 2
-    assert workflow.count("timeout-minutes:") == 3
-    assert 'python-version: ["3.10", "3.11", "3.12"]' in workflow
+    assert workflow.count("persist-credentials: false") == 3
+    assert workflow.count("timeout-minutes:") == 4
+    assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in workflow
     assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
     assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
     assert "python -m build\n          python -m twine check dist/*" in workflow
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
-@pytest.mark.parametrize("job", ["tests", "quality"])
+@pytest.mark.parametrize("job", ["tests", "quality", "browser"])
 def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch, result, job):
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     gate = workflow.split("  required:\n", 1)[1]
     assert "    name: contributor-checks\n" in gate
     assert "    if: ${{ always() }}\n" in gate
-    assert "    needs: [tests, quality]\n" in gate
+    assert "    needs: [tests, quality, browser]\n" in gate
     body = re.search(r"python - <<'PY'\n(.*?)^          PY$", gate, flags=re.MULTILINE | re.DOTALL).group(1)
     checks = compile(textwrap.dedent(body), "contributor-required-check", "exec")
-    results = {name: {"result": "success"} for name in ("tests", "quality")}
+    results = {name: {"result": "success"} for name in ("tests", "quality", "browser")}
     results[job]["result"] = result
     monkeypatch.setenv("NEEDS_JSON", json.dumps(results))
     if result == "success":
@@ -152,6 +154,81 @@ def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch
     monkeypatch.setenv("NEEDS_JSON", json.dumps({name: data for name, data in results.items() if name != job}))
     with pytest.raises(SystemExit, match="All contributor jobs must succeed"):
         exec(checks, {})
+
+
+def test_contributor_ci_runs_full_suite_on_windows_and_keeps_browser_evidence():
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    tests = workflow.split("  tests:\n", 1)[1].split("  quality:\n", 1)[0]
+    assert "    runs-on: ${{ matrix.os }}\n" in tests
+    assert "        os: [ubuntu-latest]\n" in tests
+    assert re.search(
+        r"include:\n\s+- os: windows-latest\n\s+python-version: [\"']3\.11[\"']",
+        tests,
+    )
+    assert "      fail-fast: false\n" in tests
+    assert "        run: python -m pytest -q\n" in tests
+
+    browser = workflow.split("  browser:\n", 1)[1].split("  required:\n", 1)[0]
+    assert "    runs-on: ubuntu-latest\n" in browser
+    assert "python -m playwright install --with-deps chromium" in browser
+    assert "python tools/browser_smoke.py" in browser
+    assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
+    upload = browser.split("uses: actions/upload-artifact@", 1)[1]
+    assert "retention-days: 7" in upload
+    assert "if: ${{ always() }}" in browser or "if: ${{ !cancelled() }}" in browser
+
+
+def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
+    workflow = DEPENDENCY_WORKFLOW_PATH.read_text(encoding="utf-8")
+    triggers = workflow.split("on:\n", 1)[1].split("permissions:\n", 1)[0]
+    assert set(re.findall(r"^  ([A-Za-z_]+):", triggers, flags=re.MULTILINE)) == {
+        "pull_request", "push", "workflow_dispatch", "schedule",
+    }
+    assert "branches: [main]" in triggers
+    assert "17 9 * * 1" in triggers
+    assert "paths:" not in triggers and "paths-ignore:" not in triggers
+    assert "permissions:\n  contents: read\n" in workflow
+    assert "    permissions: {}\n" in workflow
+    for forbidden in (
+        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "id-token:", "continue-on-error", "twine upload", "actions/cache@",
+    ):
+        assert forbidden not in workflow
+    refs = re.findall(r"^\s*-?\s*uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
+    assert Counter(refs) == Counter({
+        f"{action}@{ACTION_PINS[action][0]}": 1
+        for action in ("actions/checkout", "actions/setup-python", "actions/upload-artifact")
+    })
+    assert workflow.count("persist-credentials: false") == 1
+    assert workflow.count("timeout-minutes:") == 2
+    assert re.search(r"extra: \[[\"']?api[\"']?, [\"']?full[\"']?\]", workflow)
+    assert "pip-audit==2.10.1" in workflow
+    assert "--python" in workflow
+    assert "--audit-python" in workflow
+    assert "--report-dir" in workflow
+    assert "retention-days: 7" in workflow
+    assert "if: ${{ always() }}" in workflow or "if: ${{ !cancelled() }}" in workflow
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
+def test_actual_dependency_required_check_rejects_unsuccessful_or_missing_audits(monkeypatch, result):
+    workflow = DEPENDENCY_WORKFLOW_PATH.read_text(encoding="utf-8")
+    gate = workflow.split("  required:\n", 1)[1]
+    assert "    name: dependency-checks\n" in gate
+    assert "    if: ${{ always() }}\n" in gate
+    assert "    needs: [audit]\n" in gate
+    body = re.search(r"python - <<'PY'\n(.*?)^          PY$", gate, flags=re.MULTILINE | re.DOTALL).group(1)
+    checks = compile(textwrap.dedent(body), "dependency-required-check", "exec")
+    monkeypatch.setenv("NEEDS_JSON", json.dumps({"audit": {"result": result}}))
+    if result == "success":
+        exec(checks, {})
+    else:
+        with pytest.raises(SystemExit):
+            exec(checks, {})
+    for incomplete in ({}, {"unexpected": {"result": "success"}}):
+        monkeypatch.setenv("NEEDS_JSON", json.dumps(incomplete))
+        with pytest.raises(SystemExit):
+            exec(checks, {})
 
 
 def test_ci_smokes_each_supported_optional_extra_without_product_adapters():

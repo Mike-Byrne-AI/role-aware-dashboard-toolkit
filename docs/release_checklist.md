@@ -72,10 +72,19 @@ Pytest creates each default basetemp as a unique session-owned child under
 caller.
 
 Contributor CI runs automatically for pull requests and pushes to `main`.
-Require its `contributor-checks` status on `main` with up-to-date branches;
-verify live rules, including disabled force pushes and deletions. That status
-requires all contributor test and quality jobs to succeed, including the
+Require its `contributor-checks` status and the separate `dependency-checks`
+status on `main` with up-to-date branches;
+verify live rules, including disabled force pushes and deletions. These statuses
+require all contributor test, quality, browser, and dependency audit jobs to succeed, including the
 75% coverage gate. A skipped or cancelled dependency is a failure.
+
+Contributor tests cover Linux Python 3.10–3.14 and the full Windows suite on
+Python 3.11. The required browser job exercises a local Chromium dashboard
+with synthetic state. Dependency CI audits independently resolved `api` and
+`full` installations on every pull request and weekly; a failed scanner or
+incomplete audit must not count as a clean result. Review the retained inventory
+and advisory report for any finding. Neither check establishes external identity
+provider or deployment acceptance.
 
 Release CI is manual-only and unarmed by default. It requires
 `workflow_dispatch`, a `candidate` or `main` ref, and the repository variable
@@ -150,10 +159,11 @@ responsibilities described in the authentication guide.
 
 - required Linux and Windows jobs and every required step pass for the exact
   final release commit; a skipped or cancelled job is insufficient
-- `contributor-checks` succeeds for the final source, and live `main` protection
-  requires this context rather than the manual release jobs
-- workflow permissions remain read-only, actions remain pinned, runs have
-  bounded timeouts, and artifacts have one-day retention
+- `contributor-checks` and `dependency-checks` succeed for the final source, and
+  live `main` protection requires these contexts rather than the manual release jobs
+- workflow permissions remain read-only, actions remain pinned, and runs have
+  bounded timeouts; release artifacts have one-day retention, while browser
+  diagnostics and dependency audit reports have seven-day retention
 - the release candidate reuses the exact audited artifacts rather than
   rebuilding them in the evidence job
 - Windows installs the same downloaded `validated-dist` wheel, fails on an

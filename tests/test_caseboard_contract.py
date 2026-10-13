@@ -179,6 +179,7 @@ def test_file_case_store_exact_load_surfaces_broken_symlink_probe(tmp_path, monk
     hashed_path.write_text("{}", encoding="utf-8")
     original_stat = Path.stat
     original_is_symlink = Path.is_symlink
+    original_is_file = Path.is_file
 
     def simulated_stat(path, *args, **kwargs):
         if path == hashed_path:
@@ -190,8 +191,16 @@ def test_file_case_store_exact_load_surfaces_broken_symlink_probe(tmp_path, monk
             return True
         return original_is_symlink(path)
 
+    def simulated_is_file(path, *args, **kwargs):
+        if path == hashed_path:
+            return False
+        return original_is_file(path, *args, **kwargs)
+
     monkeypatch.setattr(Path, "stat", simulated_stat)
     monkeypatch.setattr(Path, "is_symlink", simulated_is_symlink)
+    # Mock the public query as well: Python 3.14 no longer implements
+    # is_file() through Path.stat(), and a broken link is never a file.
+    monkeypatch.setattr(Path, "is_file", simulated_is_file)
 
     assert store.resolve_path("broken-link") is None
     assert store.read_errors == []

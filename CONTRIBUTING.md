@@ -58,14 +58,28 @@ resulting behavior, and the verification performed. Follow
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and consult [SECURITY.md](SECURITY.md)
 before sharing sensitive findings.
 
-Pull requests automatically run `.github/workflows/contributor-ci.yml`: tests
-on Python 3.10–3.12, lint, coverage, and package build/metadata validation. The
-stable required check is `contributor-checks`; failed, skipped, or cancelled
-dependency jobs make it fail. The workflow has read-only permissions and does
-not receive release credentials. GitHub may require a maintainer to approve
-the first workflow run for a fork contributor.
+Pull requests automatically run `.github/workflows/contributor-ci.yml`: full
+tests on Linux with Python 3.10–3.14 and Windows with Python 3.11, lint,
+coverage, package build/metadata validation, and a Chromium dashboard smoke.
+The browser smoke checks profile restoration, role changes, and frozen
+controls using synthetic local state; it does not test an external login provider.
+The stable required check is `contributor-checks`; failed, skipped, or cancelled
+test, quality, or browser jobs make it fail. Browser diagnostics are retained
+for seven days. The workflow has read-only permissions and does not receive
+release credentials. GitHub may require a maintainer to approve the first
+workflow run for a fork contributor.
 
-Maintainers should require `contributor-checks` on `main`, with the branch up
+`.github/workflows/dependency-audit.yml` audits freshly resolved `api` and
+`full` runtime dependencies on pull requests, pushes to `main`, manual dispatch,
+and Mondays at 09:17 UTC. Its `dependency-checks` result requires both audits
+to complete without known vulnerabilities or skipped packages. Scanner and
+network errors fail separately from vulnerability findings. Reports and exact
+resolved versions are retained for seven days. The local toolkit and environment
+installation tools (`pip`, `setuptools`, `wheel`) are explicitly excluded;
+the scanner runs in a separate environment. Advisories require maintainer
+review; the workflow does not upgrade packages automatically.
+
+Maintainers should require `contributor-checks` and `dependency-checks` on `main`, with the branch up
 to date before merging and force pushes/deletions disabled. Check the live
 repository rules rather than assuming this document configures protection.
 The separately guarded release workflow in `ci.yml` remains manually dispatched.

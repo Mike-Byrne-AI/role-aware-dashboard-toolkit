@@ -20,6 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: User Interfaces",
 ]
@@ -189,6 +191,8 @@ include = [
     "/schemas/replay.schema.json",
     "/schemas/run.schema.json",
     "/tools/pre_release_check.py",
+    "/tools/audit_dependencies.py",
+    "/tools/browser_smoke.py",
     "/README.md",
     "/SECURITY.md",
     "/CONTRIBUTING.md",
@@ -199,6 +203,7 @@ include = [
     "/CHANGELOG.md",
     "/.github/workflows/ci.yml",
     "/.github/workflows/contributor-ci.yml",
+    "/.github/workflows/dependency-audit.yml",
 ]
 exclude = [
     "/role_aware_dashboard_toolkit/_archive_review",
