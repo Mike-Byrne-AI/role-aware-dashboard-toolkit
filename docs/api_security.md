@@ -143,6 +143,16 @@ listings. If such a record has an unaddressable identifier, migrate it through
 its store adapter to an identifier satisfying the API rules before using the
 HTTP routes.
 
+A stored profile that exists but cannot be read (truncated, empty or otherwise
+invalid JSON in a file store) is reported, not treated as missing. Reads and
+activation return HTTP 500 with a fixed message naming the profile, a save that
+would replace it returns HTTP 409, and `GET /profiles` returns the readable
+records with an `X-Unreadable-Records` header counting the skipped ones. None of
+these change state or write audit events, and messages never include store
+paths or exception text; inspect the store's `read_errors` on the server.
+Deleting the record remains available as a repair. Stores without `read_errors`
+cannot report this and keep returning 404 for a record they cannot load.
+
 API control updates, profile saves, activations and successful deletions record
 `source="api"` with the request's authorized role. API-created profiles also
 persist `source="api"`. A profile's `role` remains descriptive metadata and does

@@ -72,6 +72,13 @@ return an empty `values` object when metrics access is denied. Profile metadata
 listings remain available with `can_load_profiles`. Audit reads
 also hide historical values for controls that are now sensitive.
 
+A stored profile that exists but cannot be read is never reported as missing:
+reads and activation return HTTP 500, a save over it returns HTTP 409, and
+`GET /profiles` lists the readable records with an `X-Unreadable-Records` count
+header. Nothing changes in any of these cases; repair or delete the record. This
+applies to stores that record `read_errors`, including `FileProfileStore` and the
+default `profile_dir` store.
+
 API profile names are trimmed. Empty names, `.`, `..`, nonprintable characters
 and `/ \\ % ? #` are rejected before writing. Use the returned canonical name,
 encoded as one path segment. Direct-store legacy identifiers are not migrated

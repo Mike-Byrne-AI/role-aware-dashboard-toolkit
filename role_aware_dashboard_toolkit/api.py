@@ -32,7 +32,7 @@ from .controls import (
     _exact_control_value,
     _looks_like_hex_color,
 )
-from .profile_store import BaseProfileStore
+from .profile_store import BaseProfileStore, FileProfileStore
 from .profiles import (
     _InvalidProfileError,
     _contains_secret_fields,
@@ -67,7 +67,7 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
     return missing in _OPTIONAL_API_DEPENDENCIES
 
 try:
-    from fastapi import FastAPI, HTTPException, Depends, Header, Request
+    from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -76,6 +76,7 @@ except ImportError as exc:
     Depends = None  # type: ignore
     Header = None  # type: ignore
     Request = None  # type: ignore
+    Response = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -452,23 +453,85 @@ def _load_api_profile(
         raise HTTPException(status_code=422, detail="Stored profile fields are invalid.") from None
 
 
+class _ReadErrorWatch:
+    """Notice a store read error recorded during one request.
+
+    File stores record unreadable records in ``read_errors`` and return None,
+    which must not be reported as "not found" or overwritten. Compare the
+    newest recorded error, so a bounded error history still shows a new entry.
+    Stores without ``read_errors`` keep their previous behavior.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+        self._before = self._errors()
+
+    def _errors(self) -> list[Any] | None:
+        errors = getattr(self._store, "read_errors", None)
+        if errors is None:
+            return None
+        try:
+            return list(errors)
+        except TypeError:
+            return None
+
+    def new_errors(self) -> int:
+        after = self._errors()
+        if self._before is None or not after:
+            return 0
+        if self._before and after[-1] is self._before[-1]:
+            return 0
+        return max(1, len(after) - len(self._before))
+
+
+def _unreadable_profile(profile_id: str) -> str:
+    # Fixed text: store diagnostics can contain paths and exception details.
+    return (
+        f"Profile '{profile_id}' exists but could not be read. Nothing was changed; "
+        "repair or delete the stored record."
+    )
+
+
+def _api_profile_store(app_state: _AppState) -> BaseProfileStore:
+    # One store per request, so a read error recorded by this request is visible.
+    if app_state.profile_store is not None:
+        return app_state.profile_store
+    return FileProfileStore(app_state.profile_dir)
+
+
 def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/profiles", response_model=list[str])
-    async def get_profiles(_: SecurityContext = Depends(require_api_context("can_load_profiles"))):
-        return list_profiles(app_state.profile_dir, store=app_state.profile_store)
+    async def get_profiles(
+        response: Response,
+        _: SecurityContext = Depends(require_api_context("can_load_profiles")),
+    ):
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
+        profile_ids = list_profiles(app_state.profile_dir, store=store)
+        unreadable = watch.new_errors()
+        if unreadable:
+            # The listing keeps readable records, as the dashboard does; the
+            # header says it is incomplete instead of letting it look empty.
+            response.headers["X-Unreadable-Records"] = str(unreadable)
+            logger.warning("Profile listing skipped %d unreadable record(s); see read_errors.", unreadable)
+        return profile_ids
 
     @app.get("/profiles/{profile_id}", response_model=ProfileResponse)
     async def get_profile(profile_id: str, ctx: SecurityContext = Depends(require_api_context("can_load_profiles"))):
         _require_permission(ctx, "can_view_metrics")
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
         data = _load_api_profile(
             profile_id,
             app_state.registry,
             {},  # read-only: don't mutate app state
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
             restore=False,
         )
         if data is None:
+            if watch.new_errors():
+                raise HTTPException(status_code=500, detail=_unreadable_profile(profile_id))
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         return ProfileResponse(
             profile_id=data.get("profile_id", profile_id),
@@ -483,6 +546,18 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
         profile_id = _canonical_api_profile_id(req.profile_id)
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
+        existing = load_profile_data(profile_id, profile_dir=app_state.profile_dir, store=store)
+        if existing is None and watch.new_errors():
+            # An unreadable record is not permission to overwrite it.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Profile '{profile_id}' exists but could not be read, so it was not "
+                    "replaced. Repair or delete the stored record first."
+                ),
+            )
         save_profile(
             profile_id,
             app_state.registry,
@@ -491,7 +566,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             extra=req.extra,
             source="api",
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
         )
         app_state.audit.log_profile_save(profile_id, role=ctx.role or req.role or "api", source="api")
         return ProfileResponse(
@@ -506,14 +581,18 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
         staged_state = dict(app_state.state)
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
         data = _load_api_profile(
             profile_id,
             app_state.registry,
             staged_state,
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
         )
         if data is None:
+            if watch.new_errors():
+                raise HTTPException(status_code=500, detail=_unreadable_profile(profile_id))
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         profile_values = data.get("values", {})
         for ctrl in app_state.registry.all():
