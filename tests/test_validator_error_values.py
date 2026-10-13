@@ -74,3 +74,35 @@ def test_packet_payload_errors_do_not_echo_saved_values():
 
     assert "payload.Invalid run status" in text
     assert "SECRET-CANARY" not in text and "alice" not in text
+
+
+def _packet_with(field, value):
+    packet = build_run_packet(_run())
+    if field == "payload_schema_version":
+        packet[field] = value
+    else:
+        packet["payload"]["schema_version"] = value
+    return packet
+
+
+@pytest.mark.parametrize("field", ["payload_schema_version", "payload.schema_version"])
+@pytest.mark.parametrize("bad, label", [
+    (2, "2"), (10**5000, "another integer"), ("9" * 40, "another integer"),
+], ids=["two", "oversized-int", "long-digit-string"])
+def test_unexpected_packet_schema_version_is_named_without_raising(field, bad, label):
+    text = _errors_text(validate_packet(_packet_with(field, bad)))
+
+    assert f"Unexpected {field} for packet_type 'run': expected 1, found {label}." in text
+    assert "9" * 12 not in text
+
+
+def test_packet_schema_version_mismatch_does_not_echo_oversized_integers():
+    packet = _packet_with("payload_schema_version", 10**5000)
+    packet["payload"]["schema_version"] = 10**4000
+
+    text = _errors_text(validate_packet(packet))
+
+    assert (
+        "payload_schema_version (another integer) does not match "
+        "payload.schema_version (another integer) for packet_type 'run'."
+    ) in text
