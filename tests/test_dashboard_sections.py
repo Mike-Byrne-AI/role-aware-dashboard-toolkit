@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from role_aware_dashboard_toolkit.sections import DashboardSections, section_visible
+from tests.demo_role_helpers import start_as_admin
 
 
 SECTION_NAMES = {
@@ -105,7 +106,7 @@ def _consumer(audit_dir):
 @pytest.fixture
 def app(tmp_path):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_consumer, args=(str(tmp_path),), default_timeout=15).run()
+    app = start_as_admin(AppTest.from_function(_consumer, args=(str(tmp_path),), default_timeout=15)).run()
     assert not app.exception, [item.message for item in app.exception]
     yield app
     app.session_state["config"].audit.stop_writer()

@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,7 @@ def test_readme_dashboard_retains_audit_history_per_browser_session():
     # Capture the object created by the actual documented snippet, without
     # substituting a test-only resource lifetime or renderer.
     source = match.group(1) + '\nst.session_state["_example_config"] = config\n'
-    app = AppTest.from_string(source).run()
+    app = start_as_admin(AppTest.from_string(source)).run()
     assert not app.exception
     audit = app.session_state["_example_config"].audit
 
@@ -35,7 +36,7 @@ def test_readme_dashboard_retains_audit_history_per_browser_session():
     assert app.session_state["_example_config"].audit is audit
     assert audit.all_events() == history
 
-    other_session = AppTest.from_string(source).run()
+    other_session = start_as_admin(AppTest.from_string(source)).run()
     assert not other_session.exception
     other_audit = other_session.session_state["_example_config"].audit
     assert other_audit is not audit

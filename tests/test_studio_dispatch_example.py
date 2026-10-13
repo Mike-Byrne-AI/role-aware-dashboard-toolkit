@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 pa = pytest.importorskip("pyarrow")
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
@@ -20,7 +21,7 @@ CONTROL_WIDGETS = {
 
 @pytest.fixture
 def app():
-    at = AppTest.from_file(str(APP), default_timeout=15).run()
+    at = start_as_admin(AppTest.from_file(str(APP), default_timeout=15)).run()
     healthy(at)
     return at
 

@@ -5,6 +5,7 @@ import pytest
 
 import role_aware_dashboard_toolkit as radt
 from role_aware_dashboard_toolkit import dashboard
+from tests.demo_role_helpers import start_as_admin
 
 
 @pytest.mark.parametrize("bounds", [
@@ -58,7 +59,7 @@ def test_slider_restore_and_widget_share_implicit_bounds(bounds, initial, clampe
         f"if 'value' not in st.session_state: st.session_state['value'] = {initial!r}\n"
         "r.render(r.DashboardConfig(registry=registry))\n"
     )
-    app = AppTest.from_string(source).run()
+    app = start_as_admin(AppTest.from_string(source)).run()
     assert not app.exception
     assert app.slider(key="value").value == clamped
     app.slider(key="value").set_value(updated).run()
@@ -125,7 +126,7 @@ registry.register('Protected count', kind='number', key='protected_count', defau
                   min_value=0, max_value=10**20, step=1, sensitive=True)
 r.render(r.DashboardConfig(registry=registry))
 """
-    app = AppTest.from_string(source).run()
+    app = start_as_admin(AppTest.from_string(source)).run()
     assert not app.exception
     maximum = (1 << 53) - 1
     assert app.number_input(key="count").value == maximum
@@ -140,12 +141,12 @@ r.render(r.DashboardConfig(registry=registry))
 
 def test_equal_number_bounds_remain_supported():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_string("""
+    app = start_as_admin(AppTest.from_string("""
 import role_aware_dashboard_toolkit as r
 registry = r.ControlRegistry()
 registry.register('Fixed count', kind='number', key='count', default=5,
                   min_value=5, max_value=5, step=1)
 r.render(r.DashboardConfig(registry=registry))
-""").run()
+""")).run()
     assert not app.exception
     assert app.number_input(key="count").value == 5

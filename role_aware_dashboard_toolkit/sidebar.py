@@ -72,6 +72,23 @@ def _resolve_authenticated_role(
 
 
 
+def _least_privileged_role(all_roles: list[str], custom_roles: Any) -> str:
+    """The demo session's starting role: the fewest granted permissions.
+
+    Ties keep declaration order (built-ins first). Built-in roles start as
+    Viewer; a host's custom role with fewer grants starts instead.
+    """
+    if not all_roles:
+        return "Viewer"
+
+    def granted(name: str) -> int:
+        role = get_role(name, custom_roles)
+        perms = role.perms if role is not None and isinstance(role.perms, dict) else {}
+        return sum(1 for value in perms.values() if value is True)
+
+    return min(all_roles, key=granted)
+
+
 def render_sidebar(st: Any, config: Any) -> SidebarResult:
     audit = config.audit
     all_roles = get_role_names(config.custom_roles)
@@ -95,9 +112,10 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
     with st.sidebar:
         st.header(f"{config.icon} {config.title}".strip())
 
-        current_role = st.session_state.get("_radt_role", all_roles[0] if all_roles else "Admin")
+        default_role = _least_privileged_role(all_roles, config.custom_roles)
+        current_role = st.session_state.get("_radt_role", default_role)
         if current_role not in all_roles and all_roles:
-            current_role = all_roles[0]
+            current_role = default_role
             st.session_state["_radt_role"] = current_role
 
         forced_role, auth_error = _resolve_authenticated_role(config.auth_hook, all_roles)

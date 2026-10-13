@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from role_aware_dashboard_toolkit import FileProfileStore
+from tests.demo_role_helpers import start_as_admin
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,9 +58,9 @@ def test_core_library_example_runs_and_exports_a_run_packet():
 def test_dashboard_example_profile_and_role_workflow(tmp_path, monkeypatch):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
     monkeypatch.chdir(tmp_path)
-    app = AppTest.from_file(
+    app = start_as_admin(AppTest.from_file(
         str(EXAMPLES_DIR / "dashboard_admin_controls_app.py"), default_timeout=15,
-    ).run()
+    )).run()
 
     def healthy():
         assert not app.exception, [item.message for item in app.exception]

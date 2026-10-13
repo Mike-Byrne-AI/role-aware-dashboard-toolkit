@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -72,8 +73,8 @@ def _healthy(app):
 
 @pytest.fixture
 def app(tmp_path):
-    app = _healthy(AppTest.from_function(_consumer, args=(str(tmp_path / "audit"),),
-                                        default_timeout=15).run())
+    app = _healthy(start_as_admin(AppTest.from_function(_consumer, args=(str(tmp_path / "audit"),),
+                                        default_timeout=15)).run())
     app.number_input(key="workers").set_value(18)
     app.slider(key="progress").set_value(70)
     app.selectbox(key="priority").select("High")

@@ -1827,6 +1827,7 @@ class TestDashboardSmoke:
         audit_root = tmp_path / "audit"
         outside = tmp_path / "outside.jsonl"
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(outside)
         config = DashboardConfig(audit_dir=str(audit_root))
@@ -1841,6 +1842,7 @@ class TestDashboardSmoke:
         audit_root = tmp_path / "audit"
         audit_path = audit_root / "events.jsonl"
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
         config = DashboardConfig(audit_dir=str(audit_root))
@@ -1862,6 +1864,7 @@ class TestDashboardSmoke:
         audit_path = audit_root / "private" / "events.jsonl"
         audit = AuditLog()
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
@@ -1944,6 +1947,7 @@ class TestDashboardSmoke:
         writer_thread = _UnknownLivenessThread()
         audit = AuditLog()
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
@@ -2027,9 +2031,10 @@ class TestDashboardSmoke:
             json.loads(line)
             for line in audit_path.read_text(encoding="utf-8").splitlines()
         ]
+        # The demo session starts in its least-privileged role, here the
+        # forced "Locked" role itself, so no role switch is recorded.
         assert [event["type"] for event in events] == [
             "audit_writer_start",
-            "role_switch",
             "writer_survived_read_only_render",
             "audit_writer_stop",
         ]
@@ -2076,6 +2081,7 @@ class TestDashboardSmoke:
         audit._writer_store = object()
         audit._writer_path = str(writer_path)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
 
@@ -2109,6 +2115,7 @@ class TestDashboardSmoke:
 
         monkeypatch.setattr(audit, "stop_writer", fail_shutdown)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
         try:
@@ -2130,6 +2137,7 @@ class TestDashboardSmoke:
 
         monkeypatch.setattr(audit, "start_writer", fail_start)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
@@ -2160,6 +2168,7 @@ class TestDashboardSmoke:
 
         monkeypatch.setattr(audit, "start_writer", fail_start)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
@@ -2189,6 +2198,7 @@ class TestDashboardSmoke:
         audit._writer_store = object()
         audit._writer_path = str(audit_root / "old.jsonl")
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_root / "new.jsonl")
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))

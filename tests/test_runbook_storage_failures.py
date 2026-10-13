@@ -7,6 +7,7 @@ from role_aware_dashboard_toolkit import FileRunStore, InMemoryRunStore, append_
 from role_aware_dashboard_toolkit.runbook_panels import render_runbook_panel, render_runbook_sidebar
 from role_aware_dashboard_toolkit.store_diagnostics import StorePathSecurityError
 from tests.test_runbook_contract import _FakeStreamlit, _admin_ctx, _limited_ctx, _runbook_config
+from tests.demo_role_helpers import start_as_admin
 
 
 class _RunbookUI(_FakeStreamlit):
@@ -227,7 +228,7 @@ if "config" not in st.session_state:
     st.session_state["_radt_active_run_id"] = "active"
 r.render(st.session_state["config"])
 '''
-    app = AppTest.from_string(source, default_timeout=20).run()
+    app = start_as_admin(AppTest.from_string(source, default_timeout=20)).run()
     assert not app.exception
     app.text_input(key="_radt_run_notes").set_value("retained draft").run()
     app.number_input(key="workers").set_value(8).run()
