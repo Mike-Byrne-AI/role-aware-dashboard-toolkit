@@ -123,3 +123,41 @@ def test_full_window_api_listing_counts_each_unreadable_profile(tmp_path, monkey
     assert listing.status_code == 200
     assert listing.json() == ["kept"]
     assert listing.headers["X-Unreadable-Records"] == "3"
+
+
+def test_full_window_api_read_save_and_activate_report_the_unreadable_profile(tmp_path, monkeypatch):
+    # Read and activation answer 500 and save answers 409, not 404 and an
+    # overwrite, even when the window was already full before the request.
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from role_aware_dashboard_toolkit import AuditLog, ControlRegistry
+    from role_aware_dashboard_toolkit.api import create_app
+    from role_aware_dashboard_toolkit.profiles import save_profile
+
+    key = "synthetic-read-error-window-key"
+    headers = {"X-API-Key": key}
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", key)
+    registry = ControlRegistry()
+    registry.register("Limit", kind="number", key="limit", default=5, min_value=0, max_value=100, step=1)
+    store = FileProfileStore(str(tmp_path))
+    save_profile("prod", registry, {"limit": 42}, store=store)
+    path = Path(store.resolve_path("prod"))
+    path.write_text("{oops", encoding="utf-8")
+    store = FileProfileStore(str(tmp_path))
+    for _ in range(300):  # the window is full before any request
+        store.list_ids()
+    assert len(store.read_errors) == 200
+    audit = AuditLog()
+    with TestClient(create_app(registry, audit=audit, api_role="Admin", profile_store=store)) as client:
+        read = client.get("/profiles/prod", headers=headers)
+        save = client.post("/profiles", headers=headers, json={"profile_id": "prod"})
+        activate = client.post("/profiles/prod/activate", headers=headers)
+        missing = client.get("/profiles/absent", headers=headers)
+        limit = client.get("/controls/limit", headers=headers).json()["value"]
+
+    assert (read.status_code, save.status_code, activate.status_code) == (500, 409, 500)
+    assert missing.status_code == 404
+    assert path.read_text(encoding="utf-8") == "{oops"
+    assert limit == 5
+    assert audit.all_events() == []
