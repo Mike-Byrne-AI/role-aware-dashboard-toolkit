@@ -65,6 +65,9 @@ class _FakeStreamlit:
     def write(self, value):
         self.events.append(("write", str(value)))
 
+    def text(self, value):
+        self.events.append(("text", str(value)))
+
     def dataframe(self, value, **kwargs):
         self.events.append(("dataframe", value, dict(kwargs)))
 

@@ -147,7 +147,7 @@ def _render_operator_memory_panel(st: Any, config: Any, ctx: Any, run: dict[str,
     st.subheader(getattr(config, "timeline_title", "Incident Timeline"))
     st.json(timeline.get("summary", {}))
     st.caption(summary.get("disclaimer", ""))
-    st.write(summary.get("narrative", ""))
+    st.text(summary.get("narrative", ""))
 
     rows = [
         {
