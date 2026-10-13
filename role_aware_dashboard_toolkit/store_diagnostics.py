@@ -77,8 +77,9 @@ _READ_ERRORS_RETAINED = 200
 class _ReadErrorLog(collections.deque):
     """Newest store read errors, bounded, with a total of every error recorded.
 
-    Every way of adding an error counts it. A copy or pickle keeps the total
-    rather than recounting the retained errors.
+    Every way of adding an error counts it. A copy (``copy.copy``,
+    ``deepcopy``, ``.copy()``, ``+``) or pickle keeps the total rather than
+    recounting the retained errors.
     """
 
     def __init__(self, iterable: Iterable[StoreReadError] = (), maxlen: int | None = _READ_ERRORS_RETAINED) -> None:
@@ -114,6 +115,13 @@ class _ReadErrorLog(collections.deque):
     def __copy__(self) -> _ReadErrorLog:
         # deque's own copy re-appends every retained error through __init__.
         return _restore_read_error_log(list(self), self.maxlen, self.total)
+
+    copy = __copy__
+
+    def __add__(self, items: Iterable[StoreReadError]) -> _ReadErrorLog:  # type: ignore[override]
+        combined = self.__copy__()
+        combined.extend(items)
+        return combined
 
     def __reduce__(self) -> tuple[Any, ...]:
         return (_restore_read_error_log, (list(self), self.maxlen, self.total))

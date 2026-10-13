@@ -175,9 +175,12 @@ def test_copies_keep_the_total_and_every_way_of_adding_counts():
     assert (log.total, len(log)) == (250, 200)
 
     # deepcopy rebuilt the deque by appending its items onto the copied total.
-    for clone in (copy.copy(log), copy.deepcopy(log), pickle.loads(pickle.dumps(log))):
+    for clone in (copy.copy(log), copy.deepcopy(log), pickle.loads(pickle.dumps(log)), log.copy()):
         assert type(clone) is _ReadErrorLog
         assert (clone.total, clone.maxlen, list(clone)) == (250, 200, list(log))
+    combined = log + [{"error_type": "Q"}]
+    assert type(combined) is _ReadErrorLog
+    assert (combined.total, log.total) == (251, 250)
 
     log += [{"error_type": "Y"}, {"error_type": "Z"}]  # deque's += skipped append
     log.extend([{"error_type": "W"}])
