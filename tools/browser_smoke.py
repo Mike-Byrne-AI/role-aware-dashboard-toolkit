@@ -116,6 +116,10 @@ def exercise_browser(url: str, output: Path, channel: str | None, checks: list[s
         try:
             page.goto(url, wait_until="domcontentloaded")
             expect(page.get_by_role("heading", level=1)).to_contain_text("Dashboard Admin Controls")
+            # A new demo session starts in its least-privileged role.
+            expect(page.get_by_text("Role=Viewer; writable=True", exact=True)).to_be_visible()
+            controls_disabled(True)
+            select("Role", "Admin")
             expect(page.get_by_text("Role=Admin; writable=True", exact=True)).to_be_visible()
             controls_disabled(False)
             passed("dashboard startup")
