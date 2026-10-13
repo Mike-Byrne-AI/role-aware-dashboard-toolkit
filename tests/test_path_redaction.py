@@ -661,17 +661,18 @@ def test_redact_text_local_paths_logs_repo_root_resolve_failure_without_leaking_
 
 
 def test_redact_text_local_paths_logs_absolute_path_resolve_failure_without_leaking_path(monkeypatch, caplog):
-    class FailingPath:
-        def __init__(self, value):
-            self.value = value
+    # A path is resolved only against a repository root.
+    real_resolve = Path.resolve
 
-        def resolve(self, strict=False):
-            raise OSError(f"cannot resolve {self.value}")
+    def failing_resolve(self, *args, **kwargs):
+        if "secret" in str(self):
+            raise OSError(f"cannot resolve {self}")
+        return real_resolve(self, *args, **kwargs)
 
-    monkeypatch.setattr(path_redaction, "Path", FailingPath)
+    monkeypatch.setattr(Path, "resolve", failing_resolve)
     caplog.set_level(logging.WARNING, logger=path_redaction.__name__)
 
-    redacted = redact_text_local_paths("/secret/report.txt")
+    redacted = redact_text_local_paths("/secret/report.txt", repo_root="/srv/repo")
 
     messages = [record.getMessage() for record in caplog.records]
     assert redacted == "<redacted-local-path>"
@@ -782,3 +783,23 @@ def test_a_later_path_after_a_crossable_separator_is_still_redacted(separator):
     assert redact_text_local_paths(message, repo_root="/repo") == (
         f"pkg/__pycache__/a.pyc{separator}<redacted-local-path>"
     )
+
+
+@pytest.mark.parametrize("repo_root", ["", "C:\\\\repo"])
+def test_paths_are_not_resolved_when_no_root_could_keep_them(monkeypatch, repo_root):
+    # Without a POSIX repository root every POSIX path is redacted whatever it
+    # resolves to; resolving each one only cost file-system calls.
+    calls = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        calls.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    message = "copied /Users/alice/a.txt to /srv/data/b.txt, then /tmp/c"
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    redacted = redact_text_local_paths(message, repo_root=repo_root)
+
+    assert redacted == "copied <redacted-local-path> to <redacted-local-path>, then <redacted-local-path>"
+    assert calls == []

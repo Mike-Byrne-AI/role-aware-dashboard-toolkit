@@ -53,8 +53,12 @@ _FILE_URI_PATTERN = re.compile(
 _EDITOR_FILE_LINK_AUTHORITY = "//file/"
 _LEADING_WRAP = "\"'([{<"
 _TRAILING_WRAP = "\"')]}>,.;:"
-# Redaction scans at most this many characters of one string: 0.1 to 0.5
-# seconds on an Apple M2, depending on the text. Every path form ends at a
+# Redaction scans at most this many characters of one string, in time linear
+# in its length. Measured on an Apple M2 (Python 3.12) over thirteen shapes of
+# 1 MiB: at most 0.5 s without a repository root, and up to 5.4 s with one,
+# because each candidate path under a POSIX root is resolved against the file
+# system, one call per path component (a 1 MiB string of 2,000-component paths
+# is the worst shape measured). Every path form ends at a
 # line break, so an oversize string keeps only the whole lines before the
 # limit: the line that crosses it and the rest are dropped, never emitted
 # unscanned, and replaced by a marker that states how many characters were
@@ -963,16 +967,17 @@ def _redact_absolute_path_once(value: str, *, repo_root_path: _RepoRootPath | No
                 return _REDACTED_LOCAL_PATH
             return _repo_relative_text(relative.as_posix() or ".", repo_root_path)
         return _REDACTED_LOCAL_PATH
+    if repo_root_path is None or not isinstance(repo_root_path, Path):
+        # Only a native repository root can keep a POSIX-style path: without
+        # one it is redacted whatever it resolves to, so skip the file-system
+        # calls resolving would make (one or two per path component).
+        return _REDACTED_LOCAL_PATH
     try:
         path = Path(value).resolve(strict=False)
     except (OSError, RuntimeError, ValueError) as exc:
         _log_resolve_failure("absolute path", exc)
         return _REDACTED_LOCAL_PATH
-    if (
-        repo_root_path is not None
-        and isinstance(repo_root_path, Path)
-        and path.is_relative_to(repo_root_path)
-    ):
+    if path.is_relative_to(repo_root_path):
         relative = path.relative_to(repo_root_path)
         return _repo_relative_text(relative.as_posix() or ".", repo_root_path)
     return _REDACTED_LOCAL_PATH
