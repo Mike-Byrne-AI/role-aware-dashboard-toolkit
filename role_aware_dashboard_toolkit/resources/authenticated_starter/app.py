@@ -26,9 +26,10 @@ RESOURCE_KEY = "_authenticated_pulse_resources"
 def build_access_policy() -> AccessPolicy:
     """Only trusted process configuration selects the store and OIDC client."""
     directory = Path(os.environ["RADT_ACCESS_DIRECTORY"]).expanduser().absolute()
-    identity_key = read_identity_key(directory)
-    if directory.is_relative_to(Path(__file__).resolve().parent):
+    # Compare resolved paths: /tmp/app/secrets is inside an app at /private/tmp/app.
+    if directory.resolve().is_relative_to(Path(__file__).resolve().parent):
         raise ValueError("Access storage must be outside the application source tree.")
+    identity_key = read_identity_key(directory)
     return AccessPolicy(
         identity_resolver=StreamlitIdentityResolver(
             trusted_issuer=os.environ["RADT_OIDC_ISSUER"],
