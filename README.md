@@ -191,7 +191,25 @@ radt.render(config)
 
 The audit object survives reruns in this browser session. A new session or
 server restart starts a new in-memory history; choose a persistent audit store
-when records must survive restarts.
+when records must survive restarts. A new demo session starts as Viewer, which
+can only read; pick a role in the sidebar to change controls.
+
+For durable audit across sessions, share one log per process and start its
+writer where you create it, then pass `audit=shared_audit()` and
+`audit_dir="audit_logs"` to `DashboardConfig`:
+
+```python
+@st.cache_resource
+def shared_audit() -> radt.AuditLog:
+    audit = radt.AuditLog()
+    audit.start_writer("audit_logs/audit.jsonl")
+    return audit
+```
+
+Every session's and role's events then reach `audit_logs/audit.jsonl`. With one
+log per browser session, as above, the sidebar's writer toggle governs only
+that session's log. See
+[persist every session's events](docs/dashboard_tools.md#persist-every-sessions-events).
 
 For controls, profiles, runs, checkpoints, and packet export **without a UI**,
 follow the [core quickstart](docs/quickstart.md) or run this example from the
