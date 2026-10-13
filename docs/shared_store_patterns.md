@@ -110,7 +110,11 @@ Shared record helpers:
 - use strict UTF-8 decoding
 - use hashed filenames to avoid normalized-id collisions
 - resolve direct record reads through hashed filenames only
+- verify that a record read by id holds that id, and refuse to save over or
+  delete a file that holds a different record id
 - surface short writes, replacements, and close failures
+- fsync record files (and their directory where the platform allows) and
+  remove this store's own temporary files left by an interrupted write
 
 These checks protect the final record path. The configured root and actors able
 to rename ancestor directories remain part of the trust boundary.
