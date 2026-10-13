@@ -90,12 +90,12 @@ changes.
 - A render no longer starts the audit writer from a stale session toggle or
   retries a failed start. Start the writer in host code, or share one log per
   process (README, durable audit).
-- Path redaction keeps at most 1 MiB of one string in audit events, packets,
+- Path redaction keeps at most 1 MiB of each string in audit events, packets,
   exports and diagnostics: the line that crosses the limit and everything
-  after it are dropped and replaced by
-  `<redacted-oversize-text: N characters omitted>` (a single line over 1 MiB
-  is replaced whole), and packet validation still passes. 0.1.0 kept the
-  whole value. Keep longer text in a file and record the file's name.
+  after it are replaced by `<redacted-oversize-text: N characters omitted>`
+  (a single line over 1 MiB is replaced whole). 0.1.0 kept the whole value,
+  and a packet with a cut field still validates. Keep longer text in a file
+  and record the file's name.
 - Building, exporting or loading a packet nested more than 500 levels of
   mappings and lists (counting the envelope) raises `ValueError`, as does one
   with a cycle; 0.1.0 had no limit and handled about 990 levels before
@@ -169,6 +169,8 @@ changes.
 - Pull-request CI adds a macOS / Python 3.12 test cell, and the dev extra
   installs mypy so the root-export typing check runs.
 - `sensitive_values.register_sensitive_names()` adds secret names for a host.
+- Diagnostic `RADT-PLUGIN-TRUST` reports a plugin entry point the allowlist
+  refused before import; `PluginErrorRecord` gains a `code` field.
 - File stores expose `read_error_count`, and
   `store_diagnostics.store_read_error_total()` counts any store's read errors.
 - `create_app(max_body_bytes=...)` sets the API request body limit.
