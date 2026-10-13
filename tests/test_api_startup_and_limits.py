@@ -247,8 +247,47 @@ def test_host_routes_keep_fastapi_validation_errors(monkeypatch):
     assert all(set(error) == {"type", "loc", "msg"} for error in toolkit.json()["detail"])
 
 
+_PARSER_LIMIT = 50_000
+
+
+def _parser_stops_at_its_limit(monkeypatch):
+    """Make the request JSON parser give up past _PARSER_LIMIT levels, as at its own limit.
+
+    Where json.loads stops depends on the interpreter: about 1,000 levels on
+    Python 3.10 and 3.11, the recursion limit's reach on 3.12 and 3.13, and
+    the C stack on 3.14, which parses 100,000 levels. Every one of them then
+    raises RecursionError, which FastAPI turns into a 400. This keeps that
+    real error where the interpreter raises it and raises the same error past
+    a fixed depth everywhere else, so both routes see one parse failure.
+    """
+    import json
+
+    import starlette.requests
+
+    real_json = starlette.requests.json
+
+    class _JsonAtItsLimit:
+        def __getattr__(self, name):
+            return getattr(real_json, name)
+
+        def loads(self, body, *args, **kwargs):
+            value = real_json.loads(body, *args, **kwargs)
+            text = body.decode() if isinstance(body, (bytes, bytearray)) else body
+            if "[" * _PARSER_LIMIT in text:
+                raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+            return value
+
+    monkeypatch.setattr(starlette.requests, "json", _JsonAtItsLimit())
+    assert json.loads is real_json.loads  # the stdlib module itself is untouched
+
+
 def test_host_routes_keep_fastapi_parse_errors_for_deep_json(monkeypatch):
+    # JSON too deep for the parser: FastAPI's own 400 on a host route, the
+    # toolkit's 422 depth refusal on a toolkit route.
+    from role_aware_dashboard_toolkit.api import _BODY_TOO_DEEP
+
     client = _app_with_host_routes(monkeypatch)
+    _parser_stops_at_its_limit(monkeypatch)
     deep = '{"count": 1, "nested": ' + _nested(100_000) + "}"
 
     host = client.post("/host/items", content=deep, headers={"Content-Type": "application/json"})
@@ -256,4 +295,6 @@ def test_host_routes_keep_fastapi_parse_errors_for_deep_json(monkeypatch):
                           content='{"profile_id": "p", "extra": {"x": ' + _nested(100_000) + "}}")
 
     assert host.status_code == 400
+    assert host.json() == {"detail": "There was an error parsing the body"}
     assert toolkit.status_code == 422
+    assert toolkit.json() == {"detail": _BODY_TOO_DEEP}
