@@ -49,6 +49,8 @@ _STORE_RECORD_UNSAFE_MESSAGE = (
 _STORE_RECORD_APPEND_UNSAFE_MESSAGE = (
     "store append target must be a single-link regular file"
 )
+_STORE_RECORD_ID_MISMATCH_MESSAGE = "store record id does not match its file"
+_STORE_RECORD_ID_CONFLICT_MESSAGE = "store record file holds a different record id"
 
 
 class StorePathSecurityError(Exception):
@@ -210,20 +212,33 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
     def _save_record(self, record: dict[str, Any], record_id: str | None = None) -> str:
         resolved_id = self._default_record_id(record_id) if record_id is not None else self._record_id_from_payload(record)
         path = self._path_for_write(resolved_id)
-        atomic_write_json_record(path, {**record, self._record_id_field: resolved_id}, root_dir=self._record_store_root())
+        root = self._record_store_root()
+        _refuse_foreign_record_overwrite(path, self._record_id_field, resolved_id, root_dir=root)
+        atomic_write_json_record(path, {**record, self._record_id_field: resolved_id}, root_dir=root)
         return str(path)
 
     def _load_record(self, record_id: str) -> dict[str, Any] | None:
         path = self._resolve_record_path(record_id, diagnose_read_errors=True)
         if path is None:
             return None
-        return self._read_path(path)
+        record = self._read_path(path)
+        if record is not None and record[self._record_id_field] != canonical_store_id(record_id):
+            # A wrong-backup copy or a filename-digest collision: the file at
+            # this id's path belongs to another record.
+            self._read_errors.append(build_read_error(
+                path, StorePathSecurityError(_STORE_RECORD_ID_MISMATCH_MESSAGE),
+                root_dir=self._record_store_root(),
+            ))
+            return None
+        return record
 
     def _delete_record(self, record_id: str) -> bool:
         path = self._resolve_record_path(record_id)
         if path is None:
             return False
-        return safe_delete_store_record(path, root_dir=self._record_store_root())
+        root = self._record_store_root()
+        _refuse_foreign_record_overwrite(path, self._record_id_field, canonical_store_id(record_id), root_dir=root)
+        return safe_delete_store_record(path, root_dir=root)
 
     def _list_record_items(self) -> list[tuple[Path, dict[str, Any]]]:
         root = self._record_store_root()
@@ -288,6 +303,12 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
             except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
                 self._read_errors.append(build_read_error(path, exc, root_dir=self._record_store_root()))
                 return None
+            if not _is_record_file_name_for(path, record[self._record_id_field]):
+                self._read_errors.append(build_read_error(
+                    path, StorePathSecurityError(_STORE_RECORD_ID_MISMATCH_MESSAGE),
+                    root_dir=self._record_store_root(),
+                ))
+                return None
         return record
 
 
@@ -302,6 +323,7 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
         store_root = self._collection_store_root()
         target_dir = store_root / subdir
         path = _record_file_path(target_dir, object_id)
+        _refuse_foreign_record_overwrite(path, id_key, object_id, root_dir=store_root)
         atomic_write_json_record(path, {**record, id_key: object_id}, root_dir=store_root)
         return str(path)
 
@@ -336,10 +358,44 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
                 except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
                     self._read_errors.append(build_read_error(path, exc, root_dir=store_root))
                     continue
+                # Collections list manually added files under any name and have
+                # no read by id, so a file's name is not checked against its id.
             if any(value and str(loaded.get(key) or "") != str(value) for key, value in filters.items()):
                 continue
             rows.append(loaded)
         return rows
+
+
+def _is_record_file_name_for(path: Path, identifier: str) -> bool:
+    """True when ``path`` is a filename the store would use for ``identifier``.
+
+    Both the bounded name and an exact legacy (unbounded) name are accepted.
+    """
+    return path.name in {
+        f"{hashed_store_filename(identifier)}.json",
+        f"{_unbounded_hashed_store_filename(identifier)}.json",
+    }
+
+
+def _refuse_foreign_record_overwrite(
+    path: Path, id_field: str, identifier: str, *, root_dir: Path,
+) -> None:
+    """Refuse to replace a readable record that belongs to another id.
+
+    A filename-digest collision or a misplaced copy must not let one record's
+    save destroy another. Missing or unreadable targets keep the existing
+    write behaviour.
+    """
+    try:
+        if not path.is_file():
+            return
+    except OSError:
+        return
+    existing = read_json_record(path, None, root_dir=root_dir)
+    if existing is None:
+        return
+    if canonical_store_id(existing.get(id_field)) != canonical_store_id(identifier):
+        raise StorePathSecurityError(_STORE_RECORD_ID_CONFLICT_MESSAGE)
 
 
 def read_json_record(
