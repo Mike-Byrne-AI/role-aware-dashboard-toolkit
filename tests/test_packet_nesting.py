@@ -147,3 +147,38 @@ def test_non_finite_numbers_are_replaced_in_tuples_nested_to_the_limit():
         assert sanitized[1] is None
         sanitized = sanitized[0]
     assert sanitized == 1.0
+
+
+@pytest.mark.parametrize("levels", [10, LIMIT - 2])
+def test_a_legal_packet_that_runs_out_of_stack_is_not_called_too_deep(monkeypatch, levels):
+    # Before Python 3.12 the JSON decoder counts the caller's own frames, so a
+    # host with a deep stack can hit RecursionError on a packet well within
+    # the limit; saying "nesting exceeds 500 levels" sent it looking at the data.
+    import role_aware_dashboard_toolkit.packets as packets
+
+    raw = json.dumps(_envelope({"schema_version": 1, "n": _nested(levels)}))
+
+    def decoder_out_of_stack(_raw):
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON object")
+
+    monkeypatch.setattr(packets, "strict_json_loads", decoder_out_of_stack)
+    with pytest.raises(ValueError) as caught:
+        load_packet_json(raw)
+
+    message = str(caught.value)
+    assert "exceeds" not in message
+    assert "recursion limit" in message and f"{levels + 2} levels" in message
+
+
+def test_a_packet_too_deep_for_the_decoder_still_names_the_limit(monkeypatch):
+    import role_aware_dashboard_toolkit.packets as packets
+
+    raw = json.dumps(_envelope({"schema_version": 1})).replace(
+        '"schema_version": 1}', '"schema_version": 1, "n": ' + "[" * 600 + "]" * 600 + "}", 1)
+
+    def decoder_out_of_stack(_raw):
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    monkeypatch.setattr(packets, "strict_json_loads", decoder_out_of_stack)
+    with pytest.raises(ValueError, match=f"nesting exceeds {LIMIT} levels"):
+        load_packet_json(raw)

@@ -143,11 +143,43 @@ def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
     return json.dumps(canonical, indent=indent, sort_keys=True, allow_nan=False)
 
 
+def _json_text_depth(raw: str | bytes | bytearray) -> int:
+    """Return the deepest nesting of objects and arrays in JSON text, without parsing it."""
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    depth = deepest = 0
+    in_string = escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif char in "]}":
+            depth -= 1
+    return deepest
+
+
 def load_packet_json(raw: str) -> dict[str, Any]:
     try:
         data = strict_json_loads(raw)
     except RecursionError:
-        raise _nesting_error("Invalid packet JSON: ", may_cycle=False) from None
+        # Before Python 3.12 the decoder also counts the caller's frames, so
+        # a packet within the limit can fail on a host with a deep stack.
+        depth = _json_text_depth(raw)
+        if depth > MAX_PACKET_NESTING_DEPTH:
+            raise _nesting_error("Invalid packet JSON: ", may_cycle=False) from None
+        raise ValueError(
+            f"Invalid packet JSON: decoding {depth} levels of nesting (within the "
+            f"{MAX_PACKET_NESTING_DEPTH}-level limit) ran out of Python's recursion limit, "
+            "because the caller's stack is already deep. Load it with less of the stack in use."
+        ) from None
     problem = _nesting_problem(data, MAX_PACKET_NESTING_DEPTH)
     if problem is not None:
         raise _nesting_error("Invalid packet JSON: ", may_cycle=False, problem=problem)
