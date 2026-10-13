@@ -49,10 +49,14 @@ _FILE_URI_PATTERN = re.compile(
 _EDITOR_FILE_LINK_AUTHORITY = "//file/"
 _LEADING_WRAP = "\"'([{<"
 _TRAILING_WRAP = "\"')]}>,.;:"
-# Redaction scans at most this many characters of one string. The rest of an
-# oversize string is dropped, never emitted unscanned, and replaced by a marker
-# that states how many characters were omitted.
-_MAX_SCAN_CHARACTERS = 256 * 1024
+# Redaction scans at most this many characters of one string: 0.1 to 0.5
+# seconds on an Apple M2, depending on the text. Every path form ends at a
+# line break, so an oversize string keeps only the whole lines before the
+# limit: the line that crosses it and the rest are dropped, never emitted
+# unscanned, and replaced by a marker that states how many characters were
+# omitted. Cutting inside the line could split a quoted path or a Windows path
+# with spaces, leaving a head that no longer reads as a path.
+_MAX_SCAN_CHARACTERS = 1024 * 1024
 # A URL query or fragment is scanned for paths, and may itself hold URLs.
 # Past this many nested levels the rest is redacted unscanned, which bounds
 # both the recursion and the rescanning of the remainder at each level.
@@ -592,13 +596,14 @@ def _redact_text_local_paths(
     if cache is None:
         cache = {}
     if len(value) > _MAX_SCAN_CHARACTERS:
-        omitted = len(value) - _MAX_SCAN_CHARACTERS
+        cut = _scan_cut(value, _MAX_SCAN_CHARACTERS)
+        omitted = len(value) - cut
         scanned = _redact_text_local_paths(
-            value[:_MAX_SCAN_CHARACTERS],
+            value[:cut],
             repo_root_path=repo_root_path,
             cache=cache,
             url_depth=url_depth,
-        )
+        ) if cut else ""
         unit = "character" if omitted == 1 else "characters"
         return f"{scanned}<redacted-oversize-text: {omitted} {unit} omitted>"
     if _looks_absolute_path(value):
@@ -612,6 +617,16 @@ def _redact_text_local_paths(
         lambda match: _redact_token(match.group(0), repo_root_path=repo_root_path, cache=cache, url_depth=url_depth),
         value,
     )
+
+
+def _scan_cut(value: str, limit: int) -> int:
+    """Return where to cut an oversize string: the start of the line crossing ``limit``.
+
+    A line that ends exactly at the limit is complete and is kept.
+    """
+    if value[limit] in "\r\n":
+        return limit
+    return max(value.rfind("\n", 0, limit), value.rfind("\r", 0, limit)) + 1
 
 
 def _decode_url_field(value: str) -> str:

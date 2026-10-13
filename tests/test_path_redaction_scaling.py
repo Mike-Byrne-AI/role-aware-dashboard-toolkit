@@ -52,23 +52,20 @@ def test_payload_redaction_time_stays_linear_on_hostile_values():
     assert elapsed < _BOUND_SECONDS, f"payload redaction took {elapsed:.2f}s"
 
 
-def test_default_scan_cap_is_256_kib():
-    assert path_redaction._MAX_SCAN_CHARACTERS == 256 * 1024
+def test_default_scan_cap_is_1_mib():
+    assert path_redaction._MAX_SCAN_CHARACTERS == 1024 * 1024
 
 
-def test_oversize_text_is_scanned_up_to_the_cap_and_its_tail_is_dropped(monkeypatch):
+def test_oversize_text_keeps_whole_lines_and_drops_the_line_crossing_the_cap(monkeypatch):
     # raising=False lets this run against a scanner without a cap, which fails it.
     monkeypatch.setattr(path_redaction, "_MAX_SCAN_CHARACTERS", 40, raising=False)
-    head = "see /Users/alice/x and "
-    text = head + "b" * (40 - len(head)) + " /Users/alice/secret.txt"
+    head = "see /Users/alice/x\n"
+    text = head + "and " + "b" * 30 + " /Users/alice/secret.txt"
 
     redacted = redact_text_local_paths(text)
 
-    omitted = len(text) - 40
-    assert redacted == (
-        "see <redacted-local-path> and " + "b" * (40 - len(head))
-        + f"<redacted-oversize-text: {omitted} characters omitted>"
-    )
+    omitted = len(text) - len(head)
+    assert redacted == f"see <redacted-local-path>\n<redacted-oversize-text: {omitted} characters omitted>"
     assert "alice" not in redacted
     assert "secret" not in redacted
 
@@ -78,20 +75,60 @@ def test_text_at_the_scan_cap_is_not_truncated(monkeypatch):
     text = "x" * 40
 
     assert redact_text_local_paths(text) == text
-    assert redact_text_local_paths(text + "y") == "x" * 40 + "<redacted-oversize-text: 1 character omitted>"
+    # One line longer than the cap crosses it, so all of it is dropped.
+    assert redact_text_local_paths(text + "y") == "<redacted-oversize-text: 41 characters omitted>"
+    # A line ending exactly at the cap is complete, so it is kept.
+    assert redact_text_local_paths(text + "\nyy") == "x" * 40 + "<redacted-oversize-text: 3 characters omitted>"
+    assert redact_text_local_paths("x" * 39 + "\nyy") == "x" * 39 + "\n<redacted-oversize-text: 2 characters omitted>"
+    assert redact_text_local_paths("x" * 39 + "\r\nyy") == "x" * 39 + "\r<redacted-oversize-text: 3 characters omitted>"
+
+
+# Each line straddles the cap. 0.1.0 redacted each path whole; cutting at the
+# cap split a quoted path, a Windows path with spaces or an OSError filename,
+# and the part before the cut no longer read as a path, so a name leaked.
+STRADDLING = {
+    "quoted POSIX path with spaces": ('Could not read "/Users/alice/Secret Merger Plans/acme deal.xlsx" (retry)', 40),
+    "Windows path with spaces": ("Could not read C:\\Users\\alice\\Secret Merger Plans\\acme.xlsx now", 40),
+    "OSError double-root filename": ("[Errno 63] File name too long: '//fs01/share/alice-payroll/q3/xxxxxxxx'", 50),
+    "unquoted POSIX path": ("Could not read /Users/alice/secretproject/file.txt now", 22),
+}
+_PRIVATE_FRAGMENTS = ("alice", "Mer", "Plans", "acme", "fs01", "payroll", "secretproject")
+
+
+@pytest.mark.parametrize("line,cut", list(STRADDLING.values()), ids=list(STRADDLING))
+def test_a_path_crossing_the_cap_is_dropped_whole(monkeypatch, line, cut):
+    first = "ok line\n"
+    monkeypatch.setattr(path_redaction, "_MAX_SCAN_CHARACTERS", len(first) + cut, raising=False)
+    text = first + line
+
+    redacted = redact_text_local_paths(text)
+
+    assert [fragment for fragment in _PRIVATE_FRAGMENTS if fragment in redacted] == []
+    assert redacted == f"ok line\n<redacted-oversize-text: {len(line)} characters omitted>"
+
+
+def test_a_real_overlong_oserror_at_the_default_cap_leaks_nothing():
+    # A host building a path from user text gets ENAMETOOLONG naming all of it.
+    cap = path_redaction._MAX_SCAN_CHARACTERS
+    message = "[Errno 63] File name too long: '//fs01/share/alice-payroll/" + "x" * cap + "'"
+
+    redacted = redact_text_local_paths(message)
+
+    assert "fs01" not in redacted and "alice" not in redacted
+    assert redacted == f"<redacted-oversize-text: {len(message)} characters omitted>"
 
 
 def test_oversize_payload_values_and_keys_are_capped_but_opt_in_paths_are_untouched(monkeypatch):
     monkeypatch.setattr(path_redaction, "_MAX_SCAN_CHARACTERS", 16, raising=False)
     long_value = "/Users/alice/" + "x" * 30
-    payload = {"note": "ok " + "z" * 30, "k" * 20: "value", "path": long_value}
+    payload = {"note": "ok\n" + "z" * 30, "k" * 20: "value", "path": long_value}
 
     redacted = redact_payload_local_paths(payload, repo_root="")
     visible = redact_payload_local_paths(payload, repo_root="", include_local_paths=True)
 
-    assert redacted["note"] == "ok " + "z" * 13 + "<redacted-oversize-text: 17 characters omitted>"
-    assert redacted["k" * 16 + "<redacted-oversize-text: 4 characters omitted>"] == "value"
-    assert redacted["path"].startswith("<redacted-local-path>")
+    assert redacted["note"] == "ok\n<redacted-oversize-text: 30 characters omitted>"
+    assert redacted["<redacted-oversize-text: 20 characters omitted>"] == "value"
+    assert redacted["path"] == "<redacted-oversize-text: 43 characters omitted>"
     assert "alice" not in json_text(redacted)
     assert visible == payload
 

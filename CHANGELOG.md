@@ -15,7 +15,7 @@ changes.
   identity-bound audit view pins its actor on them.
 - The audit Timeline table and its CSV download get the audit CSV's formula
   protection.
-- Path redaction runs in linear time and scans at most 256 KiB of a string;
+- Path redaction runs in linear time and scans at most 1 MiB of a string;
   `file:` URIs without `//` and editor `file` links are redacted.
 - Record and packet validation errors no longer repeat saved values, and an
   oversized schema version no longer raises.
@@ -58,6 +58,12 @@ changes.
 - A render no longer starts the audit writer from a stale session toggle or
   retries a failed start. Start the writer in host code, or share one log per
   process (README, durable audit).
+- Path redaction keeps at most 1 MiB of one string in audit events, packets,
+  exports and diagnostics: the line that crosses the limit and everything
+  after it are dropped and replaced by
+  `<redacted-oversize-text: N characters omitted>` (a single line over 1 MiB
+  is replaced whole), and packet validation still passes. 0.1.0 kept the
+  whole value. Keep longer text in a file and record the file's name.
 - `AuditLog.clear()` returns the number of events cleared and leaves one
   `audit_cleared` event in the view.
 - `read_errors` keeps the newest 200 errors. Detect new errors with

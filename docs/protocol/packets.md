@@ -80,12 +80,13 @@ editor links that carry a local path (`vscode://file/...` and the same form in
 other editors) are redacted as local paths.
 
 Path redaction takes time proportional to the length of the text. It scans at
-most 256 KiB (262,144 characters) of any one string value or mapping key. The
-scanned head keeps its normal redaction; the rest of an oversize string is
+most 1 MiB (1,048,576 characters) of any one string value or mapping key. An
+oversize string keeps the whole lines before that limit, with their normal
+redaction; the line that crosses the limit and everything after it are
 dropped, never emitted unscanned, and replaced by
-`<redacted-oversize-text: N characters omitted>`. The same limit applies
-wherever the toolkit redacts local paths, including audit events and
-diagnostics. A single path longer than 4,096 characters is redacted without
+`<redacted-oversize-text: N characters omitted>`. A string with no line break
+before the limit is replaced whole. The same limit applies wherever the
+toolkit redacts local paths, including audit events and diagnostics. A single path longer than 4,096 characters is redacted without
 being resolved. URL queries and fragments are scanned for paths, including URLs
 nested inside them, to eight levels; anything nested deeper is replaced by
 `<redacted-local-path>`. Opting in to local paths skips redaction and its
