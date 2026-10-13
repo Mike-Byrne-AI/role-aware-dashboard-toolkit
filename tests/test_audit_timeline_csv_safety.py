@@ -62,3 +62,19 @@ def test_text_that_looks_like_a_negative_number_is_still_protected():
     audit = AuditLog()
     audit.log_control_change("comment", "plain", "-5+cmd", role="Operator")
     assert list(_timeline(audit)["new"])[0] == "'-5+cmd"
+
+
+class _FormulaLike:
+    def __str__(self):
+        return '=HYPERLINK("https://evil.example")'
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def test_a_host_object_whose_text_looks_like_a_formula_is_protected():
+    # Only numbers skip protection; any other value is protected once it is
+    # text, whatever its type.
+    audit = AuditLog()
+    audit.log_control_change("comment", "plain", _FormulaLike(), role="Operator")
+    assert list(_timeline(audit)["new"])[0].startswith("'=")

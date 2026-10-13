@@ -173,16 +173,17 @@ def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
 
 
 def _timeline_cell(key: str, value: Any) -> Any:
-    """One Timeline table cell: text gets formula protection; other values do not.
+    """One Timeline table cell, with the audit CSV's formula protection.
 
-    ``old`` and ``new`` hold mixed kinds, so non-text values become their text
-    after protection is decided: a number such as -5 shows as -5, not '-5.
+    ``old`` and ``new`` hold mixed kinds and are shown as text. A number keeps
+    its plain text (-5, not '-5); text and every other value, including a host
+    object whose text starts like a formula, are protected.
     """
-    if isinstance(value, str):
-        return _spreadsheet_safe_cell(value)
-    if key in {"old", "new"} and value is not None:
-        return str(value)
-    return value
+    if key in {"old", "new"} and value is not None and not isinstance(value, str):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        value = str(value)
+    return _spreadsheet_safe_cell(value)
 
 
 def _spreadsheet_safe_cell(value: Any) -> Any:
