@@ -89,7 +89,8 @@ changes.
 - The default `icon` is empty, so titles no longer start "Control Panel".
 - Shipped code no longer uses `assert` for control flow.
 - Deep, cyclic or exploding packets raise `ValueError`, not `RecursionError`.
-- Root exports have real types for type checkers.
+- Root exports have real types for type checkers, and `ControlRegistry`
+  state methods accept `st.session_state`.
 - Telemetry comparison and observability drift deltas print without
   floating-point noise (0.25, not 0.24999999999999997).
 - `access_cli` and the A/B/C provisioning example say why provisioning was
