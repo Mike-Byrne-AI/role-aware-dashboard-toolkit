@@ -134,20 +134,26 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
             audit.log_role_switch(previous_role, new_role)
         st.session_state["_radt_previous_role"] = new_role
 
-        current_writable = bool(st.session_state.get("_radt_writable", True))
+        role_def = get_role(new_role, config.custom_roles)
+        perms = dict(role_def.perms) if role_def else {}
+        can_manage_freeze = has_perm(make_security_context(new_role, perms), "can_manage_freeze")
+        requested_writable = bool(st.session_state.get("_radt_writable", True))
+        previous_writable = bool(st.session_state.get("_radt_previous_writable", requested_writable))
+        if requested_writable != previous_writable and not can_manage_freeze:
+            # A disabled toggle cannot send a change; refuse a forged one.
+            st.session_state["_radt_writable"] = previous_writable
         writable = st.toggle(
             "Controls Writable",
-            value=current_writable,
             key="_radt_writable",
-            help="OFF freezes all controls at their current values.",
+            help="OFF freezes all controls at their current values."
+            + ("" if can_manage_freeze else " Changing it requires permission to manage the freeze."),
+            disabled=not can_manage_freeze,
+            **({"value": True} if "_radt_writable" not in st.session_state else {}),
         )
-        previous_writable = bool(st.session_state.get("_radt_previous_writable", current_writable))
         if writable != previous_writable:
             audit.log_freeze(writable, role=new_role)
         st.session_state["_radt_previous_writable"] = writable
 
-        role_def = get_role(new_role, config.custom_roles)
-        perms = dict(role_def.perms) if role_def else {}
         ctx = make_security_context(new_role, perms, controls_writable=writable)
 
         return _render_authorized_sidebar(st, config, ctx, all_roles)

@@ -1592,18 +1592,21 @@ class TestDashboardPanels:
 class TestDashboardSmoke:
     def test_sidebar_detects_role_and_freeze_changes_applied_before_rerun(self):
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Viewer"
         config = DashboardConfig()
 
         render_sidebar(fake_st, config)
-        fake_st.session_state["_radt_role"] = "Viewer"
+        # Switch to a role that may freeze and freeze in the same rerun.
+        fake_st.session_state["_radt_role"] = "Admin"
         fake_st.session_state["_radt_writable"] = False
         render_sidebar(fake_st, config)
 
         events = config.audit.all_events()
         assert [event["type"] for event in events] == ["role_switch", "freeze_toggle"]
-        assert events[0]["old"] == "Admin"
-        assert events[0]["new"] == "Viewer"
+        assert events[0]["old"] == "Viewer"
+        assert events[0]["new"] == "Admin"
         assert events[1]["new"] is False
+        assert events[1]["role"] == "Admin"
 
     @pytest.mark.parametrize(
         ("auth_value", "classification"),
