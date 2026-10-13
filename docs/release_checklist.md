@@ -55,7 +55,9 @@ collection and child processes. Hosted CI applies the same setting to all jobs.
 Ruff uses the explicit `E4`, `E7`, `E9`, and `F` selection in `pyproject.toml`.
 
 The clean-source gate includes tracked and untracked files so candidate
-artifacts can be tied to the checked-out commit. Every local check must pass,
+artifacts can be tied to the checked-out commit. In the same release mode,
+`changelog_unreleased` fails while `CHANGELOG.md` still lists entries under
+Unreleased: move them under the dated release heading first. Every local check must pass,
 including `oss_public_coordinates`, `distribution_name_ownership`, and
 `security_intake_contact`; `failure_count` must remain `0`. The blocked and
 warning counts must also be zero. No actual local failure is an allowed

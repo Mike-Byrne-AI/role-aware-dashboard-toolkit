@@ -324,6 +324,7 @@ def _passing_local_report():
         "runtime_version", "changelog_version", "release_audit_doc", "release_checklist_commands",
         "oss_public_coordinates", "distribution_name_ownership", "oss_intake_files",
         "security_intake_contact", "generated_cache_artifacts", "source_tree_clean",
+        "changelog_unreleased",
     ]
     return {
         "ok": True, "status": "pass", "checks": [{"id": name, "status": "pass"} for name in check_ids],

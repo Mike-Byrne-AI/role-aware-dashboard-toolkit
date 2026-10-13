@@ -31,6 +31,15 @@ def test_changelog_mentions_current_runtime_version():
     assert f"## {__version__}" in changelog
 
 
+def test_changelog_release_headings_are_dated_and_follow_unreleased():
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = re.findall(r"^## (.+)$", changelog, flags=re.MULTILINE)
+    releases = [heading for heading in headings if heading != "Unreleased"]
+    assert releases
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading) for heading in releases), releases
+    assert "Unreleased" not in headings or headings[0] == "Unreleased"
+
+
 def test_changelog_starts_with_canonical_heading():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = changelog.splitlines()
