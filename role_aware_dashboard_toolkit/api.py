@@ -68,6 +68,7 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
 
 try:
     from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
+    from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
@@ -79,6 +80,7 @@ except ImportError as exc:
     Request = None  # type: ignore
     Response = None  # type: ignore
     JSONResponse = None  # type: ignore
+    RequestValidationError = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -196,7 +198,7 @@ class _RequestBodyLimit:
             await self.app(scope, receive, send)
             return
         for name, value in scope.get("headers", ()):
-            if name.lower() == b"content-length" and value.strip().isdigit() and int(value) > self.max_bytes:
+            if name.lower() == b"content-length" and self._declares_too_much(value):
                 response = JSONResponse({"detail": _body_too_large(self.max_bytes)}, status_code=413)
                 await response(scope, receive, send)
                 return
@@ -212,6 +214,26 @@ class _RequestBodyLimit:
             return message
 
         await self.app(scope, limited_receive, send)
+
+    def _declares_too_much(self, value: bytes) -> bool:
+        digits = value.strip().lstrip(b"0") or b"0"
+        if not digits.isdigit():
+            return False  # malformed: the streamed count below still applies
+        # Compare lengths first: int() refuses very long digit strings.
+        return len(digits) > len(str(self.max_bytes)) or int(digits) > self.max_bytes
+
+
+def _validation_error_response(_request: Any, exc: Any) -> Any:
+    """Report request validation errors without echoing the submitted values.
+
+    FastAPI's default response includes each rejected ``input``: it repeats a
+    client's secrets back and can fail to encode a deeply nested value.
+    """
+    return JSONResponse(status_code=422, content={"detail": [
+        {"type": str(error.get("type", "")), "loc": list(error.get("loc", ())),
+         "msg": str(error.get("msg", ""))}
+        for error in exc.errors()
+    ]})
 
 
 def _require_json_depth(value: Any, field_name: str) -> None:
@@ -788,6 +810,7 @@ def create_app(
 
     app = FastAPI(title=title, version=version)
     app.add_middleware(_RequestBodyLimit, max_bytes=body_limit)
+    app.add_exception_handler(RequestValidationError, _validation_error_response)
     require_api_context = _make_require_api_context(app_state)
 
     _register_health_route(app)

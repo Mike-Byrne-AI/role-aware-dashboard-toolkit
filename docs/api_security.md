@@ -65,6 +65,9 @@ without `Content-Length` is counted as it arrives. JSON values nested more than
 32 levels deep in a control update or a profile's `extra` receive HTTP 422. Both
 refusals happen before any state or audit change. Raise `max_body_bytes` only
 for trusted clients that need it; a reverse proxy can enforce its own limit too.
+Malformed request bodies receive HTTP 422 listing each error's `type`, `loc`
+and `msg`; unlike FastAPI's default, the response does not repeat the submitted
+values.
 
 ## Cross-site requests
 

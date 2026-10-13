@@ -133,3 +133,51 @@ def test_control_value_nesting_is_limited_before_validation(monkeypatch):
 
     assert response.status_code == 422
     assert "banner" in response.json()["detail"]
+
+
+def test_deep_json_in_a_rejected_field_is_a_validation_error(monkeypatch):
+    store = InMemoryProfileStore()
+    client = _client(monkeypatch, store)
+
+    patched = client.patch("/controls", headers=HEADERS,
+                           content='{"values":{},"unexpected":' + _nested(5000) + "}")
+    saved = client.post("/profiles", headers=HEADERS,
+                        content='{"profile_id":' + _nested(5000) + "}")
+
+    assert patched.status_code == 422
+    assert saved.status_code == 422
+    assert store.list_ids() == []
+
+
+def test_validation_errors_do_not_echo_submitted_values(monkeypatch):
+    client = _client(monkeypatch, InMemoryProfileStore())
+
+    response = client.post("/profiles", headers=HEADERS,
+                           json={"profile_id": "x", "token": "SUBMITTED-CANARY"})
+
+    assert response.status_code == 422
+    assert "SUBMITTED-CANARY" not in response.text
+    assert [error["loc"] for error in response.json()["detail"]] == [["body", "token"]]
+
+
+def test_an_absurd_content_length_is_refused_not_crashed():
+    import asyncio
+
+    from role_aware_dashboard_toolkit.api import _RequestBodyLimit
+
+    sent = []
+
+    async def app(scope, receive, send):
+        raise AssertionError("the route must not run")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/profiles",
+             "headers": [(b"content-length", b"9" * 5000)]}
+    asyncio.run(_RequestBodyLimit(app, 1024)(scope, receive, send))
+
+    assert sent[0]["status"] == 413
