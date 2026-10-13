@@ -39,6 +39,10 @@ _REPOSITORY_MESSAGE = (
     f"{_FAILED}: the protected directory is inside a Git repository. "
     "Choose a directory outside every repository."
 )
+_OWNER_MESSAGE = (
+    f"{_FAILED}: the protected directory belongs to another account. Use a directory "
+    "owned by the account that runs provisioning and the dashboard."
+)
 _PERMISSIONS_MESSAGE = (
     f"{_FAILED}: the protected directory allows group or other access. "
     "Restrict it to its owner (for example chmod 700)."
@@ -48,8 +52,9 @@ _INITIALIZED_MESSAGE = (
     "nothing was overwritten. Inspect it before trying again."
 )
 _KEY_MESSAGE = (
-    f"{_FAILED}: identity.key is missing, is not a private regular file, or does not "
-    "hold a valid key. Restore it, or initialize a new protected directory."
+    f"{_FAILED}: identity.key is missing, is not a private regular file owned by this "
+    "account, or does not hold a valid key. Restore it, or initialize a new protected "
+    "directory."
 )
 _MAX_LINKS = 40
 
@@ -123,26 +128,40 @@ def _ordinary_path(path: Path) -> Path:
     return current
 
 
+def _owned_by_caller(info: os.stat_result) -> bool:
+    # Another account that owns the directory or key could replace its contents.
+    return os.name != "posix" or info.st_uid in {os.geteuid(), 0}
+
+
 def _directory(value: str | Path) -> Path:
     directory = Path(value).expanduser().absolute()
     try:
         real = _ordinary_path(directory)
+        requested_info, real_info = os.stat(directory), os.stat(real)
     except OSError:
         raise ProvisioningError(_MISSING_MESSAGE) from None
-    if not real.is_dir():
+    if not stat.S_ISDIR(real_info.st_mode):
         raise ProvisioningError(_MISSING_MESSAGE)
+    # The kernel must reach the same directory the walk validated.
+    if (requested_info.st_dev, requested_info.st_ino) != (real_info.st_dev, real_info.st_ino):
+        raise ProvisioningError()
     # Repositories are unsuitable for either the key or pseudonymous policy.
     # Check the requested path and, past any trusted system link, the real one.
     for parent in (directory, *directory.parents, real, *real.parents):
         if (parent / ".git").exists():
             raise ProvisioningError(_REPOSITORY_MESSAGE)
-    if os.name == "posix" and real.stat().st_mode & 0o077:
+    if not _owned_by_caller(real_info):
+        raise ProvisioningError(_OWNER_MESSAGE)
+    if os.name == "posix" and real_info.st_mode & 0o077:
         raise ProvisioningError(_PERMISSIONS_MESSAGE)
     return real
 
 
 def read_identity_key(directory: str | Path) -> bytes:
-    """Read the host-only binary key; reject links and broad POSIX permissions.
+    """Read the host-only binary key from a directory checked like provisioning.
+
+    Links a non-root account could change, broad POSIX permissions and a key or
+    directory owned by another account (other than root) are refused.
 
     Windows operators must restrict the directory ACL themselves. This helper
     does not claim that chmod provides equivalent Windows access control.
@@ -153,7 +172,12 @@ def read_identity_key(directory: str | Path) -> bytes:
             path = _ordinary_path(path)
         except OSError:
             raise ProvisioningError(_KEY_MESSAGE) from None
-        if not path.is_file() or (os.name == "posix" and path.stat().st_mode & 0o077):
+        info = os.stat(path)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or not _owned_by_caller(info)
+            or (os.name == "posix" and info.st_mode & 0o077)
+        ):
             raise ProvisioningError(_KEY_MESSAGE)
         with path.open("rb") as handle:
             key = handle.read(4097)
