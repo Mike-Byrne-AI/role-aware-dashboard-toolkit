@@ -114,8 +114,8 @@ Require every expected Linux Python 3.10-3.14, coverage, packaging, Windows,
 and release-evidence job and required step to succeed for the same run attempt
 and final SHA. A skipped, cancelled, or merely green-looking incomplete run
 is not proof. Review artifact digests, source SHA, branch, run ID, and attempt.
-Retain evidence before the one-day artifact retention expires, then remove
-the approval variable to disarm the workflow.
+Hosted artifacts and evidence are kept for 90 days; copy the evidence into
+the release record, then remove the approval variable to disarm the workflow.
 
 If a real failure requires a code change, review a new commit and repeat the
 checks affected by it. Never reuse hosted evidence from an older SHA or attempt.

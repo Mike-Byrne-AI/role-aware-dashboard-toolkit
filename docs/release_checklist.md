@@ -165,8 +165,8 @@ responsibilities described in the authentication guide.
 - `contributor-checks` and `dependency-checks` succeed for the final source, and
   live `main` protection requires these contexts rather than the manual release jobs
 - workflow permissions remain read-only, actions remain pinned, and runs have
-  bounded timeouts; release artifacts have one-day retention, while browser
-  diagnostics and dependency audit reports have seven-day retention
+  bounded timeouts; release artifacts and evidence have 90-day retention, while
+  browser diagnostics and dependency audit reports have seven-day retention
 - the release candidate reuses the exact audited artifacts rather than
   rebuilding them in the evidence job
 - Windows installs the same downloaded `validated-dist` wheel, fails on an

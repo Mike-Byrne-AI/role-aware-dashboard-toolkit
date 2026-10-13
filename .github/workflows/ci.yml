@@ -446,7 +446,7 @@ jobs:
           name: role_aware_dashboard_toolkit-validated-dist
           path: dist/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
   release-candidate:
     # No hosted run is authorized unless the owner opts in this exact commit.
     if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
@@ -631,7 +631,7 @@ jobs:
           name: role_aware_dashboard_toolkit-release-candidate-dist
           path: dist/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
       - name: Upload release-candidate evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -640,7 +640,7 @@ jobs:
             pre_release_report.json
             release_candidate_evidence.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
   windows-release-smoke:
     # No hosted run is authorized unless the owner opts in this exact commit.
     if: ${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}
@@ -811,4 +811,4 @@ jobs:
           name: role_aware_dashboard_toolkit-windows-artifact-evidence
           path: ${{ runner.temp }}/windows_artifact_evidence.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90

@@ -278,7 +278,9 @@ def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
     assert "concurrency:\n  group: release-candidate-validation\n  cancel-in-progress: false\n" in workflow
     assert "continue-on-error" not in workflow
     assert not re.search(r"^        if:", workflow, flags=re.MULTILINE)
-    assert workflow.count("          retention-days: 1\n") == ACTION_PINS["actions/upload-artifact"][2]
+    # Release notes cite these artifacts; keep them for GitHub's 90-day maximum.
+    assert workflow.count("          retention-days: 90\n") == ACTION_PINS["actions/upload-artifact"][2]
+    assert "retention-days: 1\n" not in workflow
     assert "twine upload" not in workflow
 
 

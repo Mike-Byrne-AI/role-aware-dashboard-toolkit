@@ -410,6 +410,8 @@ def test_release_docs_cover_non_publish_release_candidate_lane():
     assert "`workbench`, `auth`, `api`, and `pandas` independently" in checklist
     assert "on Linux and Windows" in checklist
     assert "`auth` wheel on Linux and Windows" in runbook
+    assert "90 days" in runbook and "90-day retention" in checklist
+    assert "one-day" not in runbook + checklist
     assert "authentication checks in the `full` smoke too" in runbook
 
     checklist = _read("docs/release_checklist.md")
