@@ -476,3 +476,25 @@ def test_actual_auth_smoke_rejects_incomplete_or_invalid_installed_resources(lan
     else:
         with pytest.raises(SyntaxError if problem == "bad_python" else AssertionError):
             exec(checks, namespace)
+
+
+def test_workflow_dashboard_configs_construct_under_current_rules():
+    """The installed-wheel smokes build a DashboardConfig the local suite never runs.
+
+    A config rule change (such as requiring an explicit auth_mode) breaks the
+    release workflow without failing any local test, so construct each one here.
+    """
+    import role_aware_dashboard_toolkit as radt
+
+    workflows = (WORKFLOW_PATH, CONTRIBUTOR_WORKFLOW_PATH, DEPENDENCY_WORKFLOW_PATH)
+    texts = [path.read_text(encoding="utf-8") for path in workflows]
+    calls = [call for text in texts for call in re.findall(r"radt\.DashboardConfig\([^()\n]*\)", text)]
+    # Every call must be one this test can parse; a new multi-line call fails here.
+    assert len(calls) == sum(text.count("DashboardConfig(") for text in texts)
+    assert len(calls) == 3
+    for call in calls:
+        node = ast.parse(call, mode="eval").body
+        assert isinstance(node, ast.Call) and not node.args
+        kwargs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords}
+        config = radt.DashboardConfig(**kwargs)
+        assert config.icon == "Core"
