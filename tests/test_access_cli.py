@@ -467,3 +467,90 @@ def test_walk_and_kernel_disagreement_is_refused(private_directory, monkeypatch)
         access_cli.initialize_access(private_directory)
     assert not (decoy / "identity.key").exists()
     assert not (private_directory / "identity.key").exists()
+
+
+# Every directory above the protected directory follows OpenSSH's rule: it
+# belongs to the caller or root, and only a root-owned sticky directory (such
+# as /tmp) may be group- or world-writable. Otherwise another account could
+# rename the protected directory away and put its own in its place.
+
+def _writable_parent(private_directory, mode):
+    shared = private_directory.parent / "shared"
+    shared.mkdir()
+    shared.chmod(mode)
+    protected = shared / "protected"
+    protected.mkdir(mode=0o700)
+    return shared, protected
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership contract")
+@pytest.mark.parametrize("mode", [0o777, 0o775, 0o757, 0o1777])
+def test_a_parent_another_account_could_change_is_refused_and_named(private_directory, capsys, mode):
+    # A caller-owned parent is writable by others whatever its sticky bit:
+    # only root's sticky directories are trusted.
+    shared, protected = _writable_parent(private_directory, mode)
+    assert access_cli.main(["init", "--directory", str(protected)]) == 1
+    output = capsys.readouterr()
+    assert output.err.startswith("Provisioning failed:")
+    assert "another account" in output.err
+    assert str(shared) in output.err
+    assert not (protected / "identity.key").exists()
+    with pytest.raises(access_cli.ProvisioningError, match="another account"):
+        access_cli.read_identity_key(protected)
+
+
+def test_a_writable_parent_below_a_root_owned_system_link_is_refused(capsys):
+    # The review's repro: /tmp/<0777 dir>/prot on macOS was accepted after
+    # following the root-owned /tmp link, and refused by 0.1.0.
+    root = _system_link_root()
+    if root is None:
+        pytest.skip("Needs the system temp root under a root-owned link (macOS /var)")
+    with tempfile.TemporaryDirectory(prefix="radt-access-cli-system-", dir=root) as raw:
+        shared = Path(raw) / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        protected = shared / "protected"
+        protected.mkdir(mode=0o700)
+        assert access_cli.main(["init", "--directory", str(protected)]) == 1
+        assert "another account" in capsys.readouterr().err
+        assert not (protected / "identity.key").exists()
+
+
+@pytest.mark.parametrize("problem", [
+    None, "other_owner", "root_writable", "caller_sticky", "root_sticky",
+])
+def test_every_parent_follows_the_openssh_rule(private_directory, simulated_ownership, capsys, problem):
+    parent = private_directory.parent
+    if problem == "other_owner":
+        simulated_ownership[os.fspath(parent)] = (os.geteuid() + 1, 0o755)
+    elif problem == "root_writable":
+        simulated_ownership[os.fspath(parent)] = (0, 0o777)
+    elif problem == "caller_sticky":
+        simulated_ownership[os.fspath(parent)] = (os.geteuid(), 0o1777)
+    elif problem == "root_sticky":
+        # /tmp: root-owned, world-writable and sticky, with the caller's own
+        # private directory inside it.
+        simulated_ownership[os.fspath(parent)] = (0, 0o1777)
+    status = access_cli.main(["init", "--directory", str(private_directory)])
+    output = capsys.readouterr()
+    if problem in (None, "root_sticky"):
+        assert status == 0, output.err
+        assert len(access_cli.read_identity_key(private_directory)) == 32
+    else:
+        assert status == 1
+        assert "another account" in output.err
+        assert str(parent) in output.err
+        assert not (private_directory / "identity.key").exists()
+
+
+def test_a_writable_directory_after_a_trusted_link_is_refused(private_directory, simulated_ownership, capsys):
+    # The link and everything above it are root's; the directory the link
+    # leads into is not, so the walk must keep checking past the link.
+    base = private_directory.parent
+    shared, protected = _writable_parent(private_directory, 0o777)
+    _base, _system, link = _system_layout(private_directory, simulated_ownership, target=base)
+    assert access_cli.main(["init", "--directory", str(link / "shared" / "protected")]) == 1
+    output = capsys.readouterr()
+    assert "another account" in output.err
+    assert str(shared) in output.err
+    assert not (protected / "identity.key").exists()

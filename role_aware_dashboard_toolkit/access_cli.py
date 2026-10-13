@@ -43,6 +43,13 @@ _OWNER_MESSAGE = (
     f"{_FAILED}: the protected directory belongs to another account. Use a directory "
     "owned by the account that runs provisioning and the dashboard."
 )
+_ANCESTOR_MESSAGE = (
+    f"{_FAILED}: another account could replace the protected directory, because "
+    "{path} above it belongs to another account or lets group or other accounts "
+    "write to it. Every directory above the protected directory must belong to this "
+    "account or root, and only a root-owned sticky directory such as /tmp may be "
+    "group- or world-writable."
+)
 _PERMISSIONS_MESSAGE = (
     f"{_FAILED}: the protected directory allows group or other access. "
     "Restrict it to its owner (for example chmod 700)."
@@ -62,8 +69,9 @@ _MAX_LINKS = 40
 class ProvisioningError(RuntimeError):
     """Fixed messages never include subjects, keys, provider data or argument values.
 
-    The only path a message may contain is a refused link on the operator's own
-    protected-directory path, so the operator can see which component to change.
+    The only path a message may contain is a refused link or parent directory on
+    the operator's own protected-directory path, so the operator can see which
+    component to change.
     """
 
     def __init__(self, message: str = _GENERIC_MESSAGE) -> None:
@@ -95,7 +103,8 @@ def _ordinary_path(path: Path) -> Path:
     /var and /tmp). Such a link is followed only when it is owned by root and
     every directory above it is owned by root and is not group- or
     world-writable. Every other link, and every Windows reparse point, is
-    refused; ordinary directories are accepted as before.
+    refused. The directories of the returned path are checked separately
+    (``_changeable_ancestor``).
     """
     posix = os.name == "posix"
     current = Path(path.anchor)
@@ -133,6 +142,25 @@ def _owned_by_caller(info: os.stat_result) -> bool:
     return os.name != "posix" or info.st_uid in {os.geteuid(), 0}
 
 
+def _changeable_ancestor(path: Path) -> Path | None:
+    """Return the first directory above ``path`` that another account could change.
+
+    OpenSSH's rule for every ancestor of the link-free path: it belongs to the
+    caller or root, and is group- or world-writable only when it is root-owned
+    and sticky (like /tmp), where no other account can rename what the caller
+    owns inside it.
+    """
+    if os.name != "posix":
+        return None
+    for parent in reversed(path.parents):
+        info = os.lstat(parent)
+        if info.st_uid not in {os.geteuid(), 0}:
+            return parent
+        if info.st_mode & 0o022 and not (info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
+            return parent
+    return None
+
+
 def _directory(value: str | Path) -> Path:
     directory = Path(value).expanduser().absolute()
     try:
@@ -150,6 +178,9 @@ def _directory(value: str | Path) -> Path:
     for parent in (directory, *directory.parents, real, *real.parents):
         if (parent / ".git").exists():
             raise ProvisioningError(_REPOSITORY_MESSAGE)
+    changeable = _changeable_ancestor(real)
+    if changeable is not None:
+        raise ProvisioningError(_ANCESTOR_MESSAGE.format(path=changeable))
     if not _owned_by_caller(real_info):
         raise ProvisioningError(_OWNER_MESSAGE)
     if os.name == "posix" and real_info.st_mode & 0o077:
@@ -160,8 +191,9 @@ def _directory(value: str | Path) -> Path:
 def read_identity_key(directory: str | Path) -> bytes:
     """Read the host-only binary key from a directory checked like provisioning.
 
-    Links a non-root account could change, broad POSIX permissions and a key or
-    directory owned by another account (other than root) are refused.
+    Links a non-root account could change, broad POSIX permissions, a key or
+    directory owned by another account (other than root) and a parent directory
+    another account could change are refused.
 
     Windows operators must restrict the directory ACL themselves. This helper
     does not claim that chmod provides equivalent Windows access control.

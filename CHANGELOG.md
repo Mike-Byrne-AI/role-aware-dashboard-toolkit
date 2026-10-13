@@ -67,8 +67,11 @@ changes.
   `StorePathSecurityError` (the API returns 409).
 - On POSIX the protected access directory and `identity.key` must belong to
   the caller or root, so a root process can no longer use another account's
-  directory. Root-owned system links such as macOS `/var` and `/tmp` are
-  accepted.
+  directory. Every directory above the protected directory must also belong to
+  the caller or root, and may be group- or world-writable only when it is
+  root-owned and sticky (like `/tmp`). Root-owned system links such as macOS
+  `/var` and `/tmp` are accepted. Move a protected directory that sits below
+  another account's directory or a shared writable one.
 - Release CI reads `RELEASE_CI_APPROVED_SHA`; maintainers set it before
   arming a release run.
 

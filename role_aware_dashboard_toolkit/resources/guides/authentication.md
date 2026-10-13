@@ -92,9 +92,11 @@ icacls $accessDirectory /inheritance:r /grant:r "${operatorAccount}:(OI)(CI)F" "
 
 On POSIX, use a directory with mode 0700. Provisioning and key-loading helpers
 reject broad POSIX permissions, a directory or key owned by another account
-(other than root), and every link or reparse point except root-owned POSIX
-system links (such as macOS /var and /tmp) whose directories only root can
-change.
+(other than root), a directory above it that another account could change, and
+every link or reparse point except root-owned POSIX system links (such as macOS
+/var and /tmp) whose directories only root can change. Every directory above the
+protected directory must belong to the operator's account or root, and may be
+group- or world-writable only when it is root-owned and sticky, like /tmp.
 Direct SQLite store use checks the database file; the host must also protect its
 directory and ancestors. Windows directory permissions remain
 the operator's responsibility. Files, journals and backups need the same access
