@@ -76,9 +76,11 @@ changes.
   `access_key_id`, `cookie`, `jwt`, `dsn` or `connection_string` are now
   sensitive, so profiles stop saving them and audit hides their values. Pass
   `sensitive=False` to `register()` to keep one in both.
-  `access key` and `private key` match only where "key" ends a word
-  (`access_keyboard` is not sensitive), and a registered name such as
-  `Straße` matches both its spelling and its casefold (`STRASSE`).
+  `access key` and `private key` do not match where "key" begins an ordinary
+  word (keyboard, keystroke, keynote, keypad, keyword, keyframe), so
+  `access_keyboard` is not sensitive while `accesskeyid` and
+  `private_keyfile` are, and a registered name such as `Straße` matches both
+  its spelling and its casefold (`STRASSE`).
 - `AuditLog.log_control_change(sensitive=False)` now records the values even
   when the key looks secret (0.1.0 redacted them by name), and the event
   carries `"sensitive": false`; the default is now `None`, which keeps the

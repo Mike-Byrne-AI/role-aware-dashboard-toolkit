@@ -94,20 +94,23 @@ def test_registering_a_blank_or_non_text_name_is_refused(monkeypatch, bad):
 
 @pytest.mark.parametrize(
     "name",
-    ["access_keyboard", "accessKeyboard", "private_keyboard_layout", "privateKeyboardLayout",
-     "access_keystroke_log", "private_keynote"],
+    ["access_keyboard", "accessKeyboard", "ACCESS_KEYBOARD", "private_keyboard_layout",
+     "privateKeyboardLayout", "access_keystroke_log", "private_keynote", "access_keypad",
+     "private_keyword"],
 )
-def test_access_and_private_key_do_not_match_a_longer_word(name):
-    # "key" must end its word: a keyboard is not a key.
+def test_access_and_private_key_do_not_match_an_ordinary_longer_word(name):
+    # A keyboard is not a key.
     assert is_sensitive_name(name) is False
 
 
 @pytest.mark.parametrize(
     "name",
-    ["access_keys", "privateKeys", "ACCESS_KEYBOARD", "accesskey", "private-key-pem"],
+    ["access_keys", "privateKeys", "accesskey", "private-key-pem",
+     # Key material written as one word stays secret.
+     "accesskeyid", "awsaccesskeyid", "privatekeypem", "private_keyfile", "private_keystore",
+     "private_keydata", "privateKeyfile", "sshprivatekeypath", "private-keyring"],
 )
-def test_access_and_private_key_still_match_plurals_and_capitals(name):
-    # All-capital names carry no word boundary, so they stay sensitive.
+def test_access_and_private_key_still_match_key_material(name):
     assert is_sensitive_name(name) is True
 
 
@@ -124,6 +127,7 @@ def test_api_key_keeps_its_0_1_0_substring_match():
         ("straße", "strasse", True),
         ("signing key", "signing_keyboard", False),
         ("signing key", "signingKeyId", True),
+        ("signing key", "signingkeyfile", True),
     ],
 )
 def test_registered_names_match_like_built_in_names(monkeypatch, registered, name, expected):

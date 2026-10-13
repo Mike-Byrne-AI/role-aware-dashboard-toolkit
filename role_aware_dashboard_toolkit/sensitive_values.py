@@ -12,9 +12,10 @@ REDACTED_SECRET = "<redacted-secret>"
 # "api_key", "x-api-key" and "apiKey"). A shorter one-word name matches only a
 # whole word of another name, split at separators and case changes, so "dsn"
 # matches "SENTRY_DSN" and "sentryDsn" but not "kidsName". A name whose last
-# word is "key" must end there, plural allowed: "access key" matches
-# "access_key_id", "accessKeys" and "ACCESS_KEYBOARD" (capitals show no word
-# end) but not "access_keyboard". "api key" matches anywhere, as in 0.1.0.
+# word is "key" does not match where "key" begins an ordinary longer word
+# (keyboard, keystroke, keynote, keypad, keyword, keyframe): "access key"
+# matches "access_key_id", "accesskeyid" and "private_keyfile" but not
+# "access_keyboard". "api key" matches anywhere, as in 0.1.0.
 BUILTIN_SENSITIVE_NAMES: tuple[str, ...] = (
     "token",
     "secret",
@@ -37,8 +38,10 @@ _WORD_BOUNDARY_PATTERN = re.compile(
     r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])"
 )
 _WORD_SEPARATOR_PATTERN = re.compile(r"[\W_]+")
-# After a final "key": no lowercase letter, except a plural "s" ending the word.
-_KEY_WORD_END = r"(?-i:(?![a-rt-z]|s[a-z]))"
+# After a final "key": not an ordinary word that starts with "key". Key
+# material is often written as one word (accesskeyid, private_keyfile), so a
+# general word boundary would drop real secrets.
+_KEY_WORD_END = r"(?!board|stroke|note|pad|word|frame)"
 _SUBSTRING_KEY_NAMES = frozenset({("api", "key")})
 
 
