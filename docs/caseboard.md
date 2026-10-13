@@ -58,8 +58,9 @@ previews it; while that evaluation lists `close_case` among its blocked
 actions (unresolved incidents, or missing signoff roles for the case's
 severity), the button is disabled, a caption gives the governance summary, and
 a click is refused. If governance cannot be evaluated for the current user,
-for example without `can_view_governance` or `can_view_decisions`, or with
-unreadable linked evidence, closing is refused and the caption says so. Without
+for example without `can_view_governance` or `can_view_decisions`, with
+unreadable linked evidence, or because evaluation fails unexpectedly, closing is
+refused and the caption says so; the rest of the caseboard still renders. Without
 a governance store the button keeps its earlier behaviour. Reopening a case is
 not gated.
 

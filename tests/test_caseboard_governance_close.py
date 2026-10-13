@@ -123,3 +123,23 @@ def test_close_without_a_governance_store_keeps_its_previous_behavior():
 
     assert button[3] is False
     assert _case_state(config) == "closed"
+
+
+def test_an_unexpected_governance_error_refuses_close_without_breaking_the_caseboard(monkeypatch):
+    def broken_preview(*_args, **_kwargs):
+        raise RuntimeError("store exploded at /srv/private/governance.db")
+
+    monkeypatch.setattr(
+        "role_aware_dashboard_toolkit.runbook_panels_parts.caseboard.build_governance_panel_preview",
+        broken_preview,
+    )
+    config, run = _scenario(incident_status="closed", severity="low")
+
+    st, button = _render(config, run, _context())
+
+    assert button[3] is True
+    assert _case_state(config) == "open"
+    captions = [event[1] for event in st.events if event[0] == "caption"]
+    assert any("governance could not be evaluated" in text for text in captions)
+    assert not any("/srv/private" in str(event) for event in st.events)
+    assert any(event[0] == "button" and event[1] == "Append finding to selected case" for event in st.events)

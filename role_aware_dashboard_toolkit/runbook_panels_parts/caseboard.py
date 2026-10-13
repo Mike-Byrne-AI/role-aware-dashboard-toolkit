@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ..caseboard import (
@@ -18,6 +19,12 @@ from .._record_projection import project_record
 from .review_models import build_governance_panel_preview
 from .shared import _record_actor, _render_table, _save_record
 
+_LOGGER = logging.getLogger(__name__)
+_GOVERNANCE_UNAVAILABLE = (
+    "Close case is unavailable: governance could not be evaluated for this case with your access. "
+    "Check access and the linked evidence, then retry."
+)
+
 
 def _close_case_block(st: Any, config: Any, ctx: Any, case: dict[str, Any], runs: list[dict[str, Any]]) -> str | None:
     """Return why governance blocks closing ``case`` now, or None when it does not.
@@ -25,6 +32,8 @@ def _close_case_block(st: Any, config: Any, ctx: Any, case: dict[str, Any], runs
     With a governance store configured, the case is evaluated as the governance
     panel would preview it. If that evaluation cannot run for this user or its
     evidence cannot be read, closing is refused rather than allowed blind.
+    Any other failure refuses closing too, without breaking the caseboard.
+    Streamlit's rerun and stop signals are not Exceptions and pass through.
     """
     if getattr(config, "governance_store", None) is None:
         return None
@@ -33,10 +42,13 @@ def _close_case_block(st: Any, config: Any, ctx: Any, case: dict[str, Any], runs
             config, case, actor=_record_actor(ctx, st.session_state), role=ctx.role, ctx=ctx, runs=runs,
         )
     except EvidenceUnavailable:
-        return (
-            "Close case is unavailable: governance could not be evaluated for this case with your access. "
-            "Check access and the linked evidence, then retry."
+        return _GOVERNANCE_UNAVAILABLE
+    except Exception as exc:
+        _LOGGER.warning(
+            "Role-Aware Dashboard Toolkit could not evaluate governance for Close case (%s).",
+            type(exc).__name__,
         )
+        return _GOVERNANCE_UNAVAILABLE
     if preview is None:
         return None
     governance = preview["governance"]
