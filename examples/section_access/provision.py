@@ -92,6 +92,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         store.replace_grants(principal, args.role if args.command == "grant" else ())
         print("Role assignments updated." if args.command == "grant" else "All role assignments revoked.")
         return 0
+    except ProvisioningError as exc:
+        # Toolkit refusals name the cause (a link, the owner, permissions)
+        # and never the subject, issuer or key.
+        print(str(exc), file=sys.stderr)
+        return 1
     except (Exception, KeyboardInterrupt):
         print(str(ProvisioningError()), file=sys.stderr)
         return 1
