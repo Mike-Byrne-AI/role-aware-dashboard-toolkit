@@ -18,7 +18,7 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from .sensitive_values import REDACTED_SECRET, is_sensitive_name
 
 
@@ -170,14 +170,14 @@ class ControlRegistry:
             groups.setdefault(ctrl.group, []).append(ctrl)
         return list(groups.items())
 
-    def snapshot(self, session_state: dict[str, Any]) -> dict[str, Any]:
+    def snapshot(self, session_state: Mapping[Any, Any]) -> dict[str, Any]:
         """Extract current values of all registered controls from session state."""
         snap = {}
         for key, ctrl in self._controls.items():
             snap[key] = session_state.get(key, ctrl.default)
         return snap
 
-    def persistable_snapshot(self, session_state: dict[str, Any]) -> dict[str, Any]:
+    def persistable_snapshot(self, session_state: Mapping[Any, Any]) -> dict[str, Any]:
         """Return registered non-sensitive values suitable for durable storage."""
         return {
             key: session_state.get(key, ctrl.default)
@@ -198,7 +198,7 @@ class ControlRegistry:
             filtered[text_key] = value
         return filtered
 
-    def restore(self, session_state: dict[str, Any], values: dict[str, Any], *, include_sensitive: bool = True) -> int:
+    def restore(self, session_state: MutableMapping[Any, Any], values: dict[str, Any], *, include_sensitive: bool = True) -> int:
         """Restore saved values into session state and sanitize them.
 
         Returns the number of corrected values.
@@ -231,7 +231,7 @@ class ControlRegistry:
             })
         return out
 
-    def ensure_defaults(self, session_state: dict[str, Any]) -> int:
+    def ensure_defaults(self, session_state: MutableMapping[Any, Any]) -> int:
         """Populate missing control keys with defaults. Returns keys written."""
         added = 0
         for ctrl in self.all():
@@ -240,7 +240,7 @@ class ControlRegistry:
                 added += 1
         return added
 
-    def sanitize_session_state(self, session_state: dict[str, Any]) -> int:
+    def sanitize_session_state(self, session_state: MutableMapping[Any, Any]) -> int:
         """Clamp/coerce registered control values into widget-safe ranges.
 
         This is a generic pre-render hardening step that prevents stale or
@@ -263,16 +263,16 @@ class ControlRegistry:
             return value
         return _sanitize_control_value(ctrl, value)
 
-    def mark_user_set(self, key: str, session_state: dict[str, Any]) -> None:
+    def mark_user_set(self, key: str, session_state: MutableMapping[Any, Any]) -> None:
         session_state[f"{_USER_SET_PREFIX}{key}"] = True
 
-    def is_user_set(self, key: str, session_state: dict[str, Any]) -> bool:
+    def is_user_set(self, key: str, session_state: Mapping[Any, Any]) -> bool:
         return bool(session_state.get(f"{_USER_SET_PREFIX}{key}", False))
 
-    def clear_user_set(self, key: str, session_state: dict[str, Any]) -> None:
+    def clear_user_set(self, key: str, session_state: MutableMapping[Any, Any]) -> None:
         session_state.pop(f"{_USER_SET_PREFIX}{key}", None)
 
-    def clear_all_user_set(self, session_state: dict[str, Any]) -> int:
+    def clear_all_user_set(self, session_state: MutableMapping[Any, Any]) -> int:
         removed = 0
         for key in list(session_state.keys()):
             if str(key).startswith(_USER_SET_PREFIX):

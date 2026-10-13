@@ -87,3 +87,37 @@ def test_typos_through_the_root_namespace_are_type_errors(tmp_path):
     assert probe_errors == ["6", "7", "8"], output
     assert 'has no attribute "regster"' in output
     assert 'Module has no attribute "ControlRegistrx"' in output
+
+
+def test_registry_accepts_streamlit_session_state_for_type_checkers(tmp_path):
+    """Root exports are now typed, so documented calls with st.session_state must type-check."""
+    pytest.importorskip("mypy")
+    pytest.importorskip("streamlit")
+    probe = tmp_path / "probe.py"
+    probe.write_text(textwrap.dedent('''\
+        import streamlit as st
+        import role_aware_dashboard_toolkit as radt
+
+        registry = radt.ControlRegistry()
+        registry.register("Weekly target", kind="number", key="weekly_target", default=40)
+        registry.ensure_defaults(st.session_state)
+        registry.sanitize_session_state(st.session_state)
+        values = registry.persistable_snapshot(st.session_state)
+        current = registry.snapshot(st.session_state)
+        registry.restore(st.session_state, values)
+        registry.mark_user_set("weekly_target", st.session_state)
+        if registry.is_user_set("weekly_target", st.session_state):
+            registry.clear_user_set("weekly_target", st.session_state)
+        registry.clear_all_user_set(st.session_state)
+    '''), encoding="utf-8")
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("MYPYPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--cache-dir", str(tmp_path / "cache"),
+         "--no-error-summary", "--show-error-codes", "probe.py"],
+        cwd=str(tmp_path), env=env, text=True, capture_output=True, check=False, timeout=300,
+    )
+    output = result.stdout + result.stderr
+    if "import-not-found" in output or "Cannot find implementation" in output:
+        pytest.skip("mypy cannot locate the installed package from this environment")
+    assert [line for line in output.splitlines() if line.startswith("probe.py:")] == [], output
