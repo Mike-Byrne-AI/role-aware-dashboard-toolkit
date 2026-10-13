@@ -417,7 +417,7 @@ def _record_control_change(st: Any, ctrl: ControlDef, ctx: SecurityContext, conf
         old_value,
         new_value,
         role=ctx.role,
-        sensitive=ctrl.sensitive,
+        sensitive=config.registry._audit_sensitivity(ctrl),
     )
     if ctrl.callback is not None:
         try:

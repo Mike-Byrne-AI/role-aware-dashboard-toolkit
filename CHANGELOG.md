@@ -66,10 +66,17 @@ changes.
   is refused when governance cannot be evaluated.
 - Controls and fields named like `private_key`, `passwd`, `pwd`,
   `access_key_id`, `cookie`, `jwt`, `dsn` or `connection_string` are now
-  sensitive, so profiles stop saving them. Pass `sensitive=False` to keep one.
+  sensitive, so profiles stop saving them and audit hides their values. Pass
+  `sensitive=False` to `register()` to keep one in both.
   `access key` and `private key` match only where "key" ends a word
   (`access_keyboard` is not sensitive), and a registered name such as
   `Straße` matches both its spelling and its casefold (`STRASSE`).
+- `AuditLog.log_control_change(sensitive=False)` now records the values even
+  when the key looks secret (0.1.0 redacted them by name), and the event
+  carries `"sensitive": false`; the default is now `None`, which keeps the
+  name check. Secret-named fields nested in a value stay redacted. The
+  dashboard and API pass `sensitive=False` only for a control registered with
+  it. Drop an explicit `sensitive=False` where the key's name should decide.
 - Demo mode: a new session starts in its least-privileged role (Viewer for the
   built-ins), and only a `can_manage_freeze` role can change Controls
   Writable. Pick Admin in the sidebar to edit.

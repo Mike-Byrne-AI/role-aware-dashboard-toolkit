@@ -66,7 +66,8 @@ split at separators and case changes: `dsn` matches `SENTRY_DSN` and
 `sentryDsn` but not `kidsName`.
 It intentionally errs toward protection. For a nonsecret field that matches,
 such as a token-count limit, explicitly use `sensitive=False` to retain its
-ordinary widget and profile values:
+ordinary widget and profile values and its audit values (secret-named fields
+nested in a value stay redacted):
 
 ```python
 registry.register(

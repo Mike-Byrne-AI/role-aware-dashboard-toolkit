@@ -73,8 +73,15 @@ class _IdentityBoundAudit:
         *,
         role: str = "",
         source: str = "ui",
-        sensitive: bool = False,
+        sensitive: bool | None = None,
     ) -> None:
+        """Record a control change with the bound actor; ``sensitive`` as in AuditLog."""
+        if sensitive is False:
+            self._audit._log_declared_public_change(
+                key, old_value, new_value, role=role, source=source,
+                user_id=self.user_id, session_id=self.session_id,
+            )
+            return
         if sensitive:
             old_value = REDACTED_SECRET
             new_value = REDACTED_SECRET

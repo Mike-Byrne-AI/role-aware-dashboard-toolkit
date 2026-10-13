@@ -72,6 +72,8 @@ class ControlRegistry:
     def __init__(self) -> None:
         self._controls: dict[str, ControlDef] = {}
         self._order_counter: int = 0
+        # Keys registered with an explicit sensitive=False.
+        self._declared_public: set[str] = set()
 
     def register(
         self,
@@ -107,6 +109,7 @@ class ControlRegistry:
                 f"Control '{key}' permission must be a nonempty permission name, "
                 "for example 'can_edit_controls'"
             ), "RADT-CONTROL-DEFINITION")
+        declared_public = sensitive is False
         if sensitive is None:
             sensitive = is_sensitive_name(name) or is_sensitive_name(key)
 
@@ -137,8 +140,23 @@ class ControlRegistry:
             _validate_numeric_configuration(ctrl)
             ctrl.default = _sanitize_numeric(ctrl, ctrl.default)
         self._controls[key] = ctrl
+        if declared_public:
+            self._declared_public.add(key)
+        else:
+            self._declared_public.discard(key)
         self._order_counter += 1
         return ctrl
+
+    def _audit_sensitivity(self, ctrl: ControlDef) -> bool | None:
+        """The ``sensitive`` argument for ``AuditLog.log_control_change``.
+
+        True for a sensitive control; False only for one registered with an
+        explicit ``sensitive=False``; otherwise None, so audit checks the
+        key's name each time it records.
+        """
+        if ctrl.sensitive:
+            return True
+        return False if ctrl.key in getattr(self, "_declared_public", ()) else None
 
     def register_many(self, defs: Sequence[dict[str, Any]]) -> list[ControlDef]:
         """Register multiple controls from a list of kwarg dicts."""
@@ -150,7 +168,9 @@ class ControlRegistry:
         Existing session values and persisted profiles/runs are not deleted.
         Re-registering this key creates a new definition at the end of the order.
         """
-        return self._controls.pop(key)
+        ctrl = self._controls.pop(key)
+        getattr(self, "_declared_public", set()).discard(key)
+        return ctrl
 
     def get(self, key: str) -> ControlDef | None:
         return self._controls.get(key)

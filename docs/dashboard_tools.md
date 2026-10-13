@@ -52,7 +52,7 @@ Controls whose name or key looks sensitive are marked sensitive automatically;
 you can also pass `sensitive=True`. Sensitive values are omitted from durable
 profiles and redacted from audit and API response surfaces.
 For a nonsecret field matched by this heuristic, such as `max_tokens`, explicitly
-pass `sensitive=False` to retain its ordinary widget and profile values.
+pass `sensitive=False` to retain its ordinary widget, profile and audit values.
 Sensitive UI fields use a blank replacement form, including non-text kinds;
 read-only users see only `Hidden`. Stored values and select options are never
 prefilled or sent to the browser. See the installed

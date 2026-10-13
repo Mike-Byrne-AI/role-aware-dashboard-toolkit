@@ -498,8 +498,23 @@ class AuditLog:
         *,
         role: str = "",
         source: str = "ui",
-        sensitive: bool = False,
+        sensitive: bool | None = None,
     ) -> None:
+        """Record a control change.
+
+        ``sensitive=True`` replaces both values with the redaction marker. By
+        default (``None``) they are redacted when the key looks secret.
+        ``sensitive=False`` declares the control not secret, as
+        ``ControlRegistry.register(..., sensitive=False)`` does: its values are
+        kept even when the key looks secret, and the event records
+        ``"sensitive": false``. Secret-named fields nested in a value are
+        redacted either way.
+        """
+        if sensitive is False:
+            self._log_declared_public_change(
+                key, old_value, new_value, role=role, source=source, user_id="", session_id="",
+            )
+            return
         if sensitive:
             old_value = REDACTED_SECRET
             new_value = REDACTED_SECRET
@@ -511,6 +526,18 @@ class AuditLog:
             role=role,
             source=source,
         )
+
+    def _log_declared_public_change(
+        self, key: str, old_value: Any, new_value: Any, *,
+        role: str, source: str, user_id: str, session_id: str,
+    ) -> None:
+        evt = _make_event(
+            "control_change", key=key, old_value=old_value, new_value=new_value,
+            role=role, source=source, user_id=user_id, session_id=session_id,
+        )
+        # Every redaction pass (this one, the file writer's) reads the marker.
+        evt["sensitive"] = False
+        self._store_event(redact_audit_event(evt), writer_locked=False)
 
     def log_profile_save(
         self, profile_id: str, *, role: str = "", source: str = "ui"

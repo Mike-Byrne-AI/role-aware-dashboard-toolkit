@@ -71,7 +71,10 @@ def redact_audit_event(event: Mapping[Any, Any]) -> dict[str, Any]:
     )
     if not isinstance(sanitized, dict):
         return {}
-    if event_type == "control_change" and (
+    # A control declared not secret (sensitive=False) keeps its values even
+    # when its key looks secret; nested secret fields were redacted above.
+    declared_public = event.get("sensitive") is False
+    if event_type == "control_change" and not declared_public and (
         not control_key_readable or is_sensitive_name(control_key)
     ):
         sanitized["old"] = REDACTED_SECRET

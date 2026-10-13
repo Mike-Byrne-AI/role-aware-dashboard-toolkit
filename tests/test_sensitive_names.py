@@ -132,3 +132,81 @@ def test_registered_names_match_like_built_in_names(monkeypatch, registered, nam
     sensitive_values.register_sensitive_names(registered)
 
     assert is_sensitive_name(name) is expected
+
+
+# sensitive=False keeps a control's values in audit, as the changelog promises.
+
+def _control_changes(audit):
+    return [event for event in audit.all_events() if event["type"] == "control_change"]
+
+
+@pytest.mark.parametrize(
+    ("sensitive", "kept"),
+    [(False, True), (None, False), (True, False)],
+)
+def test_audit_honours_an_explicit_sensitive_false(tmp_path, sensitive, kept):
+    import json
+
+    from role_aware_dashboard_toolkit import AuditLog
+
+    audit = AuditLog()
+    path = tmp_path / "audit.jsonl"
+    audit.start_writer(str(path))
+    kwargs = {} if sensitive is None else {"sensitive": sensitive}
+    audit.log_control_change("session_cookie_label", "Accept", "Accept all", role="Admin", **kwargs)
+    audit.stop_writer()
+
+    (event,) = _control_changes(audit)
+    (on_disk,) = [json.loads(line) for line in path.read_text().splitlines()
+                  if json.loads(line)["type"] == "control_change"]
+    expected = ("Accept", "Accept all") if kept else (REDACTED_SECRET, REDACTED_SECRET)
+    assert (event["old"], event["new"]) == expected
+    assert (on_disk["old"], on_disk["new"]) == expected
+
+
+def test_audit_sensitive_false_still_redacts_nested_secret_fields():
+    from role_aware_dashboard_toolkit import AuditLog
+
+    audit = AuditLog()
+    audit.log_control_change("cookie_settings", {"mode": "a"}, {"mode": "b", "password": "p"}, sensitive=False)
+
+    (event,) = _control_changes(audit)
+    assert event["new"] == {"mode": "b", "password": REDACTED_SECRET}
+
+
+def test_a_bound_audit_view_honours_sensitive_false():
+    from role_aware_dashboard_toolkit import AuditLog
+    from role_aware_dashboard_toolkit.access_audit import bind_audit_identity
+
+    audit = AuditLog()
+    view = bind_audit_identity(audit, "a" * 64, "b" * 32)
+    view.log_control_change("session_cookie_label", "x", "y", sensitive=False)
+    view.log_control_change("session_cookie_value", "x", "y")
+
+    first, second = _control_changes(audit)
+    assert (first["old"], first["new"], first["user_id"]) == ("x", "y", "a" * 64)
+    assert (second["old"], second["new"]) == (REDACTED_SECRET, REDACTED_SECRET)
+
+
+@pytest.mark.skipif(not FASTAPI_AVAILABLE, reason="FastAPI not installed")
+def test_api_audits_a_control_registered_with_sensitive_false(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from role_aware_dashboard_toolkit import AuditLog
+
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", _HEADERS["X-API-Key"])
+    registry = ControlRegistry()
+    registry.register("Cookie banner", kind="text", key="cookie_banner", default="on", sensitive=False)
+    registry.register("Session cookie", kind="text", key="session_cookie", default="c")
+    audit = AuditLog()
+
+    with TestClient(create_app(registry, audit=audit, api_role="Admin")) as client:
+        response = client.patch("/controls", headers=_HEADERS,
+                                json={"values": {"cookie_banner": "off", "session_cookie": "d"}})
+        listed = client.get("/audit", headers=_HEADERS).json()
+
+    assert response.status_code == 200
+    banner, session = _control_changes(audit)
+    assert (banner["old"], banner["new"]) == ("on", "off")
+    assert (session["old"], session["new"]) == (REDACTED_SECRET, REDACTED_SECRET)
+    assert [(event["old"], event["new"]) for event in listed] == [("on", "off"), (REDACTED_SECRET, REDACTED_SECRET)]

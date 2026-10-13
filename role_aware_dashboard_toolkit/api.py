@@ -610,7 +610,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 stored,
                 role=ctx.role or "api",
                 source="api",
-                sensitive=ctrl.sensitive,
+                sensitive=app_state.registry._audit_sensitivity(ctrl),
             )
             updated.append(_control_value(
                 app_state, ctrl.key, can_read=has_perm(ctx, "can_view_metrics"),
