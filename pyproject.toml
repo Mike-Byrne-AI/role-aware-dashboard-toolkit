@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -7,7 +7,8 @@ name = "role-aware-dashboard-toolkit"
 version = "0.1.0"
 description = "Dashboard/admin-control library for governed operator controls, profile workflows, audit history, plugin surfaces, and explicit operational review"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Michael Byrne" },
 ]
@@ -15,7 +16,6 @@ keywords = ["dashboard", "admin-controls", "profiles", "audit", "plugins", "obse
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: User Interfaces",
+    "Typing :: Typed",
 ]
 requires-python = ">=3.10"
 dependencies = []
