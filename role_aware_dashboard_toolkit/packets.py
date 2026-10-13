@@ -6,8 +6,11 @@ from typing import Any
 from ._json_safety import strict_json_loads
 from .packet_core import (
     DIFF_PACKET_SCHEMA_VERSION,
+    MAX_PACKET_NESTING_DEPTH,
     PACKET_SCHEMA_VERSION,
     VALID_PACKET_TYPES,
+    _nesting_error,
+    _nesting_problem,
     _normalize_packet_type,
     build_packet,
 )
@@ -130,6 +133,9 @@ def build_ledger_packet(
 
 
 def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
+    problem = _nesting_problem(packet, MAX_PACKET_NESTING_DEPTH)
+    if problem is not None:
+        raise _nesting_error("Cannot export invalid packet: ", problem=problem)
     validated = validate_packet(packet)
     if not validated["ok"]:
         raise ValueError("Cannot export invalid packet: " + "; ".join(validated["errors"]))
@@ -138,7 +144,13 @@ def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
 
 
 def load_packet_json(raw: str) -> dict[str, Any]:
-    data = strict_json_loads(raw)
+    try:
+        data = strict_json_loads(raw)
+    except RecursionError:
+        raise _nesting_error("Invalid packet JSON: ", may_cycle=False) from None
+    problem = _nesting_problem(data, MAX_PACKET_NESTING_DEPTH)
+    if problem is not None:
+        raise _nesting_error("Invalid packet JSON: ", may_cycle=False, problem=problem)
     validated = validate_packet(data)
     if not validated["ok"]:
         raise ValueError("Invalid packet JSON: " + "; ".join(validated["errors"]))
@@ -152,6 +164,7 @@ def extract_packet_payload(packet: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "DIFF_PACKET_SCHEMA_VERSION",
+    "MAX_PACKET_NESTING_DEPTH",
     "PACKET_SCHEMA_VERSION",
     "VALID_PACKET_TYPES",
     "build_audit_slice_packet",

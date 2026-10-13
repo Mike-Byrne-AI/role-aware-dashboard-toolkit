@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Context, Decimal
 from math import isfinite
 from typing import Any
 
@@ -110,7 +111,7 @@ def _compare_telemetry(left: Mapping[str, Any], right: Mapping[str, Any]) -> dic
         elif old_unit != new_unit:
             status = "unit_mismatch"
         else:
-            delta = new - old
+            delta = _metric_delta(old, new)
             status = "comparable"
             if not isfinite(delta):
                 status = "non_finite_delta"
@@ -125,6 +126,25 @@ def _compare_telemetry(left: Mapping[str, Any], right: Mapping[str, Any]) -> dic
         "right_sample_ts": _sample_timestamp(right_sample),
         "metrics": rows,
     }
+
+
+# A fixed context, so a host's global decimal settings cannot change deltas.
+_DELTA_CONTEXT = Context(prec=40)
+
+
+def _metric_delta(old: float, new: float) -> float:
+    """Return ``new - old`` as computed from the values as they print.
+
+    Most decimal values have no exact binary form, so subtracting the floats
+    leaves noise (0.35 - 0.1 gives 0.24999999999999997). The difference of the
+    endpoints' shortest decimal forms is what a reader expects (0.25), keeps
+    every digit the endpoints carry, and is rounded to a float once.
+    """
+    delta = new - old
+    if not isfinite(delta):
+        return delta
+    exact = _DELTA_CONTEXT.subtract(Decimal(repr(new)), Decimal(repr(old)))
+    return float(exact) + 0.0
 
 
 def _metric_values(sample: dict[str, Any]) -> dict[str, float | None]:

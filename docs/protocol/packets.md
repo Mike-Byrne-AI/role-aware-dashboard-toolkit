@@ -66,6 +66,31 @@ explicitly to local paths when constructing a generic packet. Export validates
 the envelope first and uses strict JSON encoding; `NaN`, positive infinity, and
 negative infinity are rejected.
 
+A packet nests at most 100 levels of mappings and lists, counting the envelope
+(`MAX_PACKET_NESTING_DEPTH`). Construction, import and export raise `ValueError`
+for a deeper packet, or for a payload or metadata that contains a cycle, before
+redaction or JSON encoding starts. A value referenced from several places is
+walked once per reference, so they also refuse a packet whose shared values
+would add more than 1,000,000 container visits beyond the containers it holds
+(`MAX_SHARED_VALUE_EXPANSION`); a packet without shared values is never limited
+by this.
+
+File URIs, with or without `//` (`file:///x`, `file:/x`, `file:C:/x`), and
+editor links that carry a local path (`vscode://file/...` and the same form in
+other editors) are redacted as local paths.
+
+Path redaction takes time proportional to the length of the text. It scans at
+most 256 KiB (262,144 characters) of any one string value or mapping key. The
+scanned head keeps its normal redaction; the rest of an oversize string is
+dropped, never emitted unscanned, and replaced by
+`<redacted-oversize-text: N characters omitted>`. The same limit applies
+wherever the toolkit redacts local paths, including audit events and
+diagnostics. A single path longer than 4,096 characters is redacted without
+being resolved. URL queries and fragments are scanned for paths, including URLs
+nested inside them, to eight levels; anything nested deeper is replaced by
+`<redacted-local-path>`. Opting in to local paths skips redaction and its
+limits.
+
 Do not put credentials in packets. Redaction is a defensive boundary for local
 paths and known sensitive values, not a secret-management system.
 
@@ -80,7 +105,11 @@ if not result["ok"]:
 ```
 
 Consumers should validate before trusting packet structure and separately apply
-their own authorization and business rules to the payload.
+their own authorization and business rules to the payload. Validation errors
+name the field and its allowed values or expected type; they never repeat a
+rejected value, so error text can be logged without copying payload content.
+An integer `schema_version` is the one value named, as in
+`Unexpected schema_version for run: expected 1, found 2.`
 
 Built-in packet types also check the types, schema versions and declared states
 of toolkit fields present in their payload, including embedded run checkpoints

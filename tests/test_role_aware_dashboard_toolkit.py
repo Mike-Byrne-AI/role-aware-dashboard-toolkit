@@ -2269,6 +2269,7 @@ class TestDashboardSmoke:
 
         class BrokenEntryPoint:
             name = "broken_ep"
+            dist = types.SimpleNamespace(metadata={"Name": "fixture-plugins"})
 
             def load(self):
                 raise RuntimeError("entry point exploded")
@@ -2279,7 +2280,9 @@ class TestDashboardSmoke:
         )
         registry = PluginRegistry()
         with pytest.warns(RuntimeWarning, match="Role-Aware Dashboard Toolkit plugin discovery skipped role_aware_dashboard_toolkit.panels:broken_ep"):
-            assert registry.discover(trusted_entry_points=["role_aware_dashboard_toolkit.panels:broken_ep"]) == []
+            assert registry.discover(
+                trusted_entry_points=["fixture-plugins:role_aware_dashboard_toolkit.panels:broken_ep"]
+            ) == []
 
         config = DashboardConfig(auth_mode="demo", title="Smoke Test", plugins=registry)
         monkeypatch.setattr(dashboard_mod, "st", fake_st)
