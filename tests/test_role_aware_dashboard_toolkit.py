@@ -510,7 +510,10 @@ class TestAuditLog:
             with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
             parsed = [json.loads(line) for line in lines]
-            assert [event["key"] for event in parsed] == ["k0", "k1", "k2"]
+            assert [event["type"] for event in parsed] == [
+                "audit_writer_start", "test_event", "test_event", "test_event", "audit_writer_stop",
+            ]
+            assert [event["key"] for event in parsed[1:-1]] == ["k0", "k1", "k2"]
 
 
 class TestProfiles:
@@ -1841,7 +1844,9 @@ class TestDashboardSmoke:
         config.audit.stop_writer()
 
         events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
-        assert [event["type"] for event in events] == ["test_event"]
+        assert [event["type"] for event in events] == [
+            "audit_writer_start", "test_event", "audit_writer_stop",
+        ]
 
 
     def test_sidebar_surfaces_one_redacted_startup_error_and_retries(
@@ -1882,6 +1887,11 @@ class TestDashboardSmoke:
             "memory_only_after_sidebar_start_failure"
         ]
 
+        # The failed start shows the toggle off; turning it on again retries.
+        assert fake_st.session_state["_radt_audit_writer"] is False
+        render_sidebar(fake_st, config)
+        assert audit.writer_status()["writer_active"] is False
+        fake_st.session_state["_radt_audit_writer"] = True
         render_sidebar(fake_st, config)
         audit.log("retry_event")
         audit.stop_writer()
@@ -1890,8 +1900,12 @@ class TestDashboardSmoke:
             json.loads(line)
             for line in audit_path.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["type"] for event in persisted] == ["retry_event"]
-        assert fake_st.messages["error"] == [displayed_error]
+        assert [event["type"] for event in persisted] == [
+            "audit_writer_start", "retry_event", "audit_writer_stop",
+        ]
+        # The unresolved failure stays visible on the plain rerun; the
+        # successful retry adds no error.
+        assert fake_st.messages["error"] == [displayed_error, displayed_error]
         retry_status = audit.writer_status()
         assert retry_status["writer_error_count"] == 0
         assert retry_status["last_writer_error"] == {}
@@ -2008,8 +2022,10 @@ class TestDashboardSmoke:
             for line in audit_path.read_text(encoding="utf-8").splitlines()
         ]
         assert [event["type"] for event in events] == [
+            "audit_writer_start",
             "role_switch",
             "writer_survived_read_only_render",
+            "audit_writer_stop",
         ]
 
 
@@ -2054,6 +2070,7 @@ class TestDashboardSmoke:
         audit._writer_store = object()
         audit._writer_path = str(writer_path)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
         config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
 
         render_sidebar(fake_st, config)
@@ -2062,6 +2079,8 @@ class TestDashboardSmoke:
         assert errors == [
             "Audit writer error (TimeoutError): " + diagnostic_text("RADT-AUDIT-IO")
         ]
+        # The writer is still running, so the toggle shows it running.
+        assert fake_st.session_state["_radt_audit_writer"] is True
         assert str(writer_path) not in "\n".join(errors)
         status = audit.writer_status()
         assert status["writer_active"] is True
@@ -2073,18 +2092,24 @@ class TestDashboardSmoke:
 
     @pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
     def test_sidebar_does_not_swallow_unexpected_audit_writer_shutdown_errors(
-        self, monkeypatch, error_type
+        self, tmp_path, monkeypatch, error_type
     ):
+        audit_root = tmp_path / "audit"
         audit = AuditLog()
+        audit.start_writer(str(audit_root / "events.jsonl"))
 
-        def fail_shutdown():
+        def fail_shutdown(**_attribution):
             raise error_type("unexpected writer failure")
 
         monkeypatch.setattr(audit, "stop_writer", fail_shutdown)
         fake_st = FakeStreamlit()
-        config = DashboardConfig(audit=audit)
-        with pytest.raises(error_type, match="unexpected writer failure"):
-            render_sidebar(fake_st, config)
+        fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
+        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        try:
+            with pytest.raises(error_type, match="unexpected writer failure"):
+                render_sidebar(fake_st, config)
+        finally:
+            AuditLog.stop_writer(audit)
 
     @pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
     def test_sidebar_does_not_swallow_unmarked_start_writer_errors(
@@ -2094,7 +2119,7 @@ class TestDashboardSmoke:
         audit_path = audit_root / "events.jsonl"
         audit = AuditLog()
 
-        def fail_start(_path):
+        def fail_start(_path, **_attribution):
             raise error_type("unexpected start_writer failure")
 
         monkeypatch.setattr(audit, "start_writer", fail_start)
@@ -2124,7 +2149,7 @@ class TestDashboardSmoke:
 
         audit = AuditLog()
 
-        def fail_start(_path):
+        def fail_start(_path, **_attribution):
             raise error
 
         monkeypatch.setattr(audit, "start_writer", fail_start)

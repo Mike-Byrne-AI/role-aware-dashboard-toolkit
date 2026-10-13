@@ -176,6 +176,33 @@ def _is_well_formed_audit_event(event: Any) -> bool:
     )
 
 
+def _lifecycle_attribution(
+    role: Any, source: Any, user_id: Any, session_id: Any,
+) -> dict[str, str]:
+    return {
+        "role": str(role or ""),
+        "source": str(source or "host"),
+        "user_id": str(user_id or ""),
+        "session_id": str(session_id or ""),
+    }
+
+
+def _ui_attribution(audit: Any, ctx: Any) -> dict[str, str]:
+    """Attribute a dashboard-initiated audit lifecycle action.
+
+    An identity-bound audit view pins its actor for ``log``; lifecycle methods
+    delegate to the shared log, so pass the same actor explicitly.
+    """
+    authenticated = bool(getattr(ctx, "authenticated", False))
+    attribution = {"role": str(getattr(ctx, "role", "") or ""), "source": "ui"}
+    for field_name in ("user_id", "session_id"):
+        pinned = getattr(audit, field_name, None)
+        if not isinstance(pinned, str):
+            pinned = getattr(ctx, field_name, "") if authenticated else ""
+        attribution[field_name] = pinned if isinstance(pinned, str) else ""
+    return attribution
+
+
 def audit_event_view(event: Any) -> dict[str, Any]:
     """Return a display record without laundering malformed data into the current schema."""
     if _is_well_formed_audit_event(event):
@@ -245,21 +272,45 @@ class AuditLog:
             app_name=app_name,
             app_version=app_version,
         )
-        evt = redact_audit_event(evt)
+        return self._store_event(redact_audit_event(evt), writer_locked=False)
+
+    def _store_event(self, evt: dict[str, Any], *, writer_locked: bool) -> dict[str, Any]:
         stored_event = copy.deepcopy(evt)
         with self._lock:
             self._events.append(stored_event)
             if len(self._events) > self._max:
                 self._events = self._events[-self._max :]
 
-        with self._writer_lock:
-            if self._writer_queue is not None and not self._writer_stop.is_set():
-                try:
-                    self._writer_queue.put_nowait(copy.deepcopy(stored_event))
-                except queue.Full:
-                    self.dropped += 1
+        if writer_locked:
+            self._enqueue_locked(stored_event)
+        else:
+            with self._writer_lock:
+                self._enqueue_locked(stored_event)
 
         return copy.deepcopy(stored_event)
+
+    def _enqueue_locked(self, stored_event: dict[str, Any]) -> None:
+        if self._writer_queue is not None and not self._writer_stop.is_set():
+            try:
+                self._writer_queue.put_nowait(copy.deepcopy(stored_event))
+            except queue.Full:
+                self.dropped += 1
+
+    def _log_lifecycle_locked(
+        self, event_type: str, path: str | None, attribution: Mapping[str, str],
+    ) -> None:
+        """Record a writer transition; the caller holds the writer lock."""
+        evt = _make_event(event_type, detail=str(path or ""), **attribution)
+        self._store_event(redact_audit_event(evt), writer_locked=True)
+
+    def _writer_running_locked(self) -> bool:
+        writer_thread = self._writer_thread
+        return bool(
+            writer_thread is not None
+            and self._writer_queue is not None
+            and not self._writer_stop.is_set()
+            and writer_thread.is_alive()
+        )
 
     def recent(self, n: int = 20) -> list[Any]:
         limit = max(0, int(n))
@@ -384,7 +435,22 @@ class AuditLog:
     def log_freeze(self, frozen: bool, *, role: str = "", source: str = "ui") -> None:
         self.log("freeze_toggle", new_value=frozen, role=role, source=source)
 
-    def start_writer(self, path: str, *, queue_size: int = 1000) -> bool:
+    def start_writer(
+        self,
+        path: str,
+        *,
+        queue_size: int = 1000,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> bool:
+        """Start (or move) the JSONL writer and record an ``audit_writer_start`` event.
+
+        Calling it again for the running path is a no-op and records nothing.
+        A different path stops the current writer first, recording its stop.
+        """
+        attribution = _lifecycle_attribution(role, source, user_id, session_id)
         with self._writer_lock:
             writer_thread = self._writer_thread
             if writer_thread is not None:
@@ -394,7 +460,7 @@ class AuditLog:
                     and not self._writer_stop.is_set()
                 ):
                     return True
-                self._stop_writer_locked()
+                self._stop_writer_locked(attribution)
             else:
                 self._clear_writer_state_locked()
 
@@ -423,13 +489,32 @@ class AuditLog:
                 self._rollback_failed_writer_start_locked(writer_thread)
                 self._record_writer_startup_error(exc)
                 raise
+            # The first line this writer persists names who started it.
+            self._log_lifecycle_locked("audit_writer_start", path, attribution)
             return True
 
-    def stop_writer(self) -> None:
-        with self._writer_lock:
-            self._stop_writer_locked()
+    def stop_writer(
+        self,
+        *,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> None:
+        """Drain and stop the writer, then record an ``audit_writer_stop`` event.
 
-    def _stop_writer_locked(self) -> None:
+        The stop event is recorded only once the writer has drained and
+        stopped; it is appended to the same file as the last line. Stopping
+        when no writer runs records nothing.
+        """
+        attribution = _lifecycle_attribution(role, source, user_id, session_id)
+        with self._writer_lock:
+            self._stop_writer_locked(attribution)
+
+    def _stop_writer_locked(self, attribution: Mapping[str, str] | None = None) -> None:
+        was_running = self._writer_running_locked()
+        stopped_store = self._writer_store
+        stopped_path = self._writer_path
         self._writer_stop.set()
         writer_thread = self._writer_thread
         if writer_thread is not None:
@@ -442,6 +527,18 @@ class AuditLog:
                 _attach_writer_shutdown_error(error, record)
                 raise error
         self._clear_writer_state_locked()
+        if was_running and stopped_store is not None:
+            evt = _make_event(
+                "audit_writer_stop",
+                detail=str(stopped_path or ""),
+                **(attribution or _lifecycle_attribution("", "host", "", "")),
+            )
+            stored = self._store_event(redact_audit_event(evt), writer_locked=True)
+            try:
+                # The thread has exited: this is the file's last line.
+                stopped_store.append(stored)
+            except Exception as exc:
+                self._record_writer_error(exc)
 
     def _clear_writer_state_locked(self) -> None:
         self._writer_thread = None

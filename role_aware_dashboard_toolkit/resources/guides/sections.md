@@ -23,7 +23,9 @@ and `governance`.
 A hidden runbook hides all its child sections. Showing a child still requires
 its store and permission. Hiding controls preserves registered values.
 Hiding observability also stops sampling. Hiding the audit-writer form preserves
-its existing settings and lifecycle; it does not stop an active writer.
+its settings; no render starts or stops the writer. The visible form shows the
+live writer state to every role, and only an explicit toggle or path change by
+a role with `can_manage_audit` changes it.
 Plugin visibility does not disable setup or suppress setup/discovery failures.
 
 Role/auth resolution and the writable switch remain active. Visibility never

@@ -215,6 +215,45 @@ print(audit.recent(10))
 Persistence failures remain visible through writer status and runtime
 diagnostics; in-memory events stay available.
 
+### Persist every session's events
+
+The JSONL writer belongs to one `AuditLog` object and persists only the events
+logged to that object. To get every session's and every role's events on disk,
+share one `AuditLog` per process and start its writer where you create it:
+
+```python
+import streamlit as st
+import role_aware_dashboard_toolkit as radt
+
+
+@st.cache_resource
+def shared_audit() -> radt.AuditLog:
+    audit = radt.AuditLog()
+    audit.start_writer("audit_logs/audit.jsonl")
+    return audit
+
+
+config = radt.DashboardConfig(registry=registry, audit=shared_audit(), audit_dir="audit_logs")
+```
+
+A dashboard render never starts or stops the writer: not when the writer form
+is hidden, not for a role without `can_manage_audit`, and not because another
+session's form last showed a different value. The form shows the writer's live
+state to every role. Only an explicit change by a role with `can_manage_audit`
+starts, stops or moves it: turning the toggle, or editing the path while the
+writer runs. A path outside `audit_dir` is refused and a running writer keeps
+running. `start_writer()` and `stop_writer()` record `audit_writer_start` and
+`audit_writer_stop` events (the path in `detail`, local paths redacted), so the
+file shows who changed persistence and when. Pass `role`, `source`, `user_id`
+and `session_id` to attribute a host-initiated change; the default source is
+`host`.
+
+A shared log also shares its in-memory history: every role with
+`can_view_audit` sees every session's events. With one `AuditLog` per browser
+session, as in the minimal README dashboard, the toggle governs only that
+session's log and other sessions' events do not reach the file. Start each
+session's writer where you create its log if those sessions must be persisted.
+
 ## Plugins
 
 Plugins are trusted in-process Python:
@@ -346,8 +385,8 @@ Role/authentication resolution and the writable switch remain active.
 
 A hidden runbook suppresses its entire subtree. Visible children still require
 an appropriate store and permission. Hidden controls retain registered state;
-hidden observability does not sample. Hiding the audit writer form preserves
-its settings and lifecycle, and failures remain visible. Hiding plugin details
+hidden observability does not sample. Hiding the audit writer form never
+starts or stops the writer, and failures remain visible. Hiding plugin details
 or callbacks does not undo plugin setup or suppress setup/discovery errors.
 
 ## Add and remove fields and custom content

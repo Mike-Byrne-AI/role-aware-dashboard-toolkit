@@ -9,7 +9,7 @@ from ._profile_preview import InvalidProfilePreviewValues, build_profile_restore
 from ._ui_state import apply_pending_replay, remember_authorized_control_values
 from .profile_store import FileProfileStore
 from .diagnostics import build_diagnostic, diagnostic_text
-from .audit import _get_writer_shutdown_error, _get_writer_startup_error
+from .audit import _get_writer_shutdown_error, _get_writer_startup_error, _ui_attribution
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import (
@@ -557,55 +557,90 @@ def _render_profile_actions(
 
 
 
+_AUDIT_WRITER_KEY = "_radt_audit_writer"
+_AUDIT_PATH_KEY = "_radt_audit_path"
+# What this session's form showed after its last render. A toggle or path that
+# differs from it was changed by the operator; anything else is not a request.
+_AUDIT_WRITER_SEEN_KEY = "_radt_audit_writer_seen"
+_AUDIT_PATH_SEEN_KEY = "_radt_audit_path_seen"
+
+
 def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) -> None:
+    """Show the writer's live state; change it only on an explicit request.
+
+    A render never starts or stops the writer by itself: not when the form is
+    hidden, not for a role that cannot manage it, and not because this
+    session's widget holds a stale value while another session (or the host)
+    changed the shared writer.
+    """
     audit = config.audit
     audit_root = Path(getattr(config, "audit_dir", "audit_logs"))
     default_audit_path = (audit_root / "audit.jsonl").as_posix()
-    can_manage_writer = can_mutate(ctx, "can_manage_audit")
-
-    writer_on = bool(st.session_state.get("_radt_audit_writer", False))
-    audit_path = str(st.session_state.get("_radt_audit_path", default_audit_path))
-    if section_visible(config, "audit_writer"):
-        st.divider()
-        st.subheader("Audit Logging")
-        writer_on = st.toggle(
-            "Write audit to JSONL",
-            key="_radt_audit_writer",
-            help="Writes audit events to disk in a background thread.",
-            disabled=not can_manage_writer,
-        )
-        audit_path = st.text_input(
-            "Audit file path",
-            key="_radt_audit_path",
-            disabled=not can_manage_writer,
-            **({"value": audit_path} if "_radt_audit_path" not in st.session_state else {}),
-        )
     lifecycle_error: dict[str, str] = {}
     startup_error: dict[str, str] = {}
-    try:
-        if can_mutate(ctx, "can_manage_audit"):
-            if writer_on and audit_path.strip():
-                try:
-                    safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)
-                except (OSError, ValueError, StorePathSecurityError):
-                    st.error(
-                        "Audit file path must stay within configured audit directory. "
-                        + diagnostic_text("RADT-AUDIT-IO")
-                    )
-                    audit.stop_writer()
+    if section_visible(config, "audit_writer"):
+        state = st.session_state
+        live_active = bool(audit.writer_status().get("writer_active"))
+        requested = state.get(_AUDIT_WRITER_KEY)
+        seen = state.get(_AUDIT_WRITER_SEEN_KEY, live_active)
+        audit_path = str(state.get(_AUDIT_PATH_KEY, default_audit_path))
+        seen_path = str(state.get(_AUDIT_PATH_SEEN_KEY, audit_path))
+        toggled = requested is not None and bool(requested) != bool(seen)
+        wants_on = bool(requested) if toggled else live_active
+        path_edited = wants_on and live_active and audit_path.strip() != seen_path.strip()
+        try:
+            if (toggled or path_edited) and can_mutate(ctx, "can_manage_audit"):
+                attribution = _ui_attribution(audit, ctx)
+                if not wants_on:
+                    audit.stop_writer(**attribution)
+                elif not audit_path.strip():
+                    st.warning("Enter an audit file path.")
                 else:
                     try:
-                        audit.start_writer(str(safe_path))
-                    except Exception as exc:
-                        startup_error = _get_writer_startup_error(exc)
-                        if not startup_error:
-                            raise
-            else:
-                audit.stop_writer()
-    except TimeoutError as exc:
-        lifecycle_error = _get_writer_shutdown_error(exc)
-        if not lifecycle_error:
-            raise
+                        safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)
+                    except (OSError, ValueError, StorePathSecurityError):
+                        # Refuse the change; a running writer keeps running.
+                        st.error(
+                            "Audit file path must stay within configured audit directory. "
+                            + diagnostic_text("RADT-AUDIT-IO")
+                        )
+                    else:
+                        try:
+                            audit.start_writer(str(safe_path), **attribution)
+                        except Exception as exc:
+                            startup_error = _get_writer_startup_error(exc)
+                            if not startup_error:
+                                raise
+        except TimeoutError as exc:
+            lifecycle_error = _get_writer_shutdown_error(exc)
+            if not lifecycle_error:
+                raise
+
+        # Every role sees the live state, not what this session last chose.
+        # A failed start leaves ownership uncertain, so do not probe it.
+        live_status = {} if startup_error else audit.writer_status()
+        live_active = bool(live_status.get("writer_active"))
+        state[_AUDIT_WRITER_KEY] = live_active
+        state[_AUDIT_WRITER_SEEN_KEY] = live_active
+        state[_AUDIT_PATH_SEEN_KEY] = audit_path
+        can_manage_writer = can_mutate(ctx, "can_manage_audit")
+        st.divider()
+        st.subheader("Audit Logging")
+        st.toggle(
+            "Write audit to JSONL",
+            key=_AUDIT_WRITER_KEY,
+            help="Writes audit events to disk in a background thread. Shows the live writer state.",
+            disabled=not can_manage_writer,
+        )
+        st.text_input(
+            "Audit file path",
+            key=_AUDIT_PATH_KEY,
+            disabled=not can_manage_writer,
+            **({"value": audit_path} if _AUDIT_PATH_KEY not in state else {}),
+        )
+        live_path = str(live_status.get("writer_path") or "")
+        if live_active and live_path != str(Path(audit_path.strip())):
+            st.caption("The writer is running on a different file than the path shown.")
 
     writer_status = {} if startup_error else audit.writer_status()
     dropped_events = int(writer_status.get("dropped_events", 0) or 0)

@@ -41,12 +41,16 @@ def test_actual_background_writer_failure_preserves_status_and_hides_exception(h
         event = audit.log("control_change", key="workers", old_value=1, new_value=2)
         # The real thread drains the queued event before a successful bounded stop.
         audit.stop_writer()
-    assert attempted == [event]
-    assert audit.all_events() == [event]
+    # The start, the event and the stop record each reach the broken store.
+    assert [item["type"] for item in attempted] == [
+        "audit_writer_start", "control_change", "audit_writer_stop",
+    ]
+    assert attempted[1] == event
+    assert audit.all_events() == attempted
     status = audit.writer_status()
     assert not status["writer_active"]
     assert status["queued_events"] == 0
-    assert status["writer_error_count"] == 1
+    assert status["writer_error_count"] == 3
     assert status["last_writer_error"] == {
         "error_type": type(error).__name__,
         "exception_type": type(error).__name__,
