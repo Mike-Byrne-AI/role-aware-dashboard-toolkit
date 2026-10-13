@@ -8,6 +8,8 @@ import logging
 import os
 import stat
 import tempfile
+import threading
+import time
 import warnings
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,15 @@ _STORE_RECORD_CREATE_FLAGS = (
 _STORE_RECORD_READ_CHUNK_BYTES = 64 * 1024
 # A concurrent replace between probe and open is retried this many times in all.
 _STORE_RECORD_READ_ATTEMPTS = 3
+_STORE_TEMP_PREFIX = ".radt-record-"
+_STORE_TEMP_SUFFIX = ".tmp"
+# A temp file this old cannot belong to a write still in progress: a crashed
+# writer left it, with a full record inside.
+_STALE_TEMP_AGE_SECONDS = 15 * 60
+# Sweep a directory at most this often per process; a sweep lists the directory.
+_TEMP_SWEEP_INTERVAL_SECONDS = 5 * 60
+_TEMP_SWEEP_LAST_RUN: dict[str, float] = {}
+_TEMP_SWEEP_LOCK = threading.Lock()
 _STORE_FILENAME_MAX_BYTES = 255
 _STORE_RECORD_CHANGED_MESSAGE = "store record changed between validation and read"
 _STORE_RECORD_APPEND_CHANGED_MESSAGE = (
@@ -516,14 +527,17 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
     fd, tmp_name = tempfile.mkstemp(
         # The temporary name needs its own budget: a valid final filename can
         # already occupy the filesystem's entire component length allowance.
-        prefix=".radt-record-",
-        suffix=".tmp",
+        prefix=_STORE_TEMP_PREFIX,
+        suffix=_STORE_TEMP_SUFFIX,
         dir=str(target.parent),
     )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            # The new contents must be durable before the rename publishes them.
+            os.fsync(handle.fileno())
         os.replace(tmp_path, target)
     except Exception as write_exc:
         try:
@@ -542,7 +556,59 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
                 stacklevel=2,
             )
         raise
+    _fsync_directory(target.parent)
+    _sweep_stale_store_temps(target.parent)
     return target
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename durable where the platform supports a directory fsync."""
+    if os.name == "nt":
+        return
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        # Some filesystems reject a directory fsync; the record is written.
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def _sweep_stale_store_temps(directory: Path) -> None:
+    """Best-effort removal of this store's own crash-orphaned temp files.
+
+    Only regular files named ``.radt-record-*.tmp`` and older than
+    ``_STALE_TEMP_AGE_SECONDS`` are removed; links and other names are left.
+    """
+    key = str(directory)
+    now = time.monotonic()
+    with _TEMP_SWEEP_LOCK:
+        last = _TEMP_SWEEP_LAST_RUN.get(key)
+        if last is not None and now - last < _TEMP_SWEEP_INTERVAL_SECONDS:
+            return
+        _TEMP_SWEEP_LAST_RUN[key] = now
+    cutoff = time.time() - _STALE_TEMP_AGE_SECONDS
+    try:
+        entries = os.scandir(directory)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            name = entry.name
+            if not (name.startswith(_STORE_TEMP_PREFIX) and name.endswith(_STORE_TEMP_SUFFIX)):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                    continue
+                os.unlink(entry.path)
+            except OSError:
+                continue
 
 
 def safe_delete_store_record(path: Path, *, root_dir: Path | None = None) -> bool:
