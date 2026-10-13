@@ -19,13 +19,24 @@ Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
 `<redacted-secret>` and mark the control as `sensitive: true`. Structured public
 control responses also redact nested secret-named fields, preserving ordinary
-siblings and the original live values. A public text/color update that would
-stringify a nested secret field receives HTTP 422 before any batch state or
-audit changes. This includes a nested default selected by sanitation. Profile
-activation applies the same check to values it would sanitize. Replace the
-value with an ordinary public value or explicitly configure a write-only
-sensitive control; structured select values retain their existing redacted
-responses. Profile endpoints
+siblings and the original live values.
+
+Control updates are exact. The API stores each submitted value as sent, or
+refuses the whole request with HTTP 422 naming the control before any state or
+audit changes; it never substitutes a default or clamps a value and records that
+as the caller's change. The rules for each kind are in
+`python -m role_aware_dashboard_toolkit guide api`. Refusal messages name the
+control and the rule, never the submitted value. Because text controls accept
+only strings (and numbers), a structured value cannot be stringified into a
+public text control through an update.
+
+Profile activation still repairs stale saved values to the control's current
+bounds, options or default, as the dashboard does. A public text/color value
+that activation would stringify from a nested secret field receives HTTP 422
+before any state or audit changes, including a nested default selected by that
+repair. Replace the value with an ordinary public value or explicitly configure
+a write-only sensitive control; structured select values retain their existing
+redacted responses. Profile endpoints
 omit sensitive values. Reads of existing profiles expose only currently registered
 public controls, and honor historical sensitivity flags. A control containing
 nested secret-named fields is omitted as a whole, before any text coercion.
@@ -62,8 +73,7 @@ Route permissions follow the existing role map:
 - audit reads require `can_view_audit`
 
 Control update responses retain their normal fields but contain
-`value: "<redacted-secret>"` when the caller lacks `can_view_metrics`, including
-when sanitation chooses a default or clamps the submitted value. The
+`value: "<redacted-secret>"` when the caller lacks `can_view_metrics`. The
 `sensitive` flag continues to describe the control definition; a false flag
 does not grant read permission. The authorized update still completes.
 

@@ -25,7 +25,13 @@ from typing import Any
 
 from .audit import AuditLog
 from ._record_projection import project_audit_events, project_record
-from .controls import ControlDef, ControlRegistry, _looks_like_hex_color
+from .controls import (
+    ControlDef,
+    ControlRegistry,
+    _RejectedControlValue,
+    _exact_control_value,
+    _looks_like_hex_color,
+)
 from .profile_store import BaseProfileStore
 from .profiles import (
     _InvalidProfileError,
@@ -359,8 +365,14 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 )
             _require_permission(ctx, ctrl.permission)
             old = app_state.state.get(key, ctrl.default)
-            _require_safe_api_coercion(ctrl, value)
-            stored = app_state.registry.sanitize_value(key, value)
+            try:
+                # Store exactly what was sent, or refuse: never record a
+                # substituted default or a clamped value as the caller's change.
+                stored = _exact_control_value(ctrl, value)
+            except _RejectedControlValue as exc:
+                raise HTTPException(
+                    status_code=422, detail=f"{exc}. Nothing was changed.",
+                ) from None
             pending_updates.append((ctrl, old, stored))
 
         updated = []

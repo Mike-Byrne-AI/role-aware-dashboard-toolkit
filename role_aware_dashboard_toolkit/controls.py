@@ -330,6 +330,106 @@ def _sanitize_control_value(ctrl: ControlDef, value: Any) -> Any:
     return value
 
 
+class _RejectedControlValue(ValueError):
+    """A write value that the control could keep only by replacing or clamping it.
+
+    The message names the control and the rule, never the submitted value.
+    """
+
+
+_TOGGLE_TEXT = {"1": True, "true": True, "yes": True, "on": True,
+                "0": False, "false": False, "no": False, "off": False}
+
+
+def _exact_control_value(ctrl: ControlDef, value: Any) -> Any:
+    """Return the value an explicit write stores, or raise _RejectedControlValue.
+
+    The sanitizer keeps stale profiles and session state renderable by
+    substituting defaults and clamping. An explicit write (such as an HTTP API
+    update) must keep what the caller sent or be refused, so the audit trail
+    never records a substitution as the caller's change. Faithful conversions
+    are kept: a numeric string to a number, "on"/"off" to a toggle, a number to
+    text.
+    """
+    if ctrl.kind in {"slider", "number"}:
+        converted: Any = _exact_numeric(ctrl, value)
+    elif ctrl.kind == "toggle":
+        converted = _exact_toggle(ctrl, value)
+    elif ctrl.kind == "select":
+        converted = _exact_select(ctrl, value)
+    elif ctrl.kind == "text":
+        if isinstance(value, str):
+            converted = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            converted = str(value)
+        else:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a text string")
+    elif ctrl.kind == "color":
+        converted = value.strip() if isinstance(value, str) else None
+        if converted is None or not _looks_like_hex_color(converted):
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a #RRGGBB hex color")
+    else:
+        return value
+    # Whatever is accepted must survive the render-time sanitizer unchanged.
+    sanitized = _sanitize_control_value(ctrl, converted)
+    if sanitized != converted:
+        raise _RejectedControlValue(f"Control '{ctrl.key}' cannot keep that value unchanged")
+    return sanitized
+
+
+def _exact_numeric(ctrl: ControlDef, value: Any) -> float:
+    try:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValueError
+        num = float(value)
+    except (ValueError, OverflowError):
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number") from None
+    if not math.isfinite(num):
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a finite number")
+    min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
+    if (min_value is not None and num < min_value) or (max_value is not None and num > max_value):
+        if min_value is not None and max_value is not None:
+            limits = f"from {_bound_text(min_value)} to {_bound_text(max_value)}"
+        elif min_value is not None:
+            limits = f"of at least {_bound_text(min_value)}"
+        else:
+            limits = f"of at most {_bound_text(max_value)}"
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number {limits}")
+    if _is_integer_control(ctrl) and not num.is_integer():
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a whole number")
+    return num
+
+
+def _bound_text(value: float | None) -> str:
+    if value is not None and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _exact_toggle(ctrl: ControlDef, value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in _TOGGLE_TEXT:
+        return _TOGGLE_TEXT[value.strip().lower()]
+    raise _RejectedControlValue(f"Control '{ctrl.key}' needs true or false")
+
+
+def _exact_select(ctrl: ControlDef, value: Any) -> Any:
+    for option in list(ctrl.options or []):
+        # 1 == True in Python; a JSON boolean must not select a numeric option.
+        if option == value and isinstance(option, bool) == isinstance(value, bool):
+            return option
+    raise _RejectedControlValue(f"Control '{ctrl.key}' needs one of its configured options")
+
+
+def _is_integer_control(ctrl: ControlDef) -> bool:
+    return ctrl.kind == "number" and all(
+        _looks_like_int(item) for item in (ctrl.default, ctrl.step, ctrl.min_value, ctrl.max_value)
+    )
+
+
 def _sanitize_numeric(ctrl: ControlDef, value: Any) -> Any:
     num = _finite_float(value)
     if num is None:
@@ -347,10 +447,8 @@ def _sanitize_numeric(ctrl: ControlDef, value: Any) -> Any:
     if max_value is not None and num > max_value:
         num = max_value
 
-    if ctrl.kind == "number":
-        if _looks_like_int(ctrl.default) and _looks_like_int(ctrl.step) and _looks_like_int(ctrl.min_value) and _looks_like_int(ctrl.max_value):
-            return round(num)
-        return float(num)
+    if _is_integer_control(ctrl):
+        return round(num)
     return float(num)
 
 

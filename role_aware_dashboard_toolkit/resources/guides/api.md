@@ -37,9 +37,26 @@ ignored.
 Authenticated requests default to Viewer unless the host configures a role.
 Control updates require `can_edit_controls` and the field's permission.
 Their response keeps its normal shape but uses `value: "<redacted-secret>"`
-without `can_view_metrics`; the authorized update still completes. This also
-hides defaults or bounds selected by sanitation. A control's `sensitive` flag
-continues to describe its definition, independently of the caller's read grant.
+without `can_view_metrics`; the authorized update still completes. A control's
+`sensitive` flag continues to describe its definition, independently of the
+caller's read grant.
+
+Control updates are exact: each value is stored as sent, or the whole request
+is refused with HTTP 422 naming the control, before any value or audit event
+changes. The API never substitutes a default or clamps a value.
+
+- `number` and `slider`: a finite JSON number, or a numeric string, within the
+  control's bounds. A `number` control whose default, step and bounds are all
+  whole numbers takes whole numbers only.
+- `toggle`: `true` or `false`, `0` or `1`, or the strings `true`/`false`,
+  `yes`/`no`, `on`/`off`, `1`/`0`.
+- `select`: one of the configured options.
+- `text`: a string; a number is stored as its text.
+- `color`: `#RRGGBB`; surrounding spaces are removed.
+- `null` is never a value.
+
+Profile activation is different: like the dashboard, it repairs stale saved
+values to the control's current bounds, options or default.
 Profile activation checks every affected field. Profile save/delete require
 `can_save_profiles`; audit reads require `can_view_audit`. Protected shared
 deployments also need trusted ingress and TLS.
@@ -65,11 +82,11 @@ from API responses and activation, preserving its current live value. This
 projection does not rewrite the saved record. Core profile helpers remain
 host-controlled; this additional projection belongs to the HTTP boundary.
 
-Public text/color writes that would stringify nested secret fields are rejected
-with HTTP 422 before any values or audit events change, including when the
-sanitizer selects a nested default. Profile activation uses the same check.
-An ordinary public replacement remains allowed; explicitly sensitive controls
-remain write-only and structured select responses still redact secret fields.
+Profile activation refuses with HTTP 422 a public text/color value it would
+stringify from nested secret fields, including a nested default selected by its
+repair, before any values or audit events change. An ordinary public
+replacement remains allowed; explicitly sensitive controls remain write-only and
+structured select responses still redact secret fields.
 
 Single-control reads support keys containing `/`, including automatically
 derived keys such as `requests/second`. Append the URL-encoded complete key to
