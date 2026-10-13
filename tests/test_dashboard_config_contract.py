@@ -25,3 +25,30 @@ def test_default_icon_does_not_prefix_the_title():
     assert not app.exception
     assert [title.value for title in app.title] == ["Service controls"]
     assert "Control Panel" not in [header.value for header in app.sidebar.header]
+
+
+def test_omitting_auth_mode_no_longer_selects_the_demo():
+    import pytest
+
+    import role_aware_dashboard_toolkit as radt
+
+    # access=None models a policy built from a missing environment variable.
+    for kwargs in ({}, {"access": None}, {"auth_hook": None},
+                   {"registry": radt.ControlRegistry(), "custom_roles": {}}):
+        with pytest.raises(ValueError, match="auth_mode='demo'") as raised:
+            radt.DashboardConfig(**kwargs)
+        assert "auth_mode='authenticated'" in str(raised.value)
+        assert raised.value.diagnostic["code"] == "RADT-AUTH"
+
+
+def test_explicit_or_unambiguous_modes_still_construct():
+    from role_aware_dashboard_toolkit import DashboardConfig
+    from role_aware_dashboard_toolkit.access import AccessPolicy
+    from role_aware_dashboard_toolkit.access_store import InMemoryAccessStore
+
+    policy = AccessPolicy(lambda: None, InMemoryAccessStore(), b"synthetic-config-key-0123456789ab")
+
+    assert DashboardConfig(auth_mode="demo").auth_mode == "demo"
+    assert DashboardConfig(auth_hook=lambda: "Viewer").auth_mode == "host"
+    assert DashboardConfig(access=policy).auth_mode == "authenticated"
+    assert DashboardConfig(auth_mode="authenticated", access=policy).auth_mode == "authenticated"

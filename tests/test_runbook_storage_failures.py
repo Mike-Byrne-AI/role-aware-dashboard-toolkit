@@ -221,7 +221,7 @@ if "config" not in st.session_state:
     registry.register("Workers", kind="number", key="workers", default=4,
                       min_value=1, max_value=20, step=1)
     st.session_state["config"] = r.DashboardConfig(
-        registry=registry, run_store=r.FileRunStore({str(tmp_path)!r}),
+        auth_mode="demo", registry=registry, run_store=r.FileRunStore({str(tmp_path)!r}),
         team_store=InMemoryTeamStore(), operator_memory_store=InMemoryOperatorMemoryStore(),
         profile_store=r.InMemoryProfileStore(), sections=r.DashboardSections(audit_writer=False))
     st.session_state["_radt_active_run_id"] = "active"

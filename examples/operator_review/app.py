@@ -29,6 +29,7 @@ def session_resources() -> ReviewSession:
 
 def build_dashboard_config(session: ReviewSession) -> radt.DashboardConfig:
     return radt.DashboardConfig(
+        auth_mode="demo",
         title=APP_TITLE, subtitle="Capture a baseline, compare a candidate, and hand off a human decision.",
         icon="◈", registry=session.registry, custom_roles=build_roles(), audit=session.audit,
         profile_store=session.profiles, run_store=session.runs, team_store=session.team,

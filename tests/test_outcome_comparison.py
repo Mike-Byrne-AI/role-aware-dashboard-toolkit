@@ -168,7 +168,7 @@ def _comparison_app():
         st.session_state["store"] = store
     access = st.selectbox("Metric access", ["Visible", "Hidden"], key="access")
     ctx = make_security_context("Team", {"can_view_team_ops": True, "can_view_metrics": access == "Visible"})
-    render_runbook_panel(st, DashboardConfig(run_store=st.session_state["store"]), ctx)
+    render_runbook_panel(st, DashboardConfig(auth_mode="demo", run_store=st.session_state["store"]), ctx)
 
 
 def test_real_comparison_controls_update_outcomes_and_role_hides_them():

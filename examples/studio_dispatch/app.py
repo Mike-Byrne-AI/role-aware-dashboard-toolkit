@@ -120,6 +120,7 @@ def build_dashboard_config(resources: dict) -> radt.DashboardConfig:
         render_sidebar=render_view_menu, render_panel=render_project_panel,
     ))
     return radt.DashboardConfig(
+        auth_mode="demo",
         title=APP_TITLE, subtitle="A clear view of this week's creative work.", icon="◈",
         registry=build_controls(), custom_roles=build_roles(),
         audit=resources["audit"], profile_store=resources["profiles"],

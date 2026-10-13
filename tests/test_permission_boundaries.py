@@ -99,7 +99,7 @@ def test_dashboard_auth_failure_stops_all_protected_rendering(monkeypatch):
         {},
         controls_writable=False,
     )
-    config = DashboardConfig()
+    config = DashboardConfig(auth_mode="demo")
     protected_calls = []
 
     monkeypatch.setattr(dashboard_module, "st", st)
@@ -138,6 +138,7 @@ def test_dashboard_metrics_permission_gates_controls_and_observability(monkeypat
     st = _DashboardStreamlit()
     denied_ctx = make_security_context("No metrics", {"can_view_metrics": False})
     config = DashboardConfig(
+        auth_mode="demo",
         observability=ObservabilityConfig(
             enabled=True,
             telemetry_hook=lambda: {"metrics": {"private": 1}},
@@ -172,6 +173,7 @@ def test_dashboard_metrics_permission_preserves_permitted_rendering(monkeypatch)
     st = _DashboardStreamlit()
     allowed_ctx = make_security_context("Metrics", {"can_view_metrics": True})
     config = DashboardConfig(
+        auth_mode="demo",
         observability=ObservabilityConfig(enabled=True),
     )
     protected_calls = []

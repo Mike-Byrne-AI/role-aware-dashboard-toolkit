@@ -33,6 +33,7 @@ def _consumer():
         roles["Blind operator"] = RoleDef(
             "Blind operator", {**roles["Operator"].perms, "can_view_metrics": False})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=reg, profile_store=store, run_store=radt.InMemoryRunStore(),
             custom_roles=roles, title="Lifecycle consumer",
             observability=radt.ObservabilityConfig(enabled=True))

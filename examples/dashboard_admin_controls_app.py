@@ -87,6 +87,7 @@ def build_dashboard_config() -> tuple[radt.DashboardConfig, radt.PluginRegistry]
     plugins = build_plugin_registry()
     return (
         radt.DashboardConfig(
+            auth_mode="demo",
             title=APP_TITLE,
             subtitle=APP_SUBTITLE,
             icon="Role-Aware Dashboard Toolkit",

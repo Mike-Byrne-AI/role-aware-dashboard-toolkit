@@ -30,6 +30,7 @@ def _consumer(audit_dir):
         profiles = radt.InMemoryProfileStore()
         profiles.save({"profile_id": "saved", "values": {"count": 90, "message": "Restored"}})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             title="Guidance consumer", registry=registry, profile_store=profiles,
             audit_dir=audit_dir, sections=radt.DashboardSections(plugin_details=False))
     st.session_state["ctx"] = radt.render(st.session_state["config"])
@@ -278,7 +279,7 @@ def test_core_only_missing_streamlit_exception_has_usable_installed_help(tmp_pat
 import json
 from role_aware_dashboard_toolkit import DashboardConfig, render
 try:
-    render(DashboardConfig())
+    render(DashboardConfig(auth_mode="demo"))
 except ModuleNotFoundError as exc:
     print(json.dumps({'message': str(exc), 'name': exc.name, 'diagnostic': exc.diagnostic}))
 else:
