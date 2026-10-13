@@ -217,3 +217,34 @@ def test_api_keeps_large_and_string_integers_exactly(value, stored):
 
     assert response.status_code == 200
     assert response.json()[0]["value"] == (int(value) if stored is None else stored)
+
+
+def test_null_is_a_value_only_for_a_select_that_offers_none():
+    # The API guide said null is never a value; a select whose options
+    # include None accepts it, and the guide now says so.
+    from pathlib import Path
+
+    from fastapi.testclient import TestClient
+
+    registry = ControlRegistry()
+    registry.register("Region", kind="select", key="region", options=[None, "eu"], default="eu")
+    registry.register("Banner", kind="text", key="banner", default="ready")
+    with TestClient(create_app(registry, api_role="Admin")) as client:
+        chosen = client.patch("/controls", headers=HEADERS, json={"values": {"region": None}})
+        refused = client.patch("/controls", headers=HEADERS, json={"values": {"banner": None}})
+
+    assert chosen.status_code == 200
+    assert chosen.json()[0]["value"] is None
+    assert refused.status_code == 422
+    guide = Path(__file__).resolve().parents[1] / "role_aware_dashboard_toolkit/resources/guides/api.md"
+    text = " ".join(guide.read_text(encoding="utf-8").split())
+    assert "`null` is never a value." not in text
+    assert "`null` only when `None` is one of them" in text
+
+
+def test_the_profiles_guide_lists_the_delete_refusal():
+    from pathlib import Path
+
+    guide = Path(__file__).resolve().parents[1] / "role_aware_dashboard_toolkit/resources/guides/profiles.md"
+    text = " ".join(guide.read_text(encoding="utf-8").split())
+    assert "deleting a record whose file holds another record's id returns HTTP 409" in text

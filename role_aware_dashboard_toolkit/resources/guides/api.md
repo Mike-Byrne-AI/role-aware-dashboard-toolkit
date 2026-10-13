@@ -64,10 +64,11 @@ changes. The API never substitutes a default or clamps a value.
   exactly.
 - `toggle`: `true` or `false`, `0` or `1`, or the strings `true`/`false`,
   `yes`/`no`, `on`/`off`, `1`/`0`.
-- `select`: one of the configured options.
+- `select`: one of the configured options (`null` only when `None` is one of
+  them).
 - `text`: a string; a number is stored as its text.
 - `color`: `#RRGGBB`; surrounding spaces are removed.
-- `null` is never a value.
+- `null` is not a value for any other kind.
 
 Profile activation is different: like the dashboard, it repairs stale saved
 values to the control's current bounds, options or default.

@@ -104,9 +104,12 @@ changes.
   `audit_cleared` event in the view.
 - `read_errors` keeps the newest 200 errors. Detect new errors with
   `read_error_count` or `store_read_error_total(store)`, not its length.
-- Record stores check a record's id against its file: a mismatched file is not
-  loaded or listed, and `save` or `delete` over it raises
-  `StorePathSecurityError` (the API returns 409).
+- File record stores (profiles, runs, cases, decisions, governance) check a
+  record's id against its file name: a mismatched file is not loaded or
+  listed, and `save` or `delete` over it raises `StorePathSecurityError` (the
+  API returns 409). Team and operator-memory collections, which have no read
+  by id, still list a file under any name, and refuse a save over a file
+  holding another record's id.
 - On POSIX the protected access directory, `identity.key` and, on every
   `SQLiteAccessStore` connection, `access.sqlite3` must belong to the caller
   or root, so a root process can no longer use another account's directory or
