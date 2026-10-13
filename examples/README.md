@@ -64,10 +64,11 @@ python -m examples.core_library
 - profile and audit panels
 - a trusted plugin panel
 
-Install the workbench dependencies and run it from the repository root:
+Install the workbench extra in your active environment and run it from the
+repository root. The demo needs no development tooling:
 
-```bash
-python -m pip install -e ".[workbench,dev]"
+```shell
+python -m pip install ".[workbench]"
 python -m streamlit run examples/dashboard_admin_controls_app.py
 ```
 

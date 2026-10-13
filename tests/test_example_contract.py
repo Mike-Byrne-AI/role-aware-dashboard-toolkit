@@ -87,7 +87,8 @@ def test_examples_index_describes_only_the_retained_examples():
     assert "## Dependency-free library example" in text
     assert "python -m examples.core_library" in text
     assert "## Streamlit dashboard" in text
-    assert 'python -m pip install -e ".[workbench,dev]"' in text
+    assert 'python -m pip install ".[workbench]"' in text
+    assert "[workbench,dev]" not in text
     assert "python -m streamlit run examples/dashboard_admin_controls_app.py" in text
     assert "## Plugin template" in text
     assert "source-distribution material" in text
