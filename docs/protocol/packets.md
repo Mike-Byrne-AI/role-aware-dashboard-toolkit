@@ -82,7 +82,10 @@ dropped, never emitted unscanned, and replaced by
 `<redacted-oversize-text: N characters omitted>`. The same limit applies
 wherever the toolkit redacts local paths, including audit events and
 diagnostics. A single path longer than 4,096 characters is redacted without
-being resolved. Opting in to local paths skips redaction and its limit.
+being resolved. URL queries and fragments are scanned for paths, including URLs
+nested inside them, to eight levels; anything nested deeper is replaced by
+`<redacted-local-path>`. Opting in to local paths skips redaction and its
+limits.
 
 Do not put credentials in packets. Redaction is a defensive boundary for local
 paths and known sensitive values, not a secret-management system.

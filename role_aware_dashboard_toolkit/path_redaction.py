@@ -53,6 +53,10 @@ _TRAILING_WRAP = "\"')]}>,.;:"
 # oversize string is dropped, never emitted unscanned, and replaced by a marker
 # that states how many characters were omitted.
 _MAX_SCAN_CHARACTERS = 256 * 1024
+# A URL query or fragment is scanned for paths, and may itself hold URLs.
+# Past this many nested levels the rest is redacted unscanned, which bounds
+# both the recursion and the rescanning of the remainder at each level.
+_MAX_URL_NESTING = 8
 # Longer than any supported platform's path limit: redacted without resolving.
 _MAX_PATH_CHARACTERS = 4096
 _REDACTED_LOCAL_PATH = "<redacted-local-path>"
@@ -582,6 +586,7 @@ def _redact_text_local_paths(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache | None = None,
+    url_depth: int = 0,
 ) -> str:
     value = str(text or "")
     if cache is None:
@@ -592,6 +597,7 @@ def _redact_text_local_paths(
             value[:_MAX_SCAN_CHARACTERS],
             repo_root_path=repo_root_path,
             cache=cache,
+            url_depth=url_depth,
         )
         unit = "character" if omitted == 1 else "characters"
         return f"{scanned}<redacted-oversize-text: {omitted} {unit} omitted>"
@@ -603,7 +609,7 @@ def _redact_text_local_paths(
     value = _replace_quoted_absolute_paths(value, repo_root_path=repo_root_path, cache=cache)
     value = _replace_windows_path_substrings(value, repo_root_path=repo_root_path, cache=cache)
     return _TOKEN_PATTERN.sub(
-        lambda match: _redact_token(match.group(0), repo_root_path=repo_root_path, cache=cache),
+        lambda match: _redact_token(match.group(0), repo_root_path=repo_root_path, cache=cache, url_depth=url_depth),
         value,
     )
 
@@ -623,7 +629,10 @@ def _redact_url_parameter_text(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
+    url_depth: int,
 ) -> str:
+    if url_depth >= _MAX_URL_NESTING:
+        return _REDACTED_LOCAL_PATH if value else value
     output: list[str] = []
     for field in re.split(r"([&;=])", value):
         if field in {"&", ";", "="}:
@@ -634,6 +643,7 @@ def _redact_url_parameter_text(
             decoded,
             repo_root_path=repo_root_path,
             cache=cache,
+            url_depth=url_depth + 1,
         )
         output.append(field if redacted == decoded else redacted)
     return "".join(output)
@@ -644,6 +654,7 @@ def _redact_scheme_url(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
+    url_depth: int,
 ) -> str:
     scheme_match = _URL_SCHEME_PREFIX_PATTERN.match(value)
     if scheme_match is None:
@@ -662,11 +673,13 @@ def _redact_scheme_url(
         query,
         repo_root_path=repo_root_path,
         cache=cache,
+        url_depth=url_depth,
     )
     redacted_fragment = _redact_url_parameter_text(
         fragment,
         repo_root_path=repo_root_path,
         cache=cache,
+        url_depth=url_depth,
     )
     return (
         f"{base}{query_separator}{redacted_query}"
@@ -679,6 +692,7 @@ def _redact_token(
     *,
     repo_root_path: _RepoRootPath | None,
     cache: _AbsolutePathCache,
+    url_depth: int,
 ) -> str:
     unwrapped = token.lstrip(_LEADING_WRAP)
     leading = token[:len(token) - len(unwrapped)]
@@ -689,7 +703,9 @@ def _redact_token(
     with_redacted_urls = _SCHEME_URL_PATTERN.sub(
         lambda match: (
             core[match.start():match.start("url")]
-            + _redact_scheme_url(match.group("url"), repo_root_path=repo_root_path, cache=cache)
+            + _redact_scheme_url(
+                match.group("url"), repo_root_path=repo_root_path, cache=cache, url_depth=url_depth,
+            )
         ),
         core,
     )
