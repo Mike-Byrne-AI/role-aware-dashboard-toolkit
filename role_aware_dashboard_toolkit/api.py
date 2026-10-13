@@ -70,10 +70,11 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
 
 try:
     from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
-    from fastapi.exception_handlers import http_exception_handler
+    from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
     from fastapi.exceptions import RequestValidationError
     from fastapi.responses import JSONResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.routing import Match
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -87,6 +88,8 @@ except ImportError as exc:
     RequestValidationError = None  # type: ignore
     StarletteHTTPException = None  # type: ignore
     http_exception_handler = None  # type: ignore
+    request_validation_exception_handler = None  # type: ignore
+    Match = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -188,19 +191,40 @@ def _body_too_large(max_bytes: int) -> str:
     return f"Request body exceeds the API's limit of {max_bytes} bytes. Nothing was changed."
 
 
-class _RequestBodyLimit:
-    """Refuse a request body over the limit before a route stores or copies it.
+class _ToolkitRoutes:
+    """The routes create_app() registered, as opposed to routes a host adds later.
 
-    A declared Content-Length over the limit is refused without reading the
-    body; a streamed body is counted as it arrives.
+    The body limit and the toolkit's error formats apply to these only, so a
+    host route on the returned app keeps FastAPI's behavior.
     """
 
-    def __init__(self, app: Any, max_bytes: int) -> None:
+    def __init__(self) -> None:
+        self.routes: list[Any] = []
+
+    def handles(self, scope: Any) -> bool:
+        # Routes match in registration order, as the router dispatches them.
+        for route in self.routes:
+            match, _child_scope = route.matches(scope)
+            if match == Match.FULL:
+                return True
+        return False
+
+
+class _RequestBodyLimit:
+    """Refuse a request body over the limit before a toolkit route stores or copies it.
+
+    A declared Content-Length over the limit is refused without reading the
+    body; a streamed body is counted as it arrives. Host-added routes are not
+    limited.
+    """
+
+    def __init__(self, app: Any, max_bytes: int, routes: _ToolkitRoutes) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self.routes = routes
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope.get("type") != "http":
+        if scope.get("type") != "http" or not self.routes.handles(scope):
             await self.app(scope, receive, send)
             return
         for name, value in scope.get("headers", ()):
@@ -855,7 +879,9 @@ def create_app(
         # Run: uvicorn myapp:app --port 8000
 
     Request bodies over ``max_body_bytes`` (1 MiB by default) receive HTTP 413,
-    and JSON nested more than 32 levels deep receives HTTP 422.
+    and JSON nested more than 32 levels deep receives HTTP 422. These limits and
+    the toolkit's 422 format apply to the routes created here; routes a host
+    adds to the returned app keep FastAPI's defaults.
     """
     _require_fastapi()
     body_limit = _validated_body_limit(max_body_bytes)
@@ -889,16 +915,30 @@ def create_app(
         )
 
     app = FastAPI(title=title, version=version)
-    app.add_middleware(_RequestBodyLimit, max_bytes=body_limit)
-    app.add_exception_handler(RequestValidationError, _validation_error_response)
-    app.add_exception_handler(StarletteHTTPException, _http_error_response)
+    toolkit_routes = _ToolkitRoutes()
+    app.add_middleware(_RequestBodyLimit, max_bytes=body_limit, routes=toolkit_routes)
+
+    async def validation_error(request: Any, exc: Any) -> Any:
+        if toolkit_routes.handles(request.scope):
+            return _validation_error_response(request, exc)
+        return await request_validation_exception_handler(request, exc)
+
+    async def http_error(request: Any, exc: Any) -> Any:
+        if toolkit_routes.handles(request.scope):
+            return await _http_error_response(request, exc)
+        return await http_exception_handler(request, exc)
+
+    app.add_exception_handler(RequestValidationError, validation_error)
+    app.add_exception_handler(StarletteHTTPException, http_error)
     require_api_context = _make_require_api_context(app_state)
 
+    framework_routes = list(app.router.routes)
     _register_health_route(app)
     _register_control_routes(app, app_state, require_api_context)
     _register_profile_routes(app, app_state, require_api_context)
     _register_role_routes(app, app_state, require_api_context)
     _register_audit_routes(app, app_state, require_api_context)
+    toolkit_routes.routes = [route for route in app.router.routes if route not in framework_routes]
 
     return app
 

@@ -173,6 +173,10 @@ def test_an_absurd_content_length_is_refused_not_crashed():
 
     from role_aware_dashboard_toolkit.api import _RequestBodyLimit
 
+    class _EveryRoute:
+        def handles(self, scope):
+            return True
+
     sent = []
 
     async def app(scope, receive, send):
@@ -186,6 +190,70 @@ def test_an_absurd_content_length_is_refused_not_crashed():
 
     scope = {"type": "http", "method": "POST", "path": "/profiles",
              "headers": [(b"content-length", b"9" * 5000)]}
-    asyncio.run(_RequestBodyLimit(app, 1024)(scope, receive, send))
+    asyncio.run(_RequestBodyLimit(app, 1024, _EveryRoute())(scope, receive, send))
 
     assert sent[0]["status"] == 413
+
+
+if FASTAPI_AVAILABLE:
+    # Module level: FastAPI resolves these postponed annotations in the
+    # endpoint's module globals.
+    from fastapi import Request
+    from pydantic import BaseModel
+
+    class Upload(BaseModel):
+        count: int
+        nested: list = []
+
+    async def host_raw(request: Request):
+        return {"size": len(await request.body())}
+
+    async def host_items(upload: Upload):
+        return {"count": upload.count}
+
+
+def _app_with_host_routes(monkeypatch):
+    """The returned app with routes a host adds after create_app()."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv(KEY_ENV, HEADERS["X-API-Key"])
+    app = create_app(_registry(), profile_store=InMemoryProfileStore(), api_role="Admin")
+    app.post("/host/raw")(host_raw)
+    app.post("/host/items")(host_items)
+    return TestClient(app)
+
+
+def test_the_body_limit_applies_to_toolkit_routes_only(monkeypatch):
+    client = _app_with_host_routes(monkeypatch)
+    body = b"x" * (2 * 1024 * 1024)
+
+    host = client.post("/host/raw", content=body)
+    toolkit = client.post("/profiles", headers=HEADERS, content=body)
+
+    assert host.status_code == 200
+    assert host.json() == {"size": len(body)}
+    assert toolkit.status_code == 413
+
+
+def test_host_routes_keep_fastapi_validation_errors(monkeypatch):
+    client = _app_with_host_routes(monkeypatch)
+
+    host = client.post("/host/items", json={"count": "not a number"})
+    toolkit = client.patch("/controls", headers=HEADERS, json={"value": {"banner": "x"}})
+
+    assert host.status_code == 422
+    assert host.json()["detail"][0]["input"] == "not a number"
+    assert toolkit.status_code == 422
+    assert all(set(error) == {"type", "loc", "msg"} for error in toolkit.json()["detail"])
+
+
+def test_host_routes_keep_fastapi_parse_errors_for_deep_json(monkeypatch):
+    client = _app_with_host_routes(monkeypatch)
+    deep = '{"count": 1, "nested": ' + _nested(100_000) + "}"
+
+    host = client.post("/host/items", content=deep, headers={"Content-Type": "application/json"})
+    toolkit = client.post("/profiles", headers=HEADERS,
+                          content='{"profile_id": "p", "extra": {"x": ' + _nested(100_000) + "}}")
+
+    assert host.status_code == 400
+    assert toolkit.status_code == 422

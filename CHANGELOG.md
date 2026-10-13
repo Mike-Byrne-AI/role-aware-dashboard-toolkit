@@ -25,7 +25,8 @@ changes.
 - The incident timeline narrative renders as plain text, not Markdown.
 - API request bodies over `max_body_bytes` (1 MiB default) get 413 and JSON
   nested more than 32 levels gets 422; a 422 body lists only `type`, `loc` and
-  `msg` per error.
+  `msg` per error. These apply to the toolkit's routes; routes a host adds to
+  the returned app keep FastAPI's defaults.
 - The authenticated starter and the A/B/C example compare resolved paths when
   refusing access storage inside the app tree (`/tmp/app/secrets` on macOS got
   through) and check before reading the key. Apply the same change to the

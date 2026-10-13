@@ -30,7 +30,8 @@ demo opt-in, not the default.
 
 Request bodies over 1 MiB receive HTTP 413; pass `max_body_bytes=` to
 `create_app()` to change the limit. JSON nested more than 32 levels deep in a
-control value or a profile's `extra` receives HTTP 422.
+control value or a profile's `extra` receives HTTP 422. Routes a host adds to
+the returned app keep FastAPI's own limits and error format.
 
 State-changing requests (`POST`, `PATCH`, `DELETE`) without an `X-API-Key`
 header must send `Content-Type: application/json`, including bodyless profile

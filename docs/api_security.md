@@ -60,14 +60,16 @@ Anonymous local/demo access is opt-in only. Use `create_app(..., allow_anonymous
 ## Request limits
 
 Request bodies larger than `max_body_bytes` (an argument to `create_app()`,
-1 MiB by default) receive HTTP 413 before a route reads them; a streamed body
-without `Content-Length` is counted as it arrives. JSON values nested more than
+1 MiB by default) receive HTTP 413 before a toolkit route reads them; a streamed
+body without `Content-Length` is counted as it arrives. JSON values nested more than
 32 levels deep in a control update or a profile's `extra` receive HTTP 422. Both
 refusals happen before any state or audit change. Raise `max_body_bytes` only
 for trusted clients that need it; a reverse proxy can enforce its own limit too.
 Malformed request bodies receive HTTP 422 listing each error's `type`, `loc`
 and `msg`; unlike FastAPI's default, the response does not repeat the submitted
-values.
+values. These limits and error formats cover the routes `create_app()` creates.
+Routes a host adds to the returned app keep FastAPI's defaults, so the host sets
+their limits.
 
 ## Cross-site requests
 
