@@ -100,9 +100,14 @@ class ControlRegistry:
             raise attach_diagnostic(ValueError(
                 "Control keys beginning with '_radt_' are reserved for toolkit state"
             ), "RADT-CONTROL-DEFINITION")
+        if not isinstance(permission, str) or not permission.strip():
+            # The API and UI must agree: an unnamed permission is never "no check".
+            raise attach_diagnostic(ValueError(
+                f"Control '{key}' permission must be a nonempty permission name, "
+                "for example 'can_edit_controls'"
+            ), "RADT-CONTROL-DEFINITION")
         if sensitive is None:
             sensitive = is_sensitive_name(name) or is_sensitive_name(key)
-
 
         if key in self._controls:
             raise attach_diagnostic(KeyError(f"Control key '{key}' already registered"), "RADT-CONTROL-DEFINITION")

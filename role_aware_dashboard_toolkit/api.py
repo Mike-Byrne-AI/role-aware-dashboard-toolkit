@@ -154,8 +154,11 @@ def _resolve_api_context(app_state: _AppState, x_api_key: str) -> SecurityContex
     raise HTTPException(status_code=401, detail="API key required")
 
 
-def _require_permission(ctx: SecurityContext, permission: str | None) -> None:
-    if permission and not has_perm(ctx, permission):
+def _require_permission(ctx: SecurityContext, permission: str) -> None:
+    # An empty or missing permission name denies, as the dashboard UI does.
+    if not isinstance(permission, str) or not permission:
+        raise HTTPException(status_code=403, detail="Forbidden: no permission is declared")
+    if not has_perm(ctx, permission):
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
 
 
@@ -261,7 +264,7 @@ class _AppState:
 
 
 def _make_require_api_context(app_state: _AppState):
-    def require_api_context(permission: str | None = None):
+    def require_api_context(permission: str):
         def dependency(x_api_key: str = Header(default="", alias="X-API-Key")) -> SecurityContext:
             ctx = _resolve_api_context(app_state, x_api_key)
             _require_permission(ctx, permission)
