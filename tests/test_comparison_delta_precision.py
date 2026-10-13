@@ -6,6 +6,7 @@ import pytest
 import role_aware_dashboard_toolkit as radt
 from examples.operator_review.report import render_run_report
 from role_aware_dashboard_toolkit import compare_checkpoints
+from role_aware_dashboard_toolkit.observability import coerce_telemetry_sample, summarize_observability
 
 
 def _delta(old, new):
@@ -50,3 +51,18 @@ def test_readable_report_shows_rounded_deltas():
 
     assert "<td>0.25</td>" in html
     assert "0.24999999999999997" not in html
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [(0.1, 0.35, 0.25), (0.3, 0.1, -0.2), (100, 130, 30.0), (1e9, 1000000000.1, 0.1)],
+)
+def test_observability_drift_delta_matches_the_comparison_delta(old, new, expected):
+    history = [
+        coerce_telemetry_sample({"metrics": {"risk_score": old}}),
+        coerce_telemetry_sample({"metrics": {"risk_score": new}}),
+    ]
+    drift = summarize_observability(history)["drift"]["risk_score"]
+
+    assert drift["delta"] == expected == _delta(old, new)
+    assert (drift["from"], drift["to"]) == (float(old), float(new))

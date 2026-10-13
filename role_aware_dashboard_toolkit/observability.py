@@ -10,6 +10,7 @@ from ._json_safety import sanitize_non_finite_numbers
 from ._optional_pandas import load_optional_pandas
 from ._record_projection import project_record
 from .audit import AuditLog
+from .compare import _metric_delta
 from .diagnostics import diagnostic_text
 from .runtime import normalize_telemetry, summarize_telemetry
 
@@ -230,7 +231,8 @@ def summarize_observability(history: list[dict[str, Any]], audit: AuditLog | Non
             drift[key] = {
                 "from": float(old_val),
                 "to": float(new_val),
-                "delta": float(new_val) - float(old_val),
+                # Same rule as checkpoint comparisons: no binary subtraction noise.
+                "delta": _metric_delta(float(old_val), float(new_val)),
             }
 
     recent_control_changes = 0
