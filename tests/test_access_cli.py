@@ -695,3 +695,16 @@ def test_a_directory_acl_is_named_even_when_it_widens_the_mode(private_directory
     assert "access control list" in output.err
     assert "group or other access" not in output.err
     assert not (private_directory / "identity.key").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ACL shape")
+def test_a_key_acl_is_named_even_when_it_widens_the_mode(private_directory, monkeypatch, capsys):
+    access_cli.initialize_access(private_directory)
+    _emulate_linux_acl(monkeypatch, private_directory / "identity.key", 0o660)
+
+    with pytest.raises(access_cli.ProvisioningError, match="identity.key carries an extended access control list"):
+        access_cli.read_identity_key(private_directory)
+    assert access_cli.main([
+        "grant", "--directory", str(private_directory), "--principal", "b" * 64, "--role", "Viewer",
+    ]) == 1
+    assert "identity.key carries an extended access control list" in capsys.readouterr().err

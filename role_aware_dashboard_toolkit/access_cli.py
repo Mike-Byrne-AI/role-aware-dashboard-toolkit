@@ -224,13 +224,13 @@ def read_identity_key(directory: str | Path) -> bytes:
         except OSError:
             raise ProvisioningError(_KEY_MESSAGE) from None
         info = os.stat(path)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or not _owned_by_caller(info)
-            or (os.name == "posix" and info.st_mode & 0o077)
-        ):
+        if not stat.S_ISREG(info.st_mode) or not _owned_by_caller(info):
             raise ProvisioningError(_KEY_MESSAGE)
+        # Before the mode check: Linux setfacl widens the group bits to the
+        # ACL mask, so the ACL is the cause to name.
         _refuse_extended_acl(path, "identity.key")
+        if os.name == "posix" and info.st_mode & 0o077:
+            raise ProvisioningError(_KEY_MESSAGE)
         with path.open("rb") as handle:
             key = handle.read(4097)
         if not 32 <= len(key) <= 4096:
