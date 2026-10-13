@@ -42,9 +42,10 @@ already exists.
    values update.
 2. Select Progress in the sidebar; change Chart color to recolor the chart.
 3. Switch to Planner. Planning controls remain editable; Intake open is locked.
-4. Turn Controls Writable off. All registered controls freeze.
-5. Switch back to Admin and turn writable on. Save a profile, change values,
-   then select and load that profile.
+4. Switch back to Admin, the role here that can change Controls Writable, and
+   turn it off. All registered controls freeze, for Admin too.
+5. Turn writable on again. Save a profile, change values, then select and load
+   that profile.
 6. To enable runs and checkpoints, change `runbook=False` to `runbook=True`
    in `build_dashboard_config()`, save the file and rerun.
 

@@ -31,9 +31,10 @@ services. Stop it with Ctrl+C. Choose another port if 8524 is occupied.
 - Save a named profile, select it and click Load to restore all six controls.
   Selecting a profile alone previews it. Save/Delete update menu membership
   immediately.
-- Select Viewer for read-only controls and profile actions. Turn Controls
-  Writable off to freeze controls and prevent profile restores. Admin may still
-  save or delete snapshots while frozen.
+- Select Viewer for read-only controls and profile actions. As Admin, the
+  only role here that can change Controls Writable, turn it off to freeze
+  controls and prevent profile restores. Admin may still save or delete
+  snapshots while frozen.
 
 Roles here are a local authorization demonstration, not authentication. Profiles,
 audit records and runs stay in the browser session through reruns; a new session
