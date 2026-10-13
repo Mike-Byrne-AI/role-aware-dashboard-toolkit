@@ -66,6 +66,10 @@ explicitly to local paths when constructing a generic packet. Export validates
 the envelope first and uses strict JSON encoding; `NaN`, positive infinity, and
 negative infinity are rejected.
 
+File URIs, with or without `//` (`file:///x`, `file:/x`, `file:C:/x`), and
+editor links that carry a local path (`vscode://file/...` and the same form in
+other editors) are redacted as local paths.
+
 Path redaction takes time proportional to the length of the text. It scans at
 most 256 KiB (262,144 characters) of any one string value or mapping key. The
 scanned head keeps its normal redaction; the rest of an oversize string is

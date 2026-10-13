@@ -39,6 +39,14 @@ _SCHEME_URL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9+.\-])[0-9+.\-]*(?P<url>[A-Za-z][A-Za-z0-9+.\-]*://[^\s,;|]+)"
 )
 _URL_SCHEME_PREFIX_PATTERN = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*):")
+# A file URI without an authority (file:/x, file:C:/x, file:\\srv\x)
+# names a local file just as a file:// URL does.
+_FILE_URI_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+.\-])file:(?=[\\/]|[A-Za-z]:[\\/])[^\s,;|]+",
+    re.IGNORECASE,
+)
+# Editor links such as vscode://file/<path> (and forks) carry a local path.
+_EDITOR_FILE_LINK_AUTHORITY = "//file/"
 _LEADING_WRAP = "\"'([{<"
 _TRAILING_WRAP = "\"')]}>,.;:"
 # Redaction scans at most this many characters of one string. The rest of an
@@ -642,6 +650,9 @@ def _redact_scheme_url(
         return value
     if scheme_match.group("scheme").casefold() == "file":
         return _REDACTED_LOCAL_PATH
+    after_scheme = value[scheme_match.end():scheme_match.end() + len(_EDITOR_FILE_LINK_AUTHORITY)]
+    if after_scheme.casefold() == _EDITOR_FILE_LINK_AUTHORITY:
+        return _REDACTED_LOCAL_PATH
 
     before_fragment, fragment_separator, fragment = value.partition("#")
     base, query_separator, query = before_fragment.partition("?")
@@ -682,8 +693,19 @@ def _redact_token(
         ),
         core,
     )
+    with_redacted_urls = _replace_file_uris(with_redacted_urls)
     redacted_core = _replace_absolute_substrings(with_redacted_urls, repo_root_path=repo_root_path, cache=cache)
     return f"{leading}{redacted_core}{trailing}"
+
+
+def _replace_file_uris(text: str) -> str:
+    if "file:" not in text.casefold():
+        return text
+    urls = _SchemeUrlSpans(text)
+    return _FILE_URI_PATTERN.sub(
+        lambda match: match.group(0) if match.start() in urls else _REDACTED_LOCAL_PATH,
+        text,
+    )
 
 
 class _SchemeUrlSpans:
