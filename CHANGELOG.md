@@ -67,6 +67,10 @@ changes.
   `<redacted-oversize-text: N characters omitted>` (a single line over 1 MiB
   is replaced whole), and packet validation still passes. 0.1.0 kept the
   whole value. Keep longer text in a file and record the file's name.
+- Building, exporting or loading a packet nested more than 500 levels of
+  mappings and lists (counting the envelope) raises `ValueError`, as does one
+  with a cycle; 0.1.0 had no limit and handled about 990 levels before
+  `RecursionError`. Flatten deeper data before putting it in a packet.
 - `AuditLog.clear()` returns the number of events cleared and leaves one
   `audit_cleared` event in the view.
 - `read_errors` keeps the newest 200 errors. Detect new errors with

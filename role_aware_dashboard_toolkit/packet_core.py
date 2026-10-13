@@ -15,8 +15,11 @@ _PACKET_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 PACKET_SCHEMA_VERSION = 1
 # A packet nests at most this many mappings and lists, counting the envelope.
 # Deeper or cyclic values are refused with ValueError before redaction or JSON
-# encoding could recurse past Python's limit.
-MAX_PACKET_NESTING_DEPTH = 100
+# encoding could recurse past Python's limit. Both recurse one frame per level
+# (redaction uses no comprehension for containers: before Python 3.12 each
+# would add a frame), so a packet at this limit leaves about 500 of the default
+# 1,000 frames for the host's own stack on Python 3.10 to 3.14.
+MAX_PACKET_NESTING_DEPTH = 500
 # Redaction and JSON encoding walk a value once per reference to it. A packet
 # whose shared values would add more container visits than this, beyond the
 # containers it actually holds, is refused. A plain tree adds none.

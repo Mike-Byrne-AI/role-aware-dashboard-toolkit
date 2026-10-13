@@ -218,23 +218,12 @@ def _redact_value(
             )
             used.add(output_key)
         return output
-    if isinstance(value, (set, frozenset)):
-        normalized = [
-            _redact_value(
-                item,
-                repo_root_path=repo_root_path,
-                filesystem_text_cache=filesystem_text_cache,
-                include_local_paths=include_local_paths,
-                key_hint=key_hint,
-                mapping_value_transform=mapping_value_transform,
-                reserved_mapping_keys=frozenset(),
-            )
-            for item in value
-        ]
-        return sorted(normalized, key=_stable_collection_sort_key)
-    if isinstance(value, (list, tuple)):
-        return [
-            _redact_value(
+    if isinstance(value, (set, frozenset, list, tuple)):
+        # A loop, not a comprehension: before Python 3.12 a comprehension adds
+        # a frame per nesting level, halving the depth a packet can reach.
+        items: list[Any] = []
+        for item in value:
+            items.append(_redact_value(
                 item,
                 repo_root_path=repo_root_path,
                 include_local_paths=include_local_paths,
@@ -242,9 +231,10 @@ def _redact_value(
                 mapping_value_transform=mapping_value_transform,
                 filesystem_text_cache=filesystem_text_cache,
                 reserved_mapping_keys=frozenset(),
-            )
-            for item in value
-        ]
+            ))
+        if isinstance(value, (set, frozenset)):
+            return sorted(items, key=_stable_collection_sort_key)
+        return items
     if isinstance(value, os.PathLike):
         rendered = _filesystem_text(value, cache=filesystem_text_cache)
         if rendered is None:

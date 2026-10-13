@@ -8,15 +8,25 @@ import pytest
 from role_aware_dashboard_toolkit import build_packet, export_packet_json, load_packet_json
 from role_aware_dashboard_toolkit import packet_core
 
-LIMIT = 100
+LIMIT = 500
+# Frames a host may already use when it calls the packet functions (a web
+# framework or Streamlit script run sits well inside this).
+HOST_STACK_FRAMES = 250
 
 
-def _nested(levels):
-    """Return a value of ``levels`` nested mappings (a scalar for 0)."""
+def _nested(levels, kind="dict"):
+    """Return a value of ``levels`` nested mappings or lists (a scalar for 0)."""
     value = 1
     for _ in range(levels):
-        value = {"a": value}
+        value = {"a": value} if kind == "dict" else [value]
     return value
+
+
+def _with_stack_in_use(frames, call):
+    """Run ``call`` with ``frames`` Python frames already on the stack."""
+    if frames <= 0:
+        return call()
+    return _with_stack_in_use(frames - 1, call)
 
 
 def _envelope(payload):
@@ -27,7 +37,7 @@ def _envelope(payload):
     }
 
 
-def test_the_documented_limit_is_100_levels():
+def test_the_documented_limit_is_500_levels():
     assert getattr(packet_core, "MAX_PACKET_NESTING_DEPTH", None) == LIMIT
 
 
@@ -40,29 +50,52 @@ def test_json_too_deep_for_the_decoder_raises_value_error():
 
 
 def test_json_deeper_than_the_limit_raises_value_error():
-    # Envelope (1) + payload (2) + 99 more levels = 101 levels.
-    raw = json.dumps(_envelope({"schema_version": 1, "n": _nested(99)}))
+    # Envelope (1) + payload (2) + 499 more levels = 501 levels.
+    raw = json.dumps(_envelope({"schema_version": 1, "n": _nested(LIMIT - 1)}))
 
     with pytest.raises(ValueError, match="nest"):
         load_packet_json(raw)
 
 
 def test_packet_at_the_limit_round_trips():
-    # Envelope (1) + payload (2) + 98 more levels = 100 levels.
-    packet = build_packet("x_probe", {"schema_version": 1, "n": _nested(98)})
+    # Envelope (1) + payload (2) + 498 more levels = 500 levels.
+    packet = build_packet("x_probe", {"schema_version": 1, "n": _nested(LIMIT - 2)})
 
     restored = load_packet_json(export_packet_json(packet))
 
-    assert restored["payload"]["n"] == _nested(98)
+    assert restored["payload"]["n"] == _nested(LIMIT - 2)
 
 
-@pytest.mark.parametrize("levels", [99, 5_000])
+@pytest.mark.parametrize("levels", [100, 250, LIMIT - 2])
+def test_a_deep_packet_exported_by_0_1_0_still_loads(levels):
+    # 0.1.0 had no limit and exported packets nested a few hundred levels;
+    # 0.2.0 at first refused anything past 100.
+    raw = json.dumps(_envelope({"schema_version": 1, "n": _nested(levels)}))
+
+    assert load_packet_json(raw)["payload"]["n"] == _nested(levels)
+
+
+@pytest.mark.parametrize("kind", ["dict", "list"])
+def test_a_packet_at_the_limit_fits_below_the_recursion_limit(kind):
+    # Redaction and JSON encoding recurse once per level. Python 3.10 and 3.11
+    # add a frame for each comprehension, so a list level must not use one.
+    payload = {"schema_version": 1, "n": _nested(LIMIT - 2, kind)}
+
+    def round_trip():
+        return load_packet_json(export_packet_json(build_packet("x_probe", payload)))
+
+    restored = _with_stack_in_use(HOST_STACK_FRAMES, round_trip)
+
+    assert restored["payload"]["n"] == _nested(LIMIT - 2, kind)
+
+
+@pytest.mark.parametrize("levels", [LIMIT - 1, 5_000])
 def test_export_refuses_a_packet_deeper_than_the_limit(levels):
     with pytest.raises(ValueError, match="nest"):
         export_packet_json(_envelope({"schema_version": 1, "n": _nested(levels)}))
 
 
-@pytest.mark.parametrize("levels", [99, 5_000])
+@pytest.mark.parametrize("levels", [LIMIT - 1, 5_000])
 def test_build_refuses_a_payload_deeper_than_the_limit(levels):
     with pytest.raises(ValueError, match="nest"):
         build_packet("x_probe", {"schema_version": 1, "n": _nested(levels)})
@@ -70,7 +103,7 @@ def test_build_refuses_a_payload_deeper_than_the_limit(levels):
 
 def test_build_refuses_deep_metadata():
     with pytest.raises(ValueError, match="nest"):
-        build_packet("x_probe", {"schema_version": 1}, meta={"n": _nested(99)})
+        build_packet("x_probe", {"schema_version": 1}, meta={"n": _nested(LIMIT - 1)})
 
 
 def test_build_and_export_refuse_a_cyclic_payload():
