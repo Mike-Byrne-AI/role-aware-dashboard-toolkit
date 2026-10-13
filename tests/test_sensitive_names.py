@@ -90,3 +90,45 @@ def test_registering_a_blank_or_non_text_name_is_refused(monkeypatch, bad):
     monkeypatch.setattr(sensitive_values, "_RULES", getattr(sensitive_values, "_RULES", None), raising=False)
     with pytest.raises((TypeError, ValueError)):
         sensitive_values.register_sensitive_names(bad)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["access_keyboard", "accessKeyboard", "private_keyboard_layout", "privateKeyboardLayout",
+     "access_keystroke_log", "private_keynote"],
+)
+def test_access_and_private_key_do_not_match_a_longer_word(name):
+    # "key" must end its word: a keyboard is not a key.
+    assert is_sensitive_name(name) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["access_keys", "privateKeys", "ACCESS_KEYBOARD", "accesskey", "private-key-pem"],
+)
+def test_access_and_private_key_still_match_plurals_and_capitals(name):
+    # All-capital names carry no word boundary, so they stay sensitive.
+    assert is_sensitive_name(name) is True
+
+
+def test_api_key_keeps_its_0_1_0_substring_match():
+    # 0.1.0 matched "api key" anywhere; narrowing it would expose values 0.1.0 hid.
+    assert is_sensitive_name("api_keyboard") is True
+
+
+@pytest.mark.parametrize(
+    ("registered", "name", "expected"),
+    [
+        ("Straße", "Straße_code", True),
+        ("Straße", "STRASSE_CODE", True),
+        ("straße", "strasse", True),
+        ("signing key", "signing_keyboard", False),
+        ("signing key", "signingKeyId", True),
+    ],
+)
+def test_registered_names_match_like_built_in_names(monkeypatch, registered, name, expected):
+    monkeypatch.setattr(sensitive_values, "_RULES", getattr(sensitive_values, "_RULES", None), raising=False)
+
+    sensitive_values.register_sensitive_names(registered)
+
+    assert is_sensitive_name(name) is expected

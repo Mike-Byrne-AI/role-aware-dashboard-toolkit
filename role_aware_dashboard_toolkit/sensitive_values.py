@@ -11,7 +11,10 @@ REDACTED_SECRET = "<redacted-secret>"
 # joined by "_", "-" or a space, or written together ("api key" matches
 # "api_key", "x-api-key" and "apiKey"). A shorter one-word name matches only a
 # whole word of another name, split at separators and case changes, so "dsn"
-# matches "SENTRY_DSN" and "sentryDsn" but not "kidsName".
+# matches "SENTRY_DSN" and "sentryDsn" but not "kidsName". A name whose last
+# word is "key" must end there, plural allowed: "access key" matches
+# "access_key_id", "accessKeys" and "ACCESS_KEYBOARD" (capitals show no word
+# end) but not "access_keyboard". "api key" matches anywhere, as in 0.1.0.
 BUILTIN_SENSITIVE_NAMES: tuple[str, ...] = (
     "token",
     "secret",
@@ -34,6 +37,9 @@ _WORD_BOUNDARY_PATTERN = re.compile(
     r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])"
 )
 _WORD_SEPARATOR_PATTERN = re.compile(r"[\W_]+")
+# After a final "key": no lowercase letter, except a plural "s" ending the word.
+_KEY_WORD_END = r"(?-i:(?![a-rt-z]|s[a-z]))"
+_SUBSTRING_KEY_NAMES = frozenset({("api", "key")})
 
 
 class _NameRules(NamedTuple):
@@ -42,9 +48,17 @@ class _NameRules(NamedTuple):
     pattern: re.Pattern[str]
 
 
-def _name_words(name: str) -> list[str]:
+def _name_words(name: str, fold=str.casefold) -> list[str]:
     spaced = _WORD_BOUNDARY_PATTERN.sub(" ", name)
-    return [word.casefold() for word in _WORD_SEPARATOR_PATTERN.split(spaced) if word]
+    return [fold(word) for word in _WORD_SEPARATOR_PATTERN.split(spaced) if word]
+
+
+def _word_fragment(lowered: str, folded: str) -> str:
+    # IGNORECASE matches case pairs only: "straße" never matches its casefold
+    # "strasse", so a word whose forms differ matches either spelling.
+    if lowered == folded:
+        return re.escape(lowered)
+    return f"(?:{re.escape(lowered)}|{re.escape(folded)})"
 
 
 def _build_rules(names: tuple[str, ...], base: _NameRules | None = None) -> _NameRules:
@@ -59,7 +73,12 @@ def _build_rules(names: tuple[str, ...], base: _NameRules | None = None) -> _Nam
         if len(words) == 1 and len(words[0]) < _SHORT_NAME_LENGTH:
             short_words.add(words[0])
             continue
-        fragment = r"[_\-\s]?".join(re.escape(word) for word in words)
+        lowered = _name_words(name, str.lower)
+        fragment = r"[_\-\s]?".join(
+            _word_fragment(low, folded) for low, folded in zip(lowered, words)
+        )
+        if words[-1] == "key" and tuple(words) not in _SUBSTRING_KEY_NAMES:
+            fragment += _KEY_WORD_END
         if fragment not in fragments:
             fragments.append(fragment)
     return _NameRules(
