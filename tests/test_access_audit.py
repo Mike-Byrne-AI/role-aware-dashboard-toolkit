@@ -122,10 +122,12 @@ def test_view_delegates_existing_read_retention_and_clear_behavior():
     copied = view.all_events()
     copied[0]["user_id"] = "changed"
     assert parent.all_events()[0]["user_id"] == USER_A
-    view.clear()
-    # The clear leaves one record of itself in the shared view.
+    assert view.clear(user_id="forged", session_id="forged") == 10
+    # The clear leaves one record of itself in the shared view, with the bound actor.
     assert len(parent) == len(view) == 1
-    assert [event["type"] for event in parent.all_events()] == ["audit_cleared"]
+    [cleared] = parent.all_events()
+    assert cleared["type"] == "audit_cleared"
+    assert (cleared["user_id"], cleared["session_id"]) == (USER_A, SESSION_A)
 
 
 def test_writer_lifecycle_delegates_to_shared_parent_and_persists_actor(tmp_path):
@@ -139,17 +141,17 @@ def test_writer_lifecycle_delegates_to_shared_parent_and_persists_actor(tmp_path
         assert view._writer_thread is parent._writer_thread
         view.log("persisted")
     finally:
-        view.stop_writer()
+        view.stop_writer(user_id="forged", session_id="forged")
 
     assert parent.writer_status()["writer_active"] is False
     assert view.writer_status() == parent.writer_status()
     saved = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    # start_writer/stop_writer record their own lifecycle events. They delegate
-    # to the shared parent, so the view's pinned actor applies to view.log only.
+    # start_writer/stop_writer record their own lifecycle events, and the view
+    # pins its actor on those as it does for log.
     assert [event["type"] for event in saved] == [
         "audit_writer_start", "persisted", "audit_writer_stop",
     ]
-    assert (saved[1]["user_id"], saved[1]["session_id"]) == (USER_A, SESSION_A)
+    assert [(event["user_id"], event["session_id"]) for event in saved] == [(USER_A, SESSION_A)] * 3
     parent.dropped = 4
     assert view.dropped == 4
 
@@ -159,7 +161,8 @@ def test_delegated_writer_failures_keep_original_exception(monkeypatch):
     view = bind_audit_identity(parent, USER_A, SESSION_A)
     error = OSError("writer unavailable")
 
-    def fail_writer():
+    def fail_writer(**attribution):
+        assert (attribution["user_id"], attribution["session_id"]) == (USER_A, SESSION_A)
         raise error
 
     monkeypatch.setattr(parent, "stop_writer", fail_writer)
