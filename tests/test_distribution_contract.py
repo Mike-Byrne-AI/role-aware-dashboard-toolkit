@@ -214,3 +214,20 @@ def test_distribution_reference_contains_no_product_integration_lane():
         assert forbidden not in rendered
     assert "dependency-free core" in rendered
     assert "product-specific adapters and application integrations are not part" in rendered
+
+
+def test_dev_extra_provides_every_tool_the_suite_skips_without():
+    """A test that importorskips a tool the dev extra lacks is skipped in CI, silently."""
+    import re
+
+    extras = _load_pyproject()["project"]["optional-dependencies"]
+    dev = {re.split(r"[<>=!~;\[ ]", dep, maxsplit=1)[0].lower() for dep in extras["dev"]}
+    # Installed by a dev requirement rather than named in it.
+    transitive = {"pyarrow": "streamlit"}
+    skipped: set[str] = set()
+    for path in (REPO_ROOT / "tests").glob("test_*.py"):
+        text = path.read_text(encoding="utf-8")
+        skipped |= {name.split(".")[0] for name in re.findall(r'importorskip\(\s*"([^"]+)"', text)}
+    assert {"streamlit", "fastapi", "mypy"} <= skipped
+    missing = sorted(name for name in skipped if name not in dev and transitive.get(name) not in dev)
+    assert missing == []

@@ -100,6 +100,8 @@ dev = [
     "jsonschema>=4.26.0",
     "black>=24.1.0",
     "ruff>=0.4.0",
+    # Runs the root-export typing check (tests/test_public_export_typing.py).
+    "mypy>=1.10.0",
     "build>=1.2.0",
     # Twine 7 requires packaging >=26.1, including Core Metadata 2.5 support.
     "twine>=7.0.0",
