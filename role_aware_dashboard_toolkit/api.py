@@ -53,6 +53,7 @@ from .security import (
     BUILTIN_ROLES,
 )
 from .sensitive_values import REDACTED_SECRET
+from .store_diagnostics import store_read_error_total
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -547,34 +548,30 @@ def _load_api_profile(
 
 
 class _ReadErrorWatch:
-    """Notice a store read error recorded during one request.
+    """Count store read errors recorded during one request.
 
     File stores record unreadable records in ``read_errors`` and return None,
     which must not be reported as "not found" or overwritten. Compare the
-    newest recorded error, so a bounded error history still shows a new entry.
-    Stores without ``read_errors`` keep their previous behavior.
+    store's running error total, which keeps counting after the bounded
+    ``read_errors`` window is full. Stores without ``read_errors`` keep their
+    previous behavior.
     """
 
     def __init__(self, store: Any) -> None:
         self._store = store
-        self._before = self._errors()
+        self._before = self._total()
 
-    def _errors(self) -> list[Any] | None:
-        errors = getattr(self._store, "read_errors", None)
-        if errors is None:
-            return None
+    def _total(self) -> int | None:
         try:
-            return list(errors)
-        except TypeError:
+            return store_read_error_total(self._store)
+        except TypeError:  # a custom store whose read_errors has no length
             return None
 
     def new_errors(self) -> int:
-        after = self._errors()
-        if self._before is None or not after:
+        after = self._total()
+        if self._before is None or after is None:
             return 0
-        if self._before and after[-1] is self._before[-1]:
-            return 0
-        return max(1, len(after) - len(self._before))
+        return max(0, after - self._before)
 
 
 def _unreadable_profile(profile_id: str) -> str:

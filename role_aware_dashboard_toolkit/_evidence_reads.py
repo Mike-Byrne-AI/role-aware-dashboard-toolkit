@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .security import has_perm
+from .store_diagnostics import store_read_error_total
 from .validators import validate_record
 
 
@@ -43,9 +44,10 @@ def read_evidence(
     try:
         if ctx is not None and permission and not has_perm(ctx, permission):
             return EvidenceRead("denied")
-        errors_before = len(getattr(store, "read_errors", ()) or ())
+        # The running total, not len(read_errors): the retained window is bounded.
+        errors_before = store_read_error_total(store)
         records = getattr(store, method)(*args, **kwargs)
-        if len(getattr(store, "read_errors", ()) or ()) > errors_before:
+        if store_read_error_total(store) > errors_before:
             return EvidenceRead("failed")
         if single:
             if records is None:

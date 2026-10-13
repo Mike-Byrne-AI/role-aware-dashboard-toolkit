@@ -29,7 +29,7 @@ from .runbook_panels_parts.shared import (
 from .runbook_panels_parts.team_ops import _render_team_ops_panel, _render_team_ops_sidebar
 from .security import can_mutate, can_write, has_perm
 from .sections import section_visible
-from .store_diagnostics import StorePathSecurityError
+from .store_diagnostics import StorePathSecurityError, store_read_error_total
 from .validators import validate_record
 
 
@@ -46,9 +46,10 @@ def _read_run_store(store: Any, operation: Any, *args: Any, validate_run: bool =
     """Separate a missing record from a failed read without consuming diagnostics.
 
     File stores retain their read-error history across successful operations.
-    Only errors added by this read indicate that its result is incomplete.
+    Only errors added by this read indicate that its result is incomplete. The
+    running total keeps counting once the retained ``read_errors`` window is full.
     """
-    errors_before = len(getattr(store, "read_errors", ()) or ())
+    errors_before = store_read_error_total(store)
     try:
         result = operation(*args)
         if validate_run:
@@ -62,7 +63,7 @@ def _read_run_store(store: Any, operation: Any, *args: Any, validate_run: bool =
         # Store exceptions and diagnostic records can contain paths or secrets.
         # UI messages below never copy those payloads.
         return None, True
-    return result, len(getattr(store, "read_errors", ()) or ()) > errors_before
+    return result, store_read_error_total(store) > errors_before
 
 
 def _warn_run_history_read(st: Any) -> None:

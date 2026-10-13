@@ -58,3 +58,68 @@ def test_full_window_still_refuses_to_overwrite_an_unreadable_profile(tmp_path):
     ctx = make_security_context("Admin", dict(get_role("Admin").perms))
     with pytest.raises(sidebar._ProfileStorageFailure):
         sidebar._read_profile_save_target(config, ctx, store, "prod", known_profiles=[])
+
+
+# Every caller that detects "this read failed" compares a before/after count.
+# Once the retained window is full, len(read_errors) stops growing, so each
+# caller must compare store_read_error_total instead.
+
+
+def _run_store_with_full_window(root: Path):
+    from role_aware_dashboard_toolkit.run_store import FileRunStore
+    from role_aware_dashboard_toolkit.runs import build_run
+
+    store = FileRunStore(str(root))
+    run = build_run({"limit": 1}, actor="test")
+    store.save(run)
+    run_id = run["run_id"]
+    Path(store.resolve_path(run_id)).write_text("{oops", encoding="utf-8")
+    store = FileRunStore(str(root))
+    for _ in range(300):  # fill the retained window
+        store.list_ids()
+    assert len(store.read_errors) == 200
+    return store, run_id
+
+
+def test_full_window_run_read_is_still_reported_as_failed(tmp_path):
+    from role_aware_dashboard_toolkit.runbook_panels import _read_run_store
+
+    store, run_id = _run_store_with_full_window(tmp_path)
+    assert _read_run_store(store, store.load, run_id, validate_run=True) == (None, True)
+    assert _read_run_store(store, store.list_ids) == ([], True)
+
+
+def test_full_window_evidence_read_is_failed_not_missing(tmp_path):
+    from role_aware_dashboard_toolkit._evidence_reads import read_evidence
+
+    store, run_id = _run_store_with_full_window(tmp_path)
+    result = read_evidence(store, "load", run_id, record_type="run", single=True)
+    assert result.status == "failed"
+
+
+def test_full_window_api_listing_counts_each_unreadable_profile(tmp_path, monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from role_aware_dashboard_toolkit import ControlRegistry
+    from role_aware_dashboard_toolkit.api import create_app
+    from role_aware_dashboard_toolkit.profiles import save_profile
+
+    key = "synthetic-read-error-window-key"
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", key)
+    registry = ControlRegistry()
+    registry.register("Limit", kind="number", key="limit", default=5, min_value=0, max_value=100, step=1)
+    store = FileProfileStore(str(tmp_path))
+    for name in ("one", "two", "three", "kept"):
+        save_profile(name, registry, {"limit": 1}, store=store)
+    for name in ("one", "two", "three"):
+        Path(store.resolve_path(name)).write_text("{oops", encoding="utf-8")
+    store = FileProfileStore(str(tmp_path))
+    for _ in range(100):  # 300 errors: the window is full before the request
+        store.list_ids()
+    assert len(store.read_errors) == 200
+    with TestClient(create_app(registry, api_role="Admin", profile_store=store)) as client:
+        listing = client.get("/profiles", headers={"X-API-Key": key})
+    assert listing.status_code == 200
+    assert listing.json() == ["kept"]
+    assert listing.headers["X-Unreadable-Records"] == "3"
