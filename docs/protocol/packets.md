@@ -66,6 +66,15 @@ explicitly to local paths when constructing a generic packet. Export validates
 the envelope first and uses strict JSON encoding; `NaN`, positive infinity, and
 negative infinity are rejected.
 
+Path redaction takes time proportional to the length of the text. It scans at
+most 256 KiB (262,144 characters) of any one string value or mapping key. The
+scanned head keeps its normal redaction; the rest of an oversize string is
+dropped, never emitted unscanned, and replaced by
+`<redacted-oversize-text: N characters omitted>`. The same limit applies
+wherever the toolkit redacts local paths, including audit events and
+diagnostics. A single path longer than 4,096 characters is redacted without
+being resolved. Opting in to local paths skips redaction and its limit.
+
 Do not put credentials in packets. Redaction is a defensive boundary for local
 paths and known sensitive values, not a secret-management system.
 
