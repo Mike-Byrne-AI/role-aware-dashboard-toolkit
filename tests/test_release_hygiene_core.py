@@ -618,7 +618,7 @@ assert role_aware_dashboard_toolkit.render is dashboard_module.render
 
 default_config = role_aware_dashboard_toolkit.DashboardConfig()
 assert default_config.title == "Dashboard"
-assert default_config.icon == "Control Panel"
+assert default_config.icon == ""
 assert isinstance(default_config.registry, ControlRegistry)
 assert isinstance(default_config.audit, AuditLog)
 assert isinstance(default_config.plugins, PluginRegistry)

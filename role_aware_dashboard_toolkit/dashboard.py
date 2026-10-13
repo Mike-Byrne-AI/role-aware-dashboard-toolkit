@@ -36,7 +36,7 @@ class DashboardConfig:
         self,
         title: str = "Dashboard",
         subtitle: str = "",
-        icon: str = "Control Panel",
+        icon: str = "",
         registry: ControlRegistry | None = None,
         audit: AuditLog | None = None,
         custom_roles: dict[str, RoleDef] | None = None,
