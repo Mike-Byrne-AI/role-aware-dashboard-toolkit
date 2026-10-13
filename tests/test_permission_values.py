@@ -48,3 +48,52 @@ def test_api_denies_a_control_whose_permission_name_is_empty(monkeypatch):
     assert audit.all_events() == []
     # The native UI already denies the same definition.
     assert can_write(make_security_context("Loader", loader.perms), "") is False
+
+
+@pytest.mark.parametrize("value", ["false", "true", 1, 0, None, [True]])
+def test_role_definition_rejects_non_boolean_permission_values(value):
+    with pytest.raises(TypeError, match="can_edit_controls.*True or False"):
+        RoleDef("Misconfigured", {"can_edit_controls": value})
+
+
+@pytest.mark.parametrize("perms", [None, ["can_edit_controls"], {"": True}, {1: True}])
+def test_role_definition_rejects_malformed_permission_maps(perms):
+    with pytest.raises(TypeError, match="Misconfigured"):
+        RoleDef("Misconfigured", perms)
+
+
+def test_boolean_role_definitions_are_unchanged():
+    perms = {"can_edit_controls": True, "can_view_audit": False}
+    role = RoleDef("Editor", perms)
+
+    assert role.perms is perms
+    assert RoleDef("Empty").perms == {}
+
+
+@pytest.mark.parametrize("value", ["false", "no", 1, [False]])
+def test_has_perm_grants_only_an_explicit_true(value):
+    ctx = make_security_context("Misconfigured", {"can_edit_controls": value})
+
+    assert has_perm(ctx, "can_edit_controls") is False
+    assert can_write(ctx, "can_edit_controls") is False
+    assert has_perm(make_security_context("Editor", {"can_edit_controls": True}),
+                    "can_edit_controls") is True
+    # An absent permission still falls back to the caller's explicit default.
+    assert has_perm(ctx, "unlisted_permission", default=True) is True
+
+
+@requires_fastapi
+def test_api_denies_a_permission_value_changed_to_a_string(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", HEADERS["X-API-Key"])
+    registry = ControlRegistry()
+    registry.register("Workers", kind="number", key="workers", default=8, min_value=1, max_value=40)
+    role = RoleDef("Editor", {"can_edit_controls": True, "can_view_metrics": True})
+    with TestClient(create_app(registry, custom_roles={role.name: role}, api_role=role.name)) as client:
+        role.perms["can_edit_controls"] = "false"
+        response = client.patch("/controls", headers=HEADERS, json={"values": {"workers": 20}})
+        current = client.get("/controls/workers", headers=HEADERS).json()["value"]
+
+    assert response.status_code == 403
+    assert current == 8

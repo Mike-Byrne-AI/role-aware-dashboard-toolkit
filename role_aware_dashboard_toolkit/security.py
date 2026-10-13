@@ -40,8 +40,24 @@ def make_security_context(
 
 
 
+_ABSENT = object()
+
+
+def _granted(perms: Mapping[str, Any], key: str, default: bool) -> bool:
+    # Only an explicit True grants. A string such as "false" or a number is a
+    # misconfiguration and denies, as the authenticated access layer does.
+    value = perms.get(key, _ABSENT)
+    if value is _ABSENT:
+        return bool(default)
+    return value is True
+
+
 def has_perm(ctx: SecurityContext | None, key: str, *, default: bool = False) -> bool:
-    """Check permission; the reserved Unauthenticated role always denies."""
+    """Check permission; only an explicit True value grants.
+
+    The reserved Unauthenticated role always denies. ``default`` applies only
+    when the permission is absent from the context.
+    """
     if ctx is None:
         return bool(default)
     # A failed access gate must not inherit a host's permissive defaults.
@@ -51,7 +67,7 @@ def has_perm(ctx: SecurityContext | None, key: str, *, default: bool = False) ->
         return False if ctx.authenticated else bool(default)
     if not isinstance(ctx.perms, Mapping):
         raise TypeError("SecurityContext.perms must be a mapping")
-    permitted = bool(ctx.perms.get(key, default))
+    permitted = _granted(ctx.perms, key, default)
     if ctx.authenticated:
         return permitted and ctx._authorize is not None and ctx._authorize(key, False)
     return permitted
@@ -67,8 +83,8 @@ def can_write(ctx: SecurityContext | None, perm_key: str, *, default: bool = Fal
     if not bool(getattr(ctx, "controls_writable", True)):
         return False
     if ctx.authenticated:
-        return (isinstance(ctx.perms, Mapping) and bool(ctx.perms.get(perm_key, default)) and ctx._authorize is not None
-                and ctx._authorize(perm_key, True))
+        return (isinstance(ctx.perms, Mapping) and _granted(ctx.perms, perm_key, default)
+                and ctx._authorize is not None and ctx._authorize(perm_key, True))
     return has_perm(ctx, perm_key, default=default)
 
 
@@ -84,11 +100,32 @@ def can_mutate(ctx: SecurityContext | None, perm_key: str, *, default: bool = Fa
 
 @dataclass
 class RoleDef:
-    """A named role with a fixed set of permissions."""
+    """A named role with a fixed set of permissions.
+
+    ``perms`` maps permission names to ``True`` or ``False``. Other values,
+    such as the string ``"false"`` or ``1``, raise TypeError: a permission
+    check grants only an explicit ``True``.
+    """
 
     name: str
     perms: dict[str, bool] = field(default_factory=dict)
     description: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.perms, Mapping):
+            raise TypeError(
+                f"Role '{self.name}' perms must map permission names to True or False"
+            )
+        for key, value in self.perms.items():
+            if not isinstance(key, str) or not key:
+                raise TypeError(
+                    f"Role '{self.name}' permission names must be nonempty strings"
+                )
+            if type(value) is not bool:
+                raise TypeError(
+                    f"Role '{self.name}' permission '{key}' must be True or False, "
+                    f"not {type(value).__name__}"
+                )
 
 
 BUILTIN_ROLES: dict[str, RoleDef] = {
