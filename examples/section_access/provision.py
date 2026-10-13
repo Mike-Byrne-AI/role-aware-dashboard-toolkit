@@ -2,7 +2,8 @@
 
 Never expose this module through a browser callback or web endpoint. Initialize
 the protected directory with the toolkit's access_cli before using this module.
-Only the provider's verified subject is prompted; identifiers are never printed.
+Only the provider's verified subject is prompted. The subject, issuer and key
+are never printed; a refusal names its cause, such as a link in the path.
 """
 
 from __future__ import annotations

@@ -207,8 +207,8 @@ def shared_audit() -> radt.AuditLog:
 ```
 
 Every session's and role's events then reach `audit_logs/audit.jsonl`. With one
-log per browser session, as above, the sidebar's writer toggle governs only
-that session's log. See
+log per browser session, as in the minimal dashboard, the sidebar's writer
+toggle governs only that session's log. See
 [persist every session's events](docs/dashboard_tools.md#persist-every-sessions-events).
 
 For controls, profiles, runs, checkpoints, and packet export **without a UI**,
