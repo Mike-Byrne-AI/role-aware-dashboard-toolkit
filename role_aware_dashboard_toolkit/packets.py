@@ -6,8 +6,11 @@ from typing import Any
 from ._json_safety import strict_json_loads
 from .packet_core import (
     DIFF_PACKET_SCHEMA_VERSION,
+    MAX_PACKET_NESTING_DEPTH,
     PACKET_SCHEMA_VERSION,
     VALID_PACKET_TYPES,
+    _nesting_error,
+    _nesting_problem,
     _normalize_packet_type,
     build_packet,
 )
@@ -130,6 +133,9 @@ def build_ledger_packet(
 
 
 def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
+    problem = _nesting_problem(packet, MAX_PACKET_NESTING_DEPTH)
+    if problem is not None:
+        raise _nesting_error("Cannot export invalid packet: ", problem=problem)
     validated = validate_packet(packet)
     if not validated["ok"]:
         raise ValueError("Cannot export invalid packet: " + "; ".join(validated["errors"]))
@@ -137,8 +143,46 @@ def export_packet_json(packet: dict[str, Any], *, indent: int = 2) -> str:
     return json.dumps(canonical, indent=indent, sort_keys=True, allow_nan=False)
 
 
+def _json_text_depth(raw: str | bytes | bytearray) -> int:
+    """Return the deepest nesting of objects and arrays in JSON text, without parsing it."""
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    depth = deepest = 0
+    in_string = escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif char in "]}":
+            depth -= 1
+    return deepest
+
+
 def load_packet_json(raw: str) -> dict[str, Any]:
-    data = strict_json_loads(raw)
+    try:
+        data = strict_json_loads(raw)
+    except RecursionError:
+        # Before Python 3.12 the decoder also counts the caller's frames, so
+        # a packet within the limit can fail on a host with a deep stack.
+        depth = _json_text_depth(raw)
+        if depth > MAX_PACKET_NESTING_DEPTH:
+            raise _nesting_error("Invalid packet JSON: ", may_cycle=False) from None
+        raise ValueError(
+            f"Invalid packet JSON: decoding {depth} levels of nesting (within the "
+            f"{MAX_PACKET_NESTING_DEPTH}-level limit) ran out of Python's recursion limit, "
+            "because the caller's stack is already deep. Load it with less of the stack in use."
+        ) from None
+    problem = _nesting_problem(data, MAX_PACKET_NESTING_DEPTH)
+    if problem is not None:
+        raise _nesting_error("Invalid packet JSON: ", may_cycle=False, problem=problem)
     validated = validate_packet(data)
     if not validated["ok"]:
         raise ValueError("Invalid packet JSON: " + "; ".join(validated["errors"]))
@@ -152,6 +196,7 @@ def extract_packet_payload(packet: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "DIFF_PACKET_SCHEMA_VERSION",
+    "MAX_PACKET_NESTING_DEPTH",
     "PACKET_SCHEMA_VERSION",
     "VALID_PACKET_TYPES",
     "build_audit_slice_packet",

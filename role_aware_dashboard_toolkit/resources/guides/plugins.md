@@ -13,7 +13,7 @@ def overview(context):
 
 plugins = radt.PluginRegistry()
 plugins.register(radt.DashboardPlugin(name="overview", render_panel=overview))
-config = radt.DashboardConfig(registry=registry, plugins=plugins)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, plugins=plugins)
 ```
 
 Use `render_sidebar=` for a custom menu. Give widgets stable host-owned keys.
@@ -43,7 +43,19 @@ callbacks must not overlap. Keep plugin names stable while registered.
 
 Plugins execute as trusted Python in the host process. Entry-point discovery
 is explicit opt-in; allowlist reviewed entry points rather than assuming that
-installation grants trust.
+installation grants trust. Each allowlist entry names
+`distribution:group:name`, so a same-named entry point from another installed
+distribution is never imported; when installed distributions with the
+allowlisted name point the entry point at different code, neither is loaded and
+both are reported (`RADT-PLUGIN-TRUST`), while an editable install's leftover
+`.egg-info` pointing at the same code is fine; a `group:name` entry raises
+`ValueError`:
+
+```python
+registry.discover(trusted_entry_points=[
+    "acme-dashboard-plugins:role_aware_dashboard_toolkit.panels:my_plugin",
+])
+```
 
 Verify the panel/menu appears, actually changes its intended view, respects
 permissions, and disappears after unregistering. A failing setup skips its render

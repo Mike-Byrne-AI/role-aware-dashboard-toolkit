@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from tests.test_profile_menu_refresh import _consumer, _healthy, _profile_events
+from tests.demo_role_helpers import start_as_admin
 
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
@@ -12,9 +13,9 @@ AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
 @pytest.mark.parametrize("listed", [True, False])
 def test_unreadable_save_target_is_preserved_and_failure_is_sanitized(tmp_path, monkeypatch, listed):
-    app = _healthy(AppTest.from_function(
+    app = _healthy(start_as_admin(AppTest.from_function(
         _consumer, args=(str(tmp_path / "audit"),), default_timeout=15,
-    ).run())
+    )).run())
     app.number_input(key="workers").set_value(18)
     _healthy(app.text_input(key="_radt_profile_name").set_value("  base  ").run())
     store = app.session_state["config"].profile_store

@@ -8,6 +8,7 @@ import pytest
 from role_aware_dashboard_toolkit import ControlRegistry, DashboardConfig, InMemoryProfileStore
 from role_aware_dashboard_toolkit.access import Identity, principal_id
 from tests.test_authenticated_ui import _healthy, _host
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -38,9 +39,11 @@ def _app(*, authenticated=True):
     profiles.save({"profile_id": "baseline", "values": {"workers": 20}})
     host.config = DashboardConfig(
         registry=registry, profile_store=profiles, audit=host.audit,
+        auth_mode="authenticated" if authenticated else "demo",
         access=host.policy if authenticated else None,
     )
-    app = _healthy(AppTest.from_function(_consumer, args=(host,), default_timeout=15).run())
+    app = AppTest.from_function(_consumer, args=(host,), default_timeout=15)
+    app = _healthy((app if authenticated else start_as_admin(app)).run())
     _healthy(app.selectbox(key="_radt_profile_choice").select("baseline").run())
     _healthy(app.button(key="_radt_profile_load").click().run())
     _healthy(app.number_input(key="workers").set_value(23).run())

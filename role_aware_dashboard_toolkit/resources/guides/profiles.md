@@ -76,7 +76,13 @@ determine direction. A key present with `None` on both sides is unchanged.
 `FileProfileStore(profile_dir)` enables durable local JSON only when the host
 explicitly chooses it. Profiles are not a credential store. Preserve corrupt
 records and surface `read_errors`; do not reseed or overwrite data simply because
-a load returned `None`.
+a load returned `None`. The HTTP API follows the same rule for stores that
+record `read_errors`: reading or activating an unreadable profile returns HTTP
+500 rather than 404, saving over it returns HTTP 409, and a listing that skipped
+unreadable records carries an `X-Unreadable-Records` header. Deleting the record
+remains available as a repair, but deleting a record whose file holds another
+record's id returns HTTP 409, since that delete would remove the other record;
+repair that file on the server.
 
 Native loading validates saved field shapes again when Load is requested. A
 malformed record raises `ValueError` for direct callers; the dashboard shows a

@@ -15,9 +15,10 @@ from __future__ import annotations
 from .diagnostics import attach_diagnostic
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from .sensitive_values import REDACTED_SECRET, is_sensitive_name
 
 
@@ -71,6 +72,8 @@ class ControlRegistry:
     def __init__(self) -> None:
         self._controls: dict[str, ControlDef] = {}
         self._order_counter: int = 0
+        # Keys registered with an explicit sensitive=False.
+        self._declared_public: set[str] = set()
 
     def register(
         self,
@@ -100,9 +103,15 @@ class ControlRegistry:
             raise attach_diagnostic(ValueError(
                 "Control keys beginning with '_radt_' are reserved for toolkit state"
             ), "RADT-CONTROL-DEFINITION")
+        if not isinstance(permission, str) or not permission.strip():
+            # The API and UI must agree: an unnamed permission is never "no check".
+            raise attach_diagnostic(ValueError(
+                f"Control '{key}' permission must be a nonempty permission name, "
+                "for example 'can_edit_controls'"
+            ), "RADT-CONTROL-DEFINITION")
+        declared_public = sensitive is False
         if sensitive is None:
             sensitive = is_sensitive_name(name) or is_sensitive_name(key)
-
 
         if key in self._controls:
             raise attach_diagnostic(KeyError(f"Control key '{key}' already registered"), "RADT-CONTROL-DEFINITION")
@@ -131,8 +140,23 @@ class ControlRegistry:
             _validate_numeric_configuration(ctrl)
             ctrl.default = _sanitize_numeric(ctrl, ctrl.default)
         self._controls[key] = ctrl
+        if declared_public:
+            self._declared_public.add(key)
+        else:
+            self._declared_public.discard(key)
         self._order_counter += 1
         return ctrl
+
+    def _audit_sensitivity(self, ctrl: ControlDef) -> bool | None:
+        """The ``sensitive`` argument for ``AuditLog.log_control_change``.
+
+        True for a sensitive control; False only for one registered with an
+        explicit ``sensitive=False``; otherwise None, so audit checks the
+        key's name each time it records.
+        """
+        if ctrl.sensitive:
+            return True
+        return False if ctrl.key in getattr(self, "_declared_public", ()) else None
 
     def register_many(self, defs: Sequence[dict[str, Any]]) -> list[ControlDef]:
         """Register multiple controls from a list of kwarg dicts."""
@@ -144,7 +168,9 @@ class ControlRegistry:
         Existing session values and persisted profiles/runs are not deleted.
         Re-registering this key creates a new definition at the end of the order.
         """
-        return self._controls.pop(key)
+        ctrl = self._controls.pop(key)
+        getattr(self, "_declared_public", set()).discard(key)
+        return ctrl
 
     def get(self, key: str) -> ControlDef | None:
         return self._controls.get(key)
@@ -164,14 +190,14 @@ class ControlRegistry:
             groups.setdefault(ctrl.group, []).append(ctrl)
         return list(groups.items())
 
-    def snapshot(self, session_state: dict[str, Any]) -> dict[str, Any]:
+    def snapshot(self, session_state: Mapping[Any, Any]) -> dict[str, Any]:
         """Extract current values of all registered controls from session state."""
         snap = {}
         for key, ctrl in self._controls.items():
             snap[key] = session_state.get(key, ctrl.default)
         return snap
 
-    def persistable_snapshot(self, session_state: dict[str, Any]) -> dict[str, Any]:
+    def persistable_snapshot(self, session_state: Mapping[Any, Any]) -> dict[str, Any]:
         """Return registered non-sensitive values suitable for durable storage."""
         return {
             key: session_state.get(key, ctrl.default)
@@ -192,7 +218,7 @@ class ControlRegistry:
             filtered[text_key] = value
         return filtered
 
-    def restore(self, session_state: dict[str, Any], values: dict[str, Any], *, include_sensitive: bool = True) -> int:
+    def restore(self, session_state: MutableMapping[Any, Any], values: dict[str, Any], *, include_sensitive: bool = True) -> int:
         """Restore saved values into session state and sanitize them.
 
         Returns the number of corrected values.
@@ -225,7 +251,7 @@ class ControlRegistry:
             })
         return out
 
-    def ensure_defaults(self, session_state: dict[str, Any]) -> int:
+    def ensure_defaults(self, session_state: MutableMapping[Any, Any]) -> int:
         """Populate missing control keys with defaults. Returns keys written."""
         added = 0
         for ctrl in self.all():
@@ -234,7 +260,7 @@ class ControlRegistry:
                 added += 1
         return added
 
-    def sanitize_session_state(self, session_state: dict[str, Any]) -> int:
+    def sanitize_session_state(self, session_state: MutableMapping[Any, Any]) -> int:
         """Clamp/coerce registered control values into widget-safe ranges.
 
         This is a generic pre-render hardening step that prevents stale or
@@ -257,16 +283,16 @@ class ControlRegistry:
             return value
         return _sanitize_control_value(ctrl, value)
 
-    def mark_user_set(self, key: str, session_state: dict[str, Any]) -> None:
+    def mark_user_set(self, key: str, session_state: MutableMapping[Any, Any]) -> None:
         session_state[f"{_USER_SET_PREFIX}{key}"] = True
 
-    def is_user_set(self, key: str, session_state: dict[str, Any]) -> bool:
+    def is_user_set(self, key: str, session_state: Mapping[Any, Any]) -> bool:
         return bool(session_state.get(f"{_USER_SET_PREFIX}{key}", False))
 
-    def clear_user_set(self, key: str, session_state: dict[str, Any]) -> None:
+    def clear_user_set(self, key: str, session_state: MutableMapping[Any, Any]) -> None:
         session_state.pop(f"{_USER_SET_PREFIX}{key}", None)
 
-    def clear_all_user_set(self, session_state: dict[str, Any]) -> int:
+    def clear_all_user_set(self, session_state: MutableMapping[Any, Any]) -> int:
         removed = 0
         for key in list(session_state.keys()):
             if str(key).startswith(_USER_SET_PREFIX):
@@ -325,26 +351,147 @@ def _sanitize_control_value(ctrl: ControlDef, value: Any) -> Any:
     return value
 
 
+class _RejectedControlValue(ValueError):
+    """A write value that the control could keep only by replacing or clamping it.
+
+    The message names the control and the rule, never the submitted value.
+    """
+
+
+# A numeric string must be a JSON number: no "1_000", "0x10", "NaN" or "Infinity".
+_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+_JSON_INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)")
+_TOGGLE_TEXT = {"1": True, "true": True, "yes": True, "on": True,
+                "0": False, "false": False, "no": False, "off": False}
+
+
+def _exact_control_value(ctrl: ControlDef, value: Any) -> Any:
+    """Return the value an explicit write stores, or raise _RejectedControlValue.
+
+    The sanitizer keeps stale profiles and session state renderable by
+    substituting defaults and clamping. An explicit write (such as an HTTP API
+    update) must keep what the caller sent or be refused, so the audit trail
+    never records a substitution as the caller's change. Faithful conversions
+    are kept: a numeric string to a number, "on"/"off" to a toggle, a number to
+    text.
+    """
+    if ctrl.kind in {"slider", "number"}:
+        converted: Any = _exact_numeric(ctrl, value)
+    elif ctrl.kind == "toggle":
+        converted = _exact_toggle(ctrl, value)
+    elif ctrl.kind == "select":
+        converted = _exact_select(ctrl, value)
+    elif ctrl.kind == "text":
+        if isinstance(value, str):
+            converted = value
+        elif isinstance(value, int) and not isinstance(value, bool):
+            converted = str(value)
+        elif isinstance(value, float) and math.isfinite(value):
+            converted = str(value)
+        else:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a text string")
+    elif ctrl.kind == "color":
+        converted = value.strip() if isinstance(value, str) else None
+        if converted is None or not _looks_like_hex_color(converted):
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a #RRGGBB hex color")
+    else:
+        return value
+    # Whatever is accepted must survive the render-time sanitizer unchanged.
+    sanitized = _sanitize_control_value(ctrl, converted)
+    if sanitized != converted:
+        raise _RejectedControlValue(f"Control '{ctrl.key}' cannot keep that value unchanged")
+    return sanitized
+
+
+def _exact_numeric(ctrl: ControlDef, value: Any) -> int | float:
+    if isinstance(value, str):
+        text = value.strip()
+        if not _JSON_NUMBER.fullmatch(text):
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number")
+        try:
+            value = int(text) if _JSON_INTEGER.fullmatch(text) else float(text)
+        except ValueError:  # an integer string beyond Python's digit limit
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number") from None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a finite number")
+    # Python compares int and float exactly, so large integers are not rounded here.
+    min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
+    if (min_value is not None and value < min_value) or (max_value is not None and value > max_value):
+        if min_value is not None and max_value is not None:
+            limits = f"from {_bound_text(min_value)} to {_bound_text(max_value)}"
+        elif min_value is not None:
+            limits = f"of at least {_bound_text(min_value)}"
+        else:
+            limits = f"of at most {_bound_text(max_value)}"
+        raise _RejectedControlValue(f"Control '{ctrl.key}' needs a number {limits}")
+    if _is_integer_control(ctrl):
+        if isinstance(value, float):
+            if not value.is_integer():
+                raise _RejectedControlValue(f"Control '{ctrl.key}' needs a whole number")
+            value = int(value)
+        return value
+    if isinstance(value, int):
+        try:
+            converted = float(value)
+        except OverflowError:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' needs a finite number") from None
+        if converted != value:
+            raise _RejectedControlValue(f"Control '{ctrl.key}' cannot keep that value unchanged")
+        return converted
+    return value
+
+
+def _bound_text(value: float | None) -> str:
+    if value is not None and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _exact_toggle(ctrl: ControlDef, value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.strip().lower() in _TOGGLE_TEXT:
+        return _TOGGLE_TEXT[value.strip().lower()]
+    raise _RejectedControlValue(f"Control '{ctrl.key}' needs true or false")
+
+
+def _exact_select(ctrl: ControlDef, value: Any) -> Any:
+    for option in list(ctrl.options or []):
+        # 1 == True in Python; a JSON boolean must not select a numeric option.
+        if option == value and isinstance(option, bool) == isinstance(value, bool):
+            return option
+    raise _RejectedControlValue(f"Control '{ctrl.key}' needs one of its configured options")
+
+
+def _is_integer_control(ctrl: ControlDef) -> bool:
+    return ctrl.kind == "number" and all(
+        _looks_like_int(item) for item in (ctrl.default, ctrl.step, ctrl.min_value, ctrl.max_value)
+    )
+
+
 def _sanitize_numeric(ctrl: ControlDef, value: Any) -> Any:
     num = _finite_float(value)
     if num is None:
+        # The literal 0.0 fallback is always finite. The explicit check below
+        # states that without an assert, which python -O would remove.
         for fallback in (ctrl.default, ctrl.min_value, ctrl.max_value, 0.0):
             num = _finite_float(fallback)
             if num is not None:
                 break
-
-    # The final literal fallback above is always finite.
-    assert num is not None
+    if num is None:
+        num = 0.0
     min_value, max_value = _numeric_bounds(ctrl.kind, ctrl.min_value, ctrl.max_value)
     if min_value is not None and num < min_value:
         num = min_value
     if max_value is not None and num > max_value:
         num = max_value
 
-    if ctrl.kind == "number":
-        if _looks_like_int(ctrl.default) and _looks_like_int(ctrl.step) and _looks_like_int(ctrl.min_value) and _looks_like_int(ctrl.max_value):
-            return round(num)
-        return float(num)
+    if _is_integer_control(ctrl):
+        return round(num)
     return float(num)
 
 

@@ -52,7 +52,7 @@ Controls whose name or key looks sensitive are marked sensitive automatically;
 you can also pass `sensitive=True`. Sensitive values are omitted from durable
 profiles and redacted from audit and API response surfaces.
 For a nonsecret field matched by this heuristic, such as `max_tokens`, explicitly
-pass `sensitive=False` to retain its ordinary widget and profile values.
+pass `sensitive=False` to retain its ordinary widget, profile and audit values.
 Sensitive UI fields use a blank replacement form, including non-text kinds;
 read-only users see only `Hidden`. Stored values and select options are never
 prefilled or sent to the browser. See the installed
@@ -63,6 +63,7 @@ for replacement formats and explicit text clearing.
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     title="Service controls",
     subtitle="Changes are explicit and auditable.",
     registry=registry,
@@ -84,6 +85,9 @@ Useful `DashboardConfig` collaborators include:
 - `observability` for telemetry sampling
 - `run_store` for run/checkpoint panels
 - explicit team, decision, memory, case, and governance stores
+- `auth_mode="demo"` for the local demo where each user picks a role; it is
+  required when neither `access` nor `auth_hook` is given, so a missing access
+  policy never falls back to the demo
 - `access` and `auth_mode="authenticated"` for verified identity, assigned roles,
   and shared freeze
 - `auth_hook` for existing host-managed role integrations
@@ -115,8 +119,10 @@ custom_roles = {
 }
 ```
 
-Demo mode permits self-selected roles and does not authenticate users. For a
-shared dashboard, start with `init shared-dashboard --auth` and follow the
+Demo mode permits self-selected roles and does not authenticate users. A new
+demo session starts in its least-privileged role (Viewer for the built-in
+roles); pick another role in the sidebar. Only a role with `can_manage_freeze`
+can change Controls Writable. For a shared dashboard, start with `init shared-dashboard --auth` and follow the
 [authentication guide](../role_aware_dashboard_toolkit/resources/guides/authentication.md).
 Verified users can select only server-assigned roles, and protected writes
 recheck identity, grants and shared freeze. Call the module-level
@@ -190,11 +196,18 @@ while `can_manage_audit` permits clearing the in-memory log and changing the
 JSONL writer lifecycle. The built-in `Admin` role is the only role granted
 `can_manage_audit`; custom roles must opt in explicitly.
 
+The JSONL file is append-only; the in-memory view is bounded and clearable.
+`AuditLog.clear()` records an `audit_cleared` event (`old` holds the number of
+events cleared) as the view's first entry and sends it to a running writer, so
+the file shows who cleared the view and when. The file is never truncated.
+
 The audit CSV download is a spreadsheet-oriented view: fields are quoted and
 formula-like text is prefixed with an apostrophe, including formula prefixes
 after whitespace or Unicode formatting characters. This formula escaping changes
-only the CSV view. Both native downloads first redact currently sensitive
-historical values; the stored audit events remain unchanged.
+only the CSV view. The Timeline table shows the same protected cells, so its
+built-in CSV download carries the same protection. Both native downloads first
+redact currently sensitive historical values; the stored audit events remain
+unchanged.
 NUL characters are displayed as literal `\x00` text so CSV readers, including
 Python 3.10's reader, can import the download. Use JSONL for faithful
 machine-readable evidence. Spreadsheet applications and
@@ -213,7 +226,69 @@ print(audit.recent(10))
 ```
 
 Persistence failures remain visible through writer status and runtime
-diagnostics; in-memory events stay available.
+diagnostics; in-memory events stay available. If an append fails partway (a
+full disk) or a process dies mid-append, the next event starts on a new line;
+`FileAuditStore.read_all()` skips the torn line and reports it in
+`read_errors`.
+
+### Persist every session's events
+
+The JSONL writer belongs to one `AuditLog` object and persists only the events
+logged to that object. To get every session's and every role's events on disk,
+share one `AuditLog` per process and start its writer where you create it:
+
+```python
+import streamlit as st
+import role_aware_dashboard_toolkit as radt
+
+
+@st.cache_resource
+def shared_audit() -> radt.AuditLog:
+    audit = radt.AuditLog()
+    audit.start_writer("audit_logs/audit.jsonl")
+    return audit
+
+
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, audit=shared_audit(), audit_dir="audit_logs")
+```
+
+A dashboard render never starts or stops the writer: not when the writer form
+is hidden, not for a role without `can_manage_audit`, and not because another
+session's form last showed a different value. The form shows the writer's live
+state to every role. Only an explicit change by a role with `can_manage_audit`
+starts, stops or moves it: turning the toggle, or editing the path while the
+writer runs. A path outside `audit_dir` is refused and a running writer keeps
+running. `start_writer()` and `stop_writer()` record `audit_writer_start` and
+`audit_writer_stop` events (the path in `detail`, local paths redacted), so the
+file shows who changed persistence and when. Pass `role`, `source`, `user_id`
+and `session_id` to attribute a host-initiated change; the default source is
+`host`.
+
+A shared log also shares its in-memory history: every role with
+`can_view_audit` sees every session's events. With one `AuditLog` per browser
+session, as in the minimal README dashboard, the toggle governs only that
+session's log and other sessions' events do not reach the file. Start each
+session's writer where you create its log if those sessions must be persisted.
+
+### Shut down the writer
+
+Call `audit.stop_writer()` or `cleanup_runtime(audit=audit)` when the host
+shuts down. The call records one `audit_writer_stop` request in memory; the
+worker drains the queued events and appends that request as its last line.
+Its `detail` says `stop requested`: it records who requested the stop, not
+proof that persistence finished. The three-second drain timeout includes that
+final append. A timeout raises `TimeoutError`, appears in `writer_status()`,
+and retains ownership of the worker; another stop waits for the same request
+without changing its actor or appending it twice. A writer still running at a
+normal interpreter exit is drained the same way, with source `atexit`; an
+exit-drain timeout is logged as a warning. A killed process (`SIGKILL`,
+`os._exit`, power loss) loses
+events still queued. When a host drops an `AuditLog` with a running writer,
+the log is collected and its writer drains and exits. It appends a stop
+request only if one was recorded before collection.
+Events logged faster than the writer persists them are queued up to
+`queue_size` (1000 by default); beyond that they are dropped and counted in
+`writer_status()["dropped_events"]`.
 
 ## Plugins
 
@@ -292,6 +367,7 @@ Group cards have explicit Python options:
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry,
     layout="columns",
     card_background_color="#172554",
@@ -313,6 +389,7 @@ for theme setup and visual checks.
 
 ```python
 config = radt.DashboardConfig(
+    auth_mode="demo",
     registry=registry,
     sections=radt.DashboardSections(
         profiles=False,
@@ -346,8 +423,8 @@ Role/authentication resolution and the writable switch remain active.
 
 A hidden runbook suppresses its entire subtree. Visible children still require
 an appropriate store and permission. Hidden controls retain registered state;
-hidden observability does not sample. Hiding the audit writer form preserves
-its settings and lifecycle, and failures remain visible. Hiding plugin details
+hidden observability does not sample. Hiding the audit writer form never
+starts or stops the writer, and failures remain visible. Hiding plugin details
 or callbacks does not undo plugin setup or suppress setup/discovery errors.
 
 ## Add and remove fields and custom content
@@ -376,7 +453,7 @@ plugins.register(radt.DashboardPlugin(
     render_panel=project_panel,
     render_sidebar=project_menu,
 ))
-config = radt.DashboardConfig(registry=registry, plugins=plugins)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, plugins=plugins)
 ```
 
 Pass `plugins` to the configuration you render. Call

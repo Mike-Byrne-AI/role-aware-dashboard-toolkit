@@ -31,6 +31,15 @@ def test_changelog_mentions_current_runtime_version():
     assert f"## {__version__}" in changelog
 
 
+def test_changelog_release_headings_are_dated_and_follow_unreleased():
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = re.findall(r"^## (.+)$", changelog, flags=re.MULTILINE)
+    releases = [heading for heading in headings if heading != "Unreleased"]
+    assert releases
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading) for heading in releases), releases
+    assert "Unreleased" not in headings or headings[0] == "Unreleased"
+
+
 def test_changelog_starts_with_canonical_heading():
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     lines = changelog.splitlines()
@@ -435,6 +444,17 @@ def test_python_support_policy_is_explicit_and_ci_backed():
     assert any(dep.startswith("tomli>=") and "python_version < '3.11'" in dep for dep in dev_deps)
 
 
+def test_metadata_uses_an_spdx_license_expression_and_declares_typing():
+    pyproject = load_pyproject()
+    project = pyproject["project"]
+    assert project["license"] == "MIT"
+    assert project["license-files"] == ["LICENSE"]
+    assert not any(item.startswith("License ::") for item in project["classifiers"])
+    assert "Typing :: Typed" in project["classifiers"]
+    # Hatchling 1.27 is the first release that writes License-Expression.
+    assert pyproject["build-system"]["requires"] == ["hatchling>=1.27.0"]
+
+
 def test_ci_and_release_checklist_enforce_publication_hygiene():
     pyproject = load_pyproject()
     workflow = read_ci_workflow()
@@ -616,9 +636,9 @@ assert "streamlit" not in sys.modules
 assert role_aware_dashboard_toolkit.DashboardConfig is dashboard_module.DashboardConfig
 assert role_aware_dashboard_toolkit.render is dashboard_module.render
 
-default_config = role_aware_dashboard_toolkit.DashboardConfig()
+default_config = role_aware_dashboard_toolkit.DashboardConfig(auth_mode="demo")
 assert default_config.title == "Dashboard"
-assert default_config.icon == "Control Panel"
+assert default_config.icon == ""
 assert isinstance(default_config.registry, ControlRegistry)
 assert isinstance(default_config.audit, AuditLog)
 assert isinstance(default_config.plugins, PluginRegistry)
@@ -725,7 +745,7 @@ def fail_streamlit_runtime(name, globals=None, locals=None, fromlist=(), level=0
 builtins.__import__ = fail_streamlit_runtime
 dashboard.st = None
 try:
-    dashboard.render(dashboard.DashboardConfig())
+    dashboard.render(dashboard.DashboardConfig(auth_mode="demo"))
 except ModuleNotFoundError as exc:
     assert exc.name == "streamlit.runtime"
     assert str(exc) == "broken nested Streamlit import"

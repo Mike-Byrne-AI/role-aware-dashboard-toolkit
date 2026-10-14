@@ -661,19 +661,145 @@ def test_redact_text_local_paths_logs_repo_root_resolve_failure_without_leaking_
 
 
 def test_redact_text_local_paths_logs_absolute_path_resolve_failure_without_leaking_path(monkeypatch, caplog):
-    class FailingPath:
-        def __init__(self, value):
-            self.value = value
+    # A path is resolved only against a repository root.
+    real_resolve = Path.resolve
 
-        def resolve(self, strict=False):
-            raise OSError(f"cannot resolve {self.value}")
+    def failing_resolve(self, *args, **kwargs):
+        if "secret" in str(self):
+            raise OSError(f"cannot resolve {self}")
+        return real_resolve(self, *args, **kwargs)
 
-    monkeypatch.setattr(path_redaction, "Path", FailingPath)
+    monkeypatch.setattr(Path, "resolve", failing_resolve)
     caplog.set_level(logging.WARNING, logger=path_redaction.__name__)
 
-    redacted = redact_text_local_paths("/secret/report.txt")
+    redacted = redact_text_local_paths("/secret/report.txt", repo_root="/srv/repo")
 
     messages = [record.getMessage() for record in caplog.records]
     assert redacted == "<redacted-local-path>"
     assert messages == ["Role-Aware Dashboard Toolkit path redaction could not resolve absolute path (OSError)."]
     assert "/secret/report.txt" not in messages[0]
+
+
+@pytest.mark.parametrize("separator", [" and ", ",", ";", " | ", "\n"])
+def test_a_repo_path_at_the_start_of_text_does_not_carry_later_paths_through(separator):
+    # The whole text was read as one path under the repository root, and its
+    # relative remainder kept every later path unredacted.
+    message = f"/srv/repo/notes.txt{separator}/Users/alice/secret.txt"
+
+    redacted = redact_text_local_paths(message, repo_root="/srv/repo")
+
+    assert redacted == f"notes.txt{separator}<redacted-local-path>"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("C:\\repo\\notes.txt and C:\\Users\\alice\\secret.txt", "notes.txt and <redacted-local-path>"),
+        ("/srv/repo/a.txt and vscode://file/Users/alice/s", "a.txt and <redacted-local-path>"),
+    ],
+)
+def test_a_repo_path_at_the_start_does_not_hide_a_later_path_or_link(message, expected):
+    repo_root = "C:\\repo" if message.startswith("C:") else "/srv/repo"
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("q=\\\\srv\\share\\vscode://file//Users/alice/s", "q=<redacted-local-path>"),
+        ("x \\\\fs01\\vscode://file/C:/Users/alice/a", "x <redacted-local-path>"),
+        ("see C:\\work\\cursor://file/Users/alice/s now", "see <redacted-local-path> now"),
+    ],
+)
+def test_a_windows_path_glued_to_an_editor_link_is_redacted_with_it(message, expected):
+    # The Windows path took the link's scheme, and what was left no longer
+    # read as a link or a path.
+    assert redact_text_local_paths(message) == expected
+
+
+@pytest.mark.parametrize(
+    ("prefix", "count", "expected_start"),
+    [("", 150, "src/mod0.py,<redacted-local-path>"), ("files: ", 150, "files: src/mod0.py,<redacted-local-path>"),
+     # Past 4,096 characters a candidate path is redacted without resolving.
+     ("files: ", 2_000, "files: <redacted-local-path>")],
+)
+def test_many_repo_paths_joined_without_spaces_do_not_recurse(prefix, count, expected_start):
+    # Each repository-relative remainder was scanned again with the root, one
+    # stack level per path: 150 comma-joined paths raised RecursionError. The
+    # remainder is now scanned once, without the root, so later paths are
+    # redacted whole.
+    message = prefix + ",".join(f"/srv/repo/src/mod{index}.py" for index in range(count))
+
+    redacted = redact_text_local_paths(message, repo_root="/srv/repo")
+
+    assert redacted == expected_start
+    assert "/srv/repo" not in redacted
+
+
+def test_a_packet_of_comma_joined_repo_paths_builds():
+    paths = ",".join(f"/srv/repo/src/mod{index}.py" for index in range(150))
+
+    packet = build_packet("x_probe", {"schema_version": 1, "files": paths}, repo_root="/srv/repo")
+
+    assert packet["payload"]["files"] == "src/mod0.py,<redacted-local-path>"
+
+
+@pytest.mark.parametrize(
+    ("repo_root", "message", "expected"),
+    [
+        ("/srv/Alice Smith/proj", "/srv/Alice Smith/proj/a.py", "a.py"),
+        ("/Users/al/Library/Mobile Documents/com~apple~CloudDocs/proj",
+         "/Users/al/Library/Mobile Documents/com~apple~CloudDocs/proj/a.py", "a.py"),
+    ],
+)
+def test_a_whole_string_repo_path_with_spaces_stays_relative(repo_root, message, expected):
+    # Scanning such a string token by token would split the root at its space.
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "repo_root", "expected"),
+    [
+        ("/repo/pkg/__pycache__/m.cpython-312.pyc", "/repo", "pkg/__pycache__/m.cpython-312.pyc"),
+        ("/repo/tests/__snapshots__/a.snap", "/repo", "tests/__snapshots__/a.snap"),
+        ("/repo/build-/x.txt", "/repo", "build-/x.txt"),
+        ("/repo/My Folder (copy)/x.txt", "/repo", "My Folder (copy)/x.txt"),
+        ("/repo/a~/b.txt", "/repo", "a~/b.txt"),
+        ("/repo/v1+/b.txt", "/repo", "v1+/b.txt"),
+        ("see /repo/pkg/__pycache__/m.pyc here", "/repo", "see pkg/__pycache__/m.pyc here"),
+        ("C:\\repo\\pkg\\__pycache__\\m.pyc", "C:\\repo", "pkg/__pycache__/m.pyc"),
+    ],
+)
+def test_a_repo_relative_path_is_not_redacted_inside_itself(message, repo_root, expected):
+    # The rescan for a later path starts at the first separator a path run
+    # can cross, not at a slash after "_", "-", "~", ")" or "+".
+    assert redact_text_local_paths(message, repo_root=repo_root) == expected
+
+
+@pytest.mark.parametrize("separator", [",", ";", "|", " ", "\n", ":", "="])
+def test_a_later_path_after_a_crossable_separator_is_still_redacted(separator):
+    message = f"/repo/pkg/__pycache__/a.pyc{separator}/Users/alice/s"
+
+    assert redact_text_local_paths(message, repo_root="/repo") == (
+        f"pkg/__pycache__/a.pyc{separator}<redacted-local-path>"
+    )
+
+
+@pytest.mark.parametrize("repo_root", ["", "C:\\\\repo"])
+def test_paths_are_not_resolved_when_no_root_could_keep_them(monkeypatch, repo_root):
+    # Without a POSIX repository root every POSIX path is redacted whatever it
+    # resolves to; resolving each one only cost file-system calls.
+    calls = []
+    real_resolve = Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        calls.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    message = "copied /Users/alice/a.txt to /srv/data/b.txt, then /tmp/c"
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    redacted = redact_text_local_paths(message, repo_root=repo_root)
+
+    assert redacted == "copied <redacted-local-path> to <redacted-local-path>, then <redacted-local-path>"
+    assert calls == []

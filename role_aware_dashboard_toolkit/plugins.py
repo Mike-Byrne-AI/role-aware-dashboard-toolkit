@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from importlib import metadata
+import os
+import re
 from threading import Condition, local
 import warnings
 from typing import Any
@@ -13,7 +15,12 @@ from .path_redaction import redact_text_local_paths
 
 _PANEL_GROUP = "role_aware_dashboard_toolkit.panels"
 _SIDEBAR_GROUP = "role_aware_dashboard_toolkit.sidebar"
+_PLUGIN_GROUPS = (_PANEL_GROUP, _SIDEBAR_GROUP)
 _PLUGIN_CAPABILITIES = {"sidebar", "panel", "setup"}
+# A distribution (project) name as packaging writes it: letters and digits,
+# with ".", "_" or "-" inside.
+_DISTRIBUTION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+_ALLOWLIST_FORM = "distribution:group:name"
 _SETUP_CONTEXT = local()
 
 
@@ -24,16 +31,18 @@ class PluginErrorRecord:
     source: str
     exception_type: str
     message: str
+    # RADT-PLUGIN-TRUST marks an entry point refused before import.
+    code: str = "RADT-PLUGIN"
 
     @property
     def diagnostic(self) -> dict[str, Any]:
         """Installed help and effect scope; never includes callback payloads."""
-        return build_diagnostic("RADT-PLUGIN")
+        return build_diagnostic(self.code)
 
     def __str__(self) -> str:
         return (
             f"{_diagnostic_label(self.plugin_name)} ({_exception_label(self.exception_type)}): "
-            + diagnostic_text("RADT-PLUGIN")
+            + diagnostic_text(self.code)
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -193,20 +202,50 @@ class PluginRegistry:
         trusted_entry_points: list[str] | None = None,
         allow_untrusted: bool = False,
     ) -> list[str]:
-        allowlist = {
-            str(item).strip() for item in list(trusted_entry_points or []) if str(item).strip()
-        }
+        """Load entry-point plugins from allowlisted distributions.
+
+        Each ``trusted_entry_points`` entry names ``distribution:group:name``.
+        An entry point loads only when its own installed distribution, group
+        and name all match an entry, so a same-named entry point from another
+        distribution is never imported; it is recorded as a discovery error
+        with a RuntimeWarning instead. A ``group:name`` entry, or any other
+        malformed entry, raises ValueError before anything is loaded.
+        """
+        allowlist = _parse_trusted_entry_points(trusted_entry_points)
         if not allow_untrusted and not allowlist:
             raise PermissionError(
                 "Plugin discovery executes trusted in-process code. "
-                "Pass trusted_entry_points=['group:name'] or allow_untrusted=True."
+                f"Pass trusted_entry_points=['{_ALLOWLIST_FORM}'] or allow_untrusted=True."
             )
+        allowlisted_names = {(group, name) for _distribution, group, name in allowlist}
+        conflicts = _conflicting_entry_points(allowlist) if allowlist and not allow_untrusted else set()
         self.clear_discovery_errors()
         loaded: list[str] = []
-        for group in (_PANEL_GROUP, _SIDEBAR_GROUP):
+        for group in _PLUGIN_GROUPS:
             for entry_point in _iter_entry_points(group):
-                source_ref = f"{group}:{entry_point.name}"
-                if not allow_untrusted and source_ref not in allowlist:
+                distribution = _entry_point_distribution(entry_point)
+                allowlisted = bool(distribution) and (
+                    _normalized_distribution(distribution), group, str(getattr(entry_point, "name", ""))
+                ) in allowlist
+                key = (_normalized_distribution(distribution), group, str(getattr(entry_point, "name", "")))
+                if allowlisted and key in conflicts:
+                    # A distribution's name is what its own metadata declares,
+                    # so another installed distribution can claim it and point
+                    # the entry point elsewhere. Neither can be told apart:
+                    # load none, report each.
+                    self._record_discovery_error(entry_point, group, PermissionError(
+                        "Entry point not loaded: installed distributions named "
+                        f"{_diagnostic_label(distribution)} point it at different code; remove the "
+                        "copy you did not install."
+                    ), trust=True)
+                    continue
+                if not allow_untrusted and not allowlisted:
+                    if (group, str(getattr(entry_point, "name", ""))) in allowlisted_names:
+                        # An allowlisted name from another (or an unknown)
+                        # distribution: never imported, but reported.
+                        self._record_discovery_error(entry_point, group, PermissionError(
+                            "Entry point not loaded: its distribution is not allowlisted."
+                        ), trust=True)
                     continue
                 try:
                     obj = entry_point.load()
@@ -219,7 +258,8 @@ class PluginRegistry:
                         plugin_name=plugin.name,
                         group=group,
                         entry_point=entry_point,
-                        trusted=allow_untrusted or source_ref in allowlist,
+                        distribution=distribution,
+                        trusted=allow_untrusted or allowlisted,
                     )
                     with self._condition:
                         if plugin.name not in self._registrations:
@@ -304,8 +344,10 @@ class PluginRegistry:
                 self._condition.notify_all()
         return attempt.succeeded
 
-    def _record_discovery_error(self, entry_point: Any, group: str, exc: Exception) -> None:
-        error = _entry_point_error(entry_point=entry_point, group=group, exc=exc)
+    def _record_discovery_error(
+        self, entry_point: Any, group: str, exc: Exception, *, trust: bool = False,
+    ) -> None:
+        error = _entry_point_error(entry_point=entry_point, group=group, exc=exc, trust=trust)
         with self._condition:
             self._discovery_errors.append(error)
         warnings.warn(
@@ -328,7 +370,9 @@ def _plugin_error(plugin: DashboardPlugin, stage: str, exc: Exception) -> Plugin
     )
 
 
-def _entry_point_error(*, entry_point: Any, group: str, exc: Exception) -> PluginErrorRecord:
+def _entry_point_error(
+    *, entry_point: Any, group: str, exc: Exception, trust: bool = False,
+) -> PluginErrorRecord:
     entry_name = str(getattr(entry_point, "name", "") or "entry_point")
     source_ref = f"{group}:{entry_name}"
     return PluginErrorRecord(
@@ -336,7 +380,9 @@ def _entry_point_error(*, entry_point: Any, group: str, exc: Exception) -> Plugi
         stage="discover",
         source=_diagnostic_label(source_ref),
         exception_type=_exception_label(type(exc).__name__),
-        message=_diagnostic_message(exc),
+        # A trust refusal's text is the toolkit's own, never a plugin's.
+        message=_diagnostic_label(str(exc)) if trust else _diagnostic_message(exc),
+        code="RADT-PLUGIN-TRUST" if trust else "RADT-PLUGIN",
     )
 
 
@@ -358,6 +404,93 @@ def _diagnostic_message(exc: Exception) -> str:
     return f"Plugin operation failed ({_exception_label(type(exc).__name__)})."
 
 
+def _normalized_distribution(name: str) -> str:
+    # Distribution names compare like package installers compare them.
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _parse_trusted_entry_points(entries: list[str] | None) -> set[tuple[str, str, str]]:
+    allowlist: set[tuple[str, str, str]] = set()
+    for item in list(entries or []):
+        text = str(item).strip()
+        if not text:
+            continue
+        parts = [part.strip() for part in text.split(":", 2)]
+        if (
+            len(parts) != 3
+            or parts[0] in _PLUGIN_GROUPS
+            or not _DISTRIBUTION_NAME_PATTERN.fullmatch(parts[0])
+            or parts[1] not in _PLUGIN_GROUPS
+            or not parts[2]
+        ):
+            raise ValueError(
+                f"trusted_entry_points entry {text[:200]!r} must be '{_ALLOWLIST_FORM}': the installed "
+                f"distribution (project) name, then {_PANEL_GROUP} or {_SIDEBAR_GROUP}, then the "
+                "entry-point name. A 'group:name' entry is refused because it would also trust a "
+                "same-named entry point from any other installed distribution."
+            )
+        allowlist.add((_normalized_distribution(parts[0]), parts[1], parts[2]))
+    return allowlist
+
+
+def _entry_point_distribution(entry_point: Any) -> str:
+    """Return the entry point's own distribution name, or "" when unknown."""
+    try:
+        dist = getattr(entry_point, "dist", None)
+        if dist is None:
+            return ""
+        metadata_obj = getattr(dist, "metadata", None)
+        name = str(metadata_obj.get("Name") or "") if metadata_obj is not None else ""
+        return name or str(getattr(dist, "name", "") or "")
+    except Exception:
+        # Unreadable metadata cannot establish trust.
+        return ""
+
+
+def _installed_entry_point_targets() -> list[tuple[str, str, str, str]]:
+    """Return (distribution, group, name, target) for every installed plugin entry point.
+
+    Every installed distribution is read, once per real location, including
+    those that ``metadata.entry_points()`` hides behind a same-named one.
+    """
+    rows: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for dist in metadata.distributions():
+        try:
+            location = str(getattr(dist, "_path", "") or "")
+            if location:
+                location = os.path.realpath(location)
+                if location in seen:  # one directory reached through two sys.path entries
+                    continue
+                seen.add(location)
+            name = str(dist.metadata.get("Name") or "")
+            if not name:
+                continue
+            for entry_point in dist.entry_points:
+                if entry_point.group in _PLUGIN_GROUPS:
+                    rows.append((name, entry_point.group, entry_point.name, str(entry_point.value)))
+        except Exception:
+            continue
+    return rows
+
+
+def _conflicting_entry_points(allowlist: set[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
+    """Return allowlisted entry points that same-named distributions point at different code.
+
+    An editable install (``pip install -e .`` with setuptools) leaves
+    ``<name>.egg-info`` on the path beside the installed ``.dist-info``: two
+    distributions with one name and the same target, which count as one. A
+    second distribution that claims the name with another target is the
+    impostor case.
+    """
+    targets: dict[tuple[str, str, str], set[str]] = {}
+    for name, group, entry_name, target in _installed_entry_point_targets():
+        key = (_normalized_distribution(name), group, entry_name)
+        if key in allowlist:
+            targets.setdefault(key, set()).add("".join(target.split()))
+    return {key for key, values in targets.items() if len(values) > 1}
+
+
 def _iter_entry_points(group: str):
     eps = metadata.entry_points()
     if hasattr(eps, "select"):
@@ -370,16 +503,9 @@ def _entry_point_source_record(
     plugin_name: str,
     group: str,
     entry_point: Any,
+    distribution: str,
     trusted: bool,
 ) -> PluginSourceRecord:
-    distribution = ""
-    dist = getattr(entry_point, "dist", None)
-    if dist is not None:
-        metadata_obj = getattr(dist, "metadata", None)
-        if metadata_obj is not None:
-            distribution = str(metadata_obj.get("Name") or "")
-        if not distribution:
-            distribution = str(getattr(dist, "name", "") or "")
     return PluginSourceRecord(
         plugin_name=plugin_name,
         source_type="entry_point",

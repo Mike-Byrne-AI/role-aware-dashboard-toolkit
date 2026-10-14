@@ -132,6 +132,32 @@ def test_init_reports_auth_boundary_and_setup_before_launch(tmp_path, capsys, au
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("executable,windows,expected", [
+    ("/opt/radt/bin/python3", False, "/opt/radt/bin/python3"),
+    ("/Users/Operator Name/radt env/bin/python", False, "'/Users/Operator Name/radt env/bin/python'"),
+    ("/opt/it's/bin/python", False, "'/opt/it'\"'\"'s/bin/python'"),
+    ("C:\\radt\\.venv\\Scripts\\python.exe", True, "C:\\radt\\.venv\\Scripts\\python.exe"),
+    ("C:\\Users\\Op Name\\$env\\python.exe", True, "& 'C:\\Users\\Op Name\\$env\\python.exe'"),
+    ("C:\\it's\\python.exe", True, "& 'C:\\it''s\\python.exe'"),
+    ("", False, "python"),
+])
+def test_run_command_names_the_interpreter_quoted_for_the_shell(executable, windows, expected):
+    command = cli._run_command(executable, windows=windows)
+    assert command == f"{expected} -m streamlit run app.py --server.address 127.0.0.1"
+
+
+def test_init_next_step_uses_the_interpreter_that_ran_init(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "isolated env" / "bin" / "python3"))
+    destination = tmp_path / "dashboard"
+    assert cli.main(["init", str(destination), "--dry-run", "--format", "json"]) == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["run_command"] == cli._run_command(sys.executable)
+    assert "isolated env" in result["run_command"]
+    assert not result["run_command"].startswith("python ")
+    assert cli.main(["init", str(destination), "--dry-run"]) == 0
+    assert result["run_command"] in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("kind", ["empty_directory", "project", "file"])
 def test_existing_destinations_are_preserved_even_for_dry_run(tmp_path, kind):
     target = tmp_path / "keep"

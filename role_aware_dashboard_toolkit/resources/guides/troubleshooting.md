@@ -16,7 +16,7 @@ Do not dump entire session state or secrets.
 | Invalid color or unknown group | Use six-digit hex and exact registered group names; read `guide appearance`. |
 | Group fill unsupported | Use the supported Streamlit >=1.65.0 baseline with keyed containers; read `guide appearance`. |
 | Sidebar theme ignored | Use Streamlit >=1.65.0 and run from the directory containing `.streamlit/config.toml`. |
-| Field or action disabled | Check current role, field permission and Controls Writable; read `guide permissions`. |
+| Field or action disabled | Check current role, field permission and Controls Writable; a new demo session starts as Viewer. Read `guide permissions`. |
 | Profile load denied | Check every restored field, not just `can_load_profiles`; read `guide profiles`. |
 | Profile storage failure | Preserve records; inspect access and read diagnostics before retrying. |
 | Plugin setup failure | Fix setup first; render callbacks are skipped until setup succeeds. |
@@ -24,6 +24,7 @@ Do not dump entire session state or secrets.
 | Checkpoint has older telemetry | Compare the sample timestamp; sampling failure retains the last successful display. |
 | Changes disappear after rerun | Retain store/audit objects in session state; rebuild definitions separately. |
 | Changes disappear in a new session | In-memory stores are not durable; choose persistence explicitly. |
+| Some sessions' audit events missing from the JSONL file | A writer persists only its own `AuditLog`. Share one log per process and start its writer where you create it (README, durable audit). |
 | Init destination exists | Select a new directory or read `example starter`; init does not merge. |
 
 After a repair, repeat the exact failing action and one adjacent behavior:
@@ -56,6 +57,7 @@ expose the same guidance through `.diagnostic` and their `to_dict()` output.
 | `RADT-AUDIT-IO` | `persist_audit` | `guide troubleshooting` |
 | `RADT-AUTH` | `authenticate` | `guide permissions` |
 | `RADT-CALLBACK` | `call_callback` | `guide troubleshooting` |
+| `RADT-PLUGIN-TRUST` | `discover_plugins` | `guide plugins` |
 
 Read the specific validation detail first, then use the linked guide. A plugin
 or callback can fail after making changes; the library does not roll back host

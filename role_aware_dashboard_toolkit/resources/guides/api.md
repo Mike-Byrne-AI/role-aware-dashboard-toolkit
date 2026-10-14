@@ -28,12 +28,50 @@ Supply credentials through the host's secret handling; never hardcode or print
 them. `/health` is static liveness only. Anonymous access is an explicit local
 demo opt-in, not the default.
 
+Request bodies over 1 MiB receive HTTP 413; pass `max_body_bytes=` to
+`create_app()` to change the limit. JSON nested more than 32 levels deep in a
+control value or a profile's `extra` receives HTTP 422. Routes a host adds to
+the returned app keep FastAPI's own limits and error format.
+
+State-changing requests (`POST`, `PATCH`, `DELETE`) without an `X-API-Key`
+header must send `Content-Type: application/json`, including bodyless profile
+activation and deletion; otherwise they receive HTTP 415. With anonymous access
+and no API key, they must also be addressed to `localhost`, `127.0.0.1` or
+`[::1]` (the `Host` header); another name receives HTTP 403. Together these stop
+another web site from making a browser change an anonymous demo API, including
+by pointing its own name at this server (DNS rebinding).
+
+Request bodies are exact. `PATCH /controls` takes `{"values": {"key": value}}`;
+a body without `values`, or with any other field, is refused with HTTP 422.
+`POST /profiles` accepts `profile_id`, `role` and `extra` only. It saves the API
+instance's current live values, so a `values` field is refused rather than
+ignored.
+
 Authenticated requests default to Viewer unless the host configures a role.
 Control updates require `can_edit_controls` and the field's permission.
 Their response keeps its normal shape but uses `value: "<redacted-secret>"`
-without `can_view_metrics`; the authorized update still completes. This also
-hides defaults or bounds selected by sanitation. A control's `sensitive` flag
-continues to describe its definition, independently of the caller's read grant.
+without `can_view_metrics`; the authorized update still completes. A control's
+`sensitive` flag continues to describe its definition, independently of the
+caller's read grant.
+
+Control updates are exact: each value is stored as sent, or the whole request
+is refused with HTTP 422 naming the control, before any value or audit event
+changes. The API never substitutes a default or clamps a value.
+
+- `number` and `slider`: a finite JSON number, or a string holding one, within
+  the control's bounds. A `number` control whose default, step and bounds are
+  all whole numbers takes whole numbers only, and refuses one too large to keep
+  exactly.
+- `toggle`: `true` or `false`, `0` or `1`, or the strings `true`/`false`,
+  `yes`/`no`, `on`/`off`, `1`/`0`.
+- `select`: one of the configured options (`null` only when `None` is one of
+  them).
+- `text`: a string; a number is stored as its text.
+- `color`: `#RRGGBB`; surrounding spaces are removed.
+- `null` is not a value for any other kind.
+
+Profile activation is different: like the dashboard, it repairs stale saved
+values to the control's current bounds, options or default.
 Profile activation checks every affected field. Profile save/delete require
 `can_save_profiles`; audit reads require `can_view_audit`. Protected shared
 deployments also need trusted ingress and TLS.
@@ -43,6 +81,15 @@ Saving or activating a profile does not grant read authority: these actions
 return an empty `values` object when metrics access is denied. Profile metadata
 listings remain available with `can_load_profiles`. Audit reads
 also hide historical values for controls that are now sensitive.
+
+A stored profile that exists but cannot be read is never reported as missing:
+reads and activation return HTTP 500, a save over it returns HTTP 409, and
+`GET /profiles` lists the readable records with an `X-Unreadable-Records` count
+header. Nothing changes in any of these cases; repair or delete the record. A
+file that holds a different record's id cannot be deleted through the API
+(HTTP 409); repair it on the server. This
+applies to stores that record `read_errors`, including `FileProfileStore` and the
+default `profile_dir` store.
 
 API profile names are trimmed. Empty names, `.`, `..`, nonprintable characters
 and `/ \\ % ? #` are rejected before writing. Use the returned canonical name,
@@ -59,11 +106,11 @@ from API responses and activation, preserving its current live value. This
 projection does not rewrite the saved record. Core profile helpers remain
 host-controlled; this additional projection belongs to the HTTP boundary.
 
-Public text/color writes that would stringify nested secret fields are rejected
-with HTTP 422 before any values or audit events change, including when the
-sanitizer selects a nested default. Profile activation uses the same check.
-An ordinary public replacement remains allowed; explicitly sensitive controls
-remain write-only and structured select responses still redact secret fields.
+Profile activation refuses with HTTP 422 a public text/color value it would
+stringify from nested secret fields, including a nested default selected by its
+repair, before any values or audit events change. An ordinary public
+replacement remains allowed; explicitly sensitive controls remain write-only and
+structured select responses still redact secret fields.
 
 Single-control reads support keys containing `/`, including automatically
 derived keys such as `requests/second`. Append the URL-encoded complete key to

@@ -24,8 +24,9 @@ SUBJECT = "synthetic-private-account"
 def configured(monkeypatch):
     # Repository tmp_path is deliberately inside the checkout, which must not
     # be accepted for real provisioning. This directory contains only fixtures.
+    # Resolve the system temp root, which sits under the /var symlink on macOS.
     with tempfile.TemporaryDirectory(prefix="radt-section-provision-") as root:
-        directory = Path(root) / "protected"
+        directory = Path(root).resolve(strict=True) / "protected"
         directory.mkdir(mode=0o700)
         initialize_access(directory)
         monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(directory))
@@ -160,3 +161,22 @@ def test_repository_storage_is_rejected_before_prompt(tmp_path, monkeypatch):
     monkeypatch.setattr(getpass, "getpass", forbidden_prompt)
     assert provision.main(["grant", "--role", "Admin"]) == 1
     assert not list(directory.iterdir())
+
+
+def test_a_refused_protected_directory_names_its_cause(tmp_path, monkeypatch, capsys):
+    # The toolkit's refusal messages name the cause and never the subject,
+    # issuer or key; the example passes them on as access_cli does.
+    monkeypatch.setenv("RADT_OIDC_ISSUER", ISSUER)
+    monkeypatch.setattr(getpass, "getpass", lambda prompt: pytest.fail("must fail before prompting"))
+    inside_repository = tmp_path / "protected"
+    inside_repository.mkdir(mode=0o700)
+    monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(inside_repository))
+    assert provision.main(["grant", "--role", "Admin"]) == 1
+    assert "inside a Git repository" in capsys.readouterr().err
+
+    with tempfile.TemporaryDirectory(prefix="radt-section-provision-") as root:
+        monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(Path(root).resolve(strict=True) / "absent"))
+        assert provision.main(["grant", "--role", "Admin"]) == 1
+    err = capsys.readouterr().err
+    assert "must already exist" in err
+    assert ISSUER not in err and SUBJECT not in err

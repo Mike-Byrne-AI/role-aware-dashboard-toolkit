@@ -62,6 +62,12 @@ _CATALOG = {
         "troubleshooting", "call_callback", "A callback failed.",
         "Host effects may be partial; no rollback was performed.",
     ),
+    "RADT-PLUGIN-TRUST": (
+        "plugins", "discover_plugins",
+        "A plugin entry point was not loaded: its distribution is not allowlisted, "
+        "or installed distributions with its name point it at different code.",
+        "Nothing from that entry point was imported or run; other plugins are unaffected.",
+    ),
 }
 _Exception = TypeVar("_Exception", bound=Exception)
 

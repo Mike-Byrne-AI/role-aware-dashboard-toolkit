@@ -59,8 +59,9 @@ resulting behavior, and the verification performed. Follow
 before sharing sensitive findings.
 
 Pull requests automatically run `.github/workflows/contributor-ci.yml`: full
-tests on Linux with Python 3.10–3.14 and Windows with Python 3.11, lint,
-coverage, package build/metadata validation, and a Chromium dashboard smoke.
+tests on Linux with Python 3.10–3.14, Windows with Python 3.11 and macOS with
+Python 3.12, lint, coverage, package build/metadata validation, and a Chromium
+dashboard smoke.
 The browser smoke checks profile restoration, role changes, and frozen
 controls using synthetic local state; it does not test an external login provider.
 The stable required check is `contributor-checks`; failed, skipped, or cancelled

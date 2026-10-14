@@ -21,12 +21,19 @@ from __future__ import annotations
 import os
 import logging
 import hmac
+import ipaddress
 from typing import Any
 
 from .audit import AuditLog
 from ._record_projection import project_audit_events, project_record
-from .controls import ControlDef, ControlRegistry, _looks_like_hex_color
-from .profile_store import BaseProfileStore
+from .controls import (
+    ControlDef,
+    ControlRegistry,
+    _RejectedControlValue,
+    _exact_control_value,
+    _looks_like_hex_color,
+)
+from .profile_store import BaseProfileStore, FileProfileStore
 from .profiles import (
     _InvalidProfileError,
     _contains_secret_fields,
@@ -47,6 +54,7 @@ from .security import (
     BUILTIN_ROLES,
 )
 from .sensitive_values import REDACTED_SECRET
+from .store_diagnostics import StorePathSecurityError, store_read_error_total
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -61,7 +69,12 @@ def _is_missing_optional_api_dependency(exc: ImportError) -> bool:
     return missing in _OPTIONAL_API_DEPENDENCIES
 
 try:
-    from fastapi import FastAPI, HTTPException, Depends, Header
+    from fastapi import FastAPI, HTTPException, Depends, Header, Request, Response
+    from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.routing import Match
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError as exc:
@@ -69,6 +82,14 @@ except ImportError as exc:
     FastAPI = None  # type: ignore
     Depends = None  # type: ignore
     Header = None  # type: ignore
+    Request = None  # type: ignore
+    Response = None  # type: ignore
+    JSONResponse = None  # type: ignore
+    RequestValidationError = None  # type: ignore
+    StarletteHTTPException = None  # type: ignore
+    http_exception_handler = None  # type: ignore
+    request_validation_exception_handler = None  # type: ignore
+    Match = None  # type: ignore
 
     class HTTPException(Exception):  # type: ignore
         def __init__(self, status_code: int, detail: str) -> None:
@@ -154,9 +175,219 @@ def _resolve_api_context(app_state: _AppState, x_api_key: str) -> SecurityContex
     raise HTTPException(status_code=401, detail="API key required")
 
 
-def _require_permission(ctx: SecurityContext, permission: str | None) -> None:
-    if permission and not has_perm(ctx, permission):
+def _require_permission(ctx: SecurityContext, permission: str) -> None:
+    # An empty or missing permission name denies, as the dashboard UI does.
+    if not isinstance(permission, str) or not permission:
+        raise HTTPException(status_code=403, detail="Forbidden: no permission is declared")
+    if not has_perm(ctx, permission):
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
+
+
+_DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+_MAX_JSON_DEPTH = 32
+
+
+def _body_too_large(max_bytes: int) -> str:
+    return f"Request body exceeds the API's limit of {max_bytes} bytes. Nothing was changed."
+
+
+class _ToolkitRoutes:
+    """The routes create_app() registered, as opposed to routes a host adds later.
+
+    The body limit and the toolkit's error formats apply to these only, so a
+    host route on the returned app keeps FastAPI's behavior.
+    """
+
+    def __init__(self) -> None:
+        self.routes: list[Any] = []
+
+    def handles(self, scope: Any) -> bool:
+        # Routes match in registration order, as the router dispatches them.
+        for route in self.routes:
+            match, _child_scope = route.matches(scope)
+            if match == Match.FULL:
+                return True
+        return False
+
+
+class _RequestBodyLimit:
+    """Refuse a request body over the limit before a toolkit route stores or copies it.
+
+    A declared Content-Length over the limit is refused without reading the
+    body; a streamed body is counted as it arrives. Host-added routes are not
+    limited.
+    """
+
+    def __init__(self, app: Any, max_bytes: int, routes: _ToolkitRoutes) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+        self.routes = routes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or not self.routes.handles(scope):
+            await self.app(scope, receive, send)
+            return
+        for name, value in scope.get("headers", ()):
+            if name.lower() == b"content-length" and self._declares_too_much(value):
+                response = JSONResponse({"detail": _body_too_large(self.max_bytes)}, status_code=413)
+                await response(scope, receive, send)
+                return
+        received = 0
+
+        async def limited_receive() -> Any:
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise HTTPException(status_code=413, detail=_body_too_large(self.max_bytes))
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+    def _declares_too_much(self, value: bytes) -> bool:
+        digits = value.strip().lstrip(b"0") or b"0"
+        if not digits.isdigit():
+            return False  # malformed: the streamed count below still applies
+        # Compare lengths first: int() refuses very long digit strings.
+        return len(digits) > len(str(self.max_bytes)) or int(digits) > self.max_bytes
+
+
+def _validation_error_response(_request: Any, exc: Any) -> Any:
+    """Report request validation errors without echoing the submitted values.
+
+    FastAPI's default response includes each rejected ``input``: it repeats a
+    client's secrets back and can fail to encode a deeply nested value.
+    """
+    return JSONResponse(status_code=422, content={"detail": [
+        {"type": str(error.get("type", "")), "loc": list(error.get("loc", ())),
+         "msg": str(error.get("msg", ""))}
+        for error in exc.errors()
+    ]})
+
+
+_BODY_TOO_DEEP = (
+    f"Request body JSON is nested too deeply to parse (a field allows {_MAX_JSON_DEPTH} levels). "
+    "Nothing was changed."
+)
+
+
+async def _http_error_response(request: Any, exc: Any) -> Any:
+    """Report JSON too deep for the parser as the depth refusal it is.
+
+    FastAPI turns any body-parsing failure into a generic 400. Python's JSON
+    parser stops at its recursion limit (about 1,000 levels before Python 3.12,
+    deeper on later versions), so a body nested past it never reaches the
+    field depth check; answer it with the same 422 on every version.
+    """
+    if exc.status_code == 400 and isinstance(exc.__cause__, RecursionError):
+        return JSONResponse(status_code=422, content={"detail": _BODY_TOO_DEEP})
+    return await http_exception_handler(request, exc)
+
+
+def _require_json_depth(value: Any, field_name: str) -> None:
+    """Refuse deeply nested JSON before profile copies or audit records recurse."""
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if not isinstance(item, (dict, list)):
+            continue
+        if depth > _MAX_JSON_DEPTH:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Field '{field_name}' is nested more than {_MAX_JSON_DEPTH} levels deep. "
+                    "Nothing was changed."
+                ),
+            )
+        children = item.values() if isinstance(item, dict) else item
+        pending.extend((child, depth + 1) for child in children)
+
+
+def _validated_body_limit(max_body_bytes: Any) -> int:
+    if (isinstance(max_body_bytes, bool) or not isinstance(max_body_bytes, int)
+            or max_body_bytes <= 0):
+        raise ValueError("max_body_bytes must be a positive whole number of bytes")
+    return max_body_bytes
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_CROSS_SITE_REFUSAL = (
+    "State-changing requests without an X-API-Key header must send "
+    "Content-Type: application/json. This refuses requests that another web "
+    "site could make a browser send."
+)
+
+
+def _is_json_media_type(content_type: str) -> bool:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type == "application/json" or (
+        media_type.startswith("application/") and media_type.endswith("+json")
+    )
+
+
+def _require_preflighted_request(request: Any) -> None:
+    """Refuse a state change that a browser could send cross-site unprompted.
+
+    A cross-site form or no-cors fetch can send POST with no custom header and
+    only a form, multipart or text/plain body, without a CORS preflight. Any
+    X-API-Key header or a JSON Content-Type makes the request non-simple, so a
+    browser must preflight it, and this API answers no preflight. Key-bearing
+    clients are unaffected; anonymous demo clients send a JSON Content-Type.
+    """
+    if request.method in _READ_METHODS or "x-api-key" in request.headers:
+        return
+    if _is_json_media_type(request.headers.get("content-type", "")):
+        return
+    raise HTTPException(status_code=415, detail=_CROSS_SITE_REFUSAL)
+
+
+_REMOTE_HOST_REFUSAL = (
+    "Anonymous state-changing requests must be addressed to a loopback host "
+    "(localhost, 127.0.0.1 or [::1]) in the Host header. This refuses a web page "
+    "that points its own name at this server (DNS rebinding). Address the API by "
+    "a loopback name, or set an API key and send X-API-Key."
+)
+
+
+def _is_port(text: str) -> bool:
+    return text.isascii() and text.isdigit()
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a Host header names localhost or a loopback address."""
+    text = host.strip().lower()
+    if text.startswith("["):
+        end = text.find("]")
+        name, port = (text[1:end], text[end + 1:]) if end > 0 else ("", "")
+        if port and not (port.startswith(":") and _is_port(port[1:])):
+            return False
+    else:
+        name, _, port = text.partition(":")
+        if port and not _is_port(port):
+            return False
+    if name.rstrip(".") == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped is not None and mapped.is_loopback)
+
+
+def _require_loopback_host(request: Any) -> None:
+    """Refuse an anonymous state change addressed to a name other than loopback.
+
+    A page that rebinds its own DNS name to 127.0.0.1 makes the browser treat
+    the demo API as same-origin, so its JSON requests need no preflight; the
+    Host header still carries the page's name. Anonymous access is for a local
+    demo, which is addressed as localhost.
+    """
+    if request.method in _READ_METHODS:
+        return
+    if not _is_loopback_host(request.headers.get("host", "")):
+        raise HTTPException(status_code=403, detail=_REMOTE_HOST_REFUSAL)
 
 
 def _canonical_api_profile_id(profile_id: str) -> str:
@@ -197,13 +428,19 @@ class ControlValue(BaseModel):
 
 
 class ControlUpdateRequest(BaseModel):
+    # A missing wrapper or a misspelled field is refused, never a silent no-op.
+    model_config = {"extra": "forbid"}
+
     values: dict[str, Any] = Field(
-        default_factory=dict,
+        ...,
         description="Map of control key -> new value",
     )
 
 
 class ProfileRequest(BaseModel):
+    # Profiles snapshot the API's live values; a "values" field would be ignored.
+    model_config = {"extra": "forbid"}
+
     profile_id: str
     role: str = ""
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -261,9 +498,16 @@ class _AppState:
 
 
 def _make_require_api_context(app_state: _AppState):
-    def require_api_context(permission: str | None = None):
-        def dependency(x_api_key: str = Header(default="", alias="X-API-Key")) -> SecurityContext:
+    def require_api_context(permission: str):
+        def dependency(
+            request: Request,
+            x_api_key: str = Header(default="", alias="X-API-Key"),
+        ) -> SecurityContext:
             ctx = _resolve_api_context(app_state, x_api_key)
+            _require_preflighted_request(request)
+            if app_state.allow_anonymous and not os.getenv(_API_KEY_ENV, ""):
+                # The request was served anonymously: no key was checked.
+                _require_loopback_host(request)
             _require_permission(ctx, permission)
             return ctx
 
@@ -342,6 +586,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
         """Update one or more control values. Returns the updated controls."""
         pending_updates = []
         for key, value in req.values.items():
+            _require_json_depth(value, key)
             ctrl = app_state.registry.get(key)
             if ctrl is None:
                 raise HTTPException(
@@ -350,8 +595,14 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 )
             _require_permission(ctx, ctrl.permission)
             old = app_state.state.get(key, ctrl.default)
-            _require_safe_api_coercion(ctrl, value)
-            stored = app_state.registry.sanitize_value(key, value)
+            try:
+                # Store exactly what was sent, or refuse: never record a
+                # substituted default or a clamped value as the caller's change.
+                stored = _exact_control_value(ctrl, value)
+            except _RejectedControlValue as exc:
+                raise HTTPException(
+                    status_code=422, detail=f"{exc}. Nothing was changed.",
+                ) from None
             pending_updates.append((ctrl, old, stored))
 
         updated = []
@@ -363,7 +614,7 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 stored,
                 role=ctx.role or "api",
                 source="api",
-                sensitive=ctrl.sensitive,
+                sensitive=app_state.registry._audit_sensitivity(ctrl),
             )
             updated.append(_control_value(
                 app_state, ctrl.key, can_read=has_perm(ctx, "can_view_metrics"),
@@ -395,23 +646,81 @@ def _load_api_profile(
         raise HTTPException(status_code=422, detail="Stored profile fields are invalid.") from None
 
 
+class _ReadErrorWatch:
+    """Count store read errors recorded during one request.
+
+    File stores record unreadable records in ``read_errors`` and return None,
+    which must not be reported as "not found" or overwritten. Compare the
+    store's running error total, which keeps counting after the bounded
+    ``read_errors`` window is full. Stores without ``read_errors`` keep their
+    previous behavior.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self._store = store
+        self._before = self._total()
+
+    def _total(self) -> int | None:
+        try:
+            return store_read_error_total(self._store)
+        except TypeError:  # a custom store whose read_errors has no length
+            return None
+
+    def new_errors(self) -> int:
+        after = self._total()
+        if self._before is None or after is None:
+            return 0
+        return max(0, after - self._before)
+
+
+def _unreadable_profile(profile_id: str) -> str:
+    # Fixed text: store diagnostics can contain paths and exception details.
+    return (
+        f"Profile '{profile_id}' exists but could not be read. Nothing was changed; "
+        "repair or delete the stored record."
+    )
+
+
+def _api_profile_store(app_state: _AppState) -> BaseProfileStore:
+    # One store per request, so a read error recorded by this request is visible.
+    if app_state.profile_store is not None:
+        return app_state.profile_store
+    return FileProfileStore(app_state.profile_dir)
+
+
 def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/profiles", response_model=list[str])
-    async def get_profiles(_: SecurityContext = Depends(require_api_context("can_load_profiles"))):
-        return list_profiles(app_state.profile_dir, store=app_state.profile_store)
+    async def get_profiles(
+        response: Response,
+        _: SecurityContext = Depends(require_api_context("can_load_profiles")),
+    ):
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
+        profile_ids = list_profiles(app_state.profile_dir, store=store)
+        unreadable = watch.new_errors()
+        if unreadable:
+            # The listing keeps readable records, as the dashboard does; the
+            # header says it is incomplete instead of letting it look empty.
+            response.headers["X-Unreadable-Records"] = str(unreadable)
+            logger.warning("Profile listing skipped %d unreadable record(s); see read_errors.", unreadable)
+        return profile_ids
 
     @app.get("/profiles/{profile_id}", response_model=ProfileResponse)
     async def get_profile(profile_id: str, ctx: SecurityContext = Depends(require_api_context("can_load_profiles"))):
         _require_permission(ctx, "can_view_metrics")
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
         data = _load_api_profile(
             profile_id,
             app_state.registry,
             {},  # read-only: don't mutate app state
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
             restore=False,
         )
         if data is None:
+            if watch.new_errors():
+                raise HTTPException(status_code=500, detail=_unreadable_profile(profile_id))
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         return ProfileResponse(
             profile_id=data.get("profile_id", profile_id),
@@ -426,6 +735,19 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
         profile_id = _canonical_api_profile_id(req.profile_id)
+        _require_json_depth(req.extra, "extra")
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
+        existing = load_profile_data(profile_id, profile_dir=app_state.profile_dir, store=store)
+        if existing is None and watch.new_errors():
+            # An unreadable record is not permission to overwrite it.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Profile '{profile_id}' exists but could not be read, so it was not "
+                    "replaced. Repair or delete the stored record first."
+                ),
+            )
         save_profile(
             profile_id,
             app_state.registry,
@@ -434,7 +756,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             extra=req.extra,
             source="api",
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
         )
         app_state.audit.log_profile_save(profile_id, role=ctx.role or req.role or "api", source="api")
         return ProfileResponse(
@@ -449,14 +771,18 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         ctx: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
         staged_state = dict(app_state.state)
+        store = _api_profile_store(app_state)
+        watch = _ReadErrorWatch(store)
         data = _load_api_profile(
             profile_id,
             app_state.registry,
             staged_state,
             profile_dir=app_state.profile_dir,
-            store=app_state.profile_store,
+            store=store,
         )
         if data is None:
+            if watch.new_errors():
+                raise HTTPException(status_code=500, detail=_unreadable_profile(profile_id))
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         profile_values = data.get("values", {})
         for ctrl in app_state.registry.all():
@@ -483,7 +809,19 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         profile_id: str,
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
-        ok = delete_profile(profile_id, profile_dir=app_state.profile_dir, store=app_state.profile_store)
+        try:
+            ok = delete_profile(profile_id, profile_dir=app_state.profile_dir, store=app_state.profile_store)
+        except StorePathSecurityError:
+            # The store refuses, for example, to delete a file that holds another
+            # record's id. Fixed text: its diagnostic names local paths.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Profile '{profile_id}' was not deleted: its stored file failed a safety check "
+                    "(for example, it holds a different record). Nothing was changed; repair the "
+                    "stored record."
+                ),
+            ) from None
         if not ok:
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
         app_state.audit.log("profile_delete", detail=profile_id, role=ctx.role or "api", source="api")
@@ -527,6 +865,7 @@ def create_app(
     api_role: str | None = None,
     allow_anonymous: bool | None = None,
     anonymous_role: str = _ANONYMOUS_ROLE,
+    max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
 ) -> FastAPI:
     """
     Create a FastAPI app exposing Role-Aware Dashboard Toolkit controls, profiles, and roles.
@@ -542,8 +881,14 @@ def create_app(
 
         app = create_app(reg)
         # Run: uvicorn myapp:app --port 8000
+
+    Request bodies over ``max_body_bytes`` (1 MiB by default) receive HTTP 413,
+    and JSON nested more than 32 levels deep receives HTTP 422. These limits and
+    the toolkit's 422 format apply to the routes created here; routes a host
+    adds to the returned app keep FastAPI's defaults.
     """
     _require_fastapi()
+    body_limit = _validated_body_limit(max_body_bytes)
     resolved_api_role = str(api_role or os.getenv(_API_ROLE_ENV, _DEFAULT_AUTHENTICATED_ROLE) or _DEFAULT_AUTHENTICATED_ROLE)
 
     app_state = _AppState(
@@ -563,14 +908,41 @@ def create_app(
         field_name="api_role",
     )
 
+    if not os.getenv(_API_KEY_ENV, "") and not app_state.allow_anonymous:
+        # The key is read per request, so this is a warning, not an error: a
+        # host may set it after creating the app. Never log the key itself.
+        logger.warning(
+            "%s is not set and anonymous access is off, so every protected route "
+            "returns 401 until it is set in the server's environment. Set it, or "
+            "pass allow_anonymous=True for a trusted local demo.",
+            _API_KEY_ENV,
+        )
+
     app = FastAPI(title=title, version=version)
+    toolkit_routes = _ToolkitRoutes()
+    app.add_middleware(_RequestBodyLimit, max_bytes=body_limit, routes=toolkit_routes)
+
+    async def validation_error(request: Any, exc: Any) -> Any:
+        if toolkit_routes.handles(request.scope):
+            return _validation_error_response(request, exc)
+        return await request_validation_exception_handler(request, exc)
+
+    async def http_error(request: Any, exc: Any) -> Any:
+        if toolkit_routes.handles(request.scope):
+            return await _http_error_response(request, exc)
+        return await http_exception_handler(request, exc)
+
+    app.add_exception_handler(RequestValidationError, validation_error)
+    app.add_exception_handler(StarletteHTTPException, http_error)
     require_api_context = _make_require_api_context(app_state)
 
+    framework_routes = list(app.router.routes)
     _register_health_route(app)
     _register_control_routes(app, app_state, require_api_context)
     _register_profile_routes(app, app_state, require_api_context)
     _register_role_routes(app, app_state, require_api_context)
     _register_audit_routes(app, app_state, require_api_context)
+    toolkit_routes.routes = [route for route in app.router.routes if route not in framework_routes]
 
     return app
 

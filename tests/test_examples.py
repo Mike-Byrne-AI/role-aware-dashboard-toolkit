@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from role_aware_dashboard_toolkit import FileProfileStore
+from tests.demo_role_helpers import start_as_admin
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,9 +58,9 @@ def test_core_library_example_runs_and_exports_a_run_packet():
 def test_dashboard_example_profile_and_role_workflow(tmp_path, monkeypatch):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
     monkeypatch.chdir(tmp_path)
-    app = AppTest.from_file(
+    app = start_as_admin(AppTest.from_file(
         str(EXAMPLES_DIR / "dashboard_admin_controls_app.py"), default_timeout=15,
-    ).run()
+    )).run()
 
     def healthy():
         assert not app.exception, [item.message for item in app.exception]
@@ -152,7 +153,7 @@ def test_dashboard_example_profile_and_role_workflow(tmp_path, monkeypatch):
 
 def test_streamlit_example_guidance_uses_the_workbench_extra():
     readme = _read("README.md")
-    install = 'python -m pip install -e ".[workbench,dev]"'
+    install = 'python -m pip install ".[workbench]"'
     run = "python -m streamlit run examples/dashboard_admin_controls_app.py"
 
     assert readme.index(install) < readme.index(run)
@@ -161,3 +162,25 @@ def test_streamlit_example_guidance_uses_the_workbench_extra():
     assert "write-policy switch" in readme
     assert "profile and audit panels" in readme
     assert "trusted plugin panel" in readme
+
+
+def test_browser_smoke_expects_the_role_the_demo_actually_starts_in(tmp_path, monkeypatch):
+    """tools/browser_smoke.py runs only in CI; pin its startup expectation to the app."""
+    import re
+
+    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    monkeypatch.chdir(tmp_path)
+    app = AppTest.from_file(
+        str(EXAMPLES_DIR / "dashboard_admin_controls_app.py"), default_timeout=15,
+    ).run()
+    assert not app.exception, [item.message for item in app.exception]
+    first_render = [item.value for item in app.info if item.value.startswith("Role=")]
+    assert first_render == ["Role=Viewer; writable=True"]
+
+    smoke = (REPO_ROOT / "tools" / "browser_smoke.py").read_text(encoding="utf-8")
+    expected = re.findall(r'get_by_text\("(Role=[^"]+)", exact=True\)', smoke)
+    assert expected[0] == first_render[0]
+    # The smoke then picks Admin, as a person would, before editing controls.
+    assert expected[1] == "Role=Admin; writable=True"
+    app.selectbox(key="_radt_role").select("Admin").run()
+    assert "Role=Admin; writable=True" in [item.value for item in app.info]

@@ -22,9 +22,9 @@ def assert_guided(exc, code, topic):
 
 
 @pytest.mark.parametrize("construct,exception,code,topic", [
-    (lambda: DashboardConfig(card_background_color="secret-value /private/token"), ValueError,
+    (lambda: DashboardConfig(auth_mode="demo", card_background_color="secret-value /private/token"), ValueError,
      "RADT-APPEARANCE", "appearance"),
-    (lambda: DashboardConfig(group_background_colors=[]), TypeError,
+    (lambda: DashboardConfig(auth_mode="demo", group_background_colors=[]), TypeError,
      "RADT-APPEARANCE", "appearance"),
     (lambda: build_streamlit_theme_toml(base="invalid"), ValueError,
      "RADT-APPEARANCE", "appearance"),
@@ -32,7 +32,7 @@ def assert_guided(exc, code, topic):
      "RADT-SECTIONS", "sections"),
     (lambda: section_visible(SimpleNamespace(), "missing"), ValueError,
      "RADT-SECTIONS", "sections"),
-    (lambda: DashboardConfig(sections={}), TypeError,
+    (lambda: DashboardConfig(auth_mode="demo", sections={}), TypeError,
      "RADT-SECTIONS", "sections"),
 ])
 def test_configuration_exception_keeps_base_type_and_points_to_real_guide(construct, exception, code, topic):
@@ -71,7 +71,7 @@ def test_duplicate_definition_keeps_original_definition():
 def test_unknown_styled_group_fails_with_guidance_before_render():
     registry = ControlRegistry()
     registry.register("Target", kind="number", key="target", group="Plan")
-    config = DashboardConfig(registry=registry, group_background_colors={"Unknown": "#FFFFFF"})
+    config = DashboardConfig(auth_mode="demo", registry=registry, group_background_colors={"Unknown": "#FFFFFF"})
     with pytest.raises(ValueError) as caught:
         validate_dashboard_appearance(config)
     assert_guided(caught.value, "RADT-APPEARANCE", "appearance")

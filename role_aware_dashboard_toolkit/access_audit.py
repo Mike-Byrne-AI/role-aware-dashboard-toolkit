@@ -73,8 +73,15 @@ class _IdentityBoundAudit:
         *,
         role: str = "",
         source: str = "ui",
-        sensitive: bool = False,
+        sensitive: bool | None = None,
     ) -> None:
+        """Record a control change with the bound actor; ``sensitive`` as in AuditLog."""
+        if sensitive is False:
+            self._audit._log_declared_public_change(
+                key, old_value, new_value, role=role, source=source,
+                user_id=self.user_id, session_id=self.session_id,
+            )
+            return
         if sensitive:
             old_value = REDACTED_SECRET
             new_value = REDACTED_SECRET
@@ -104,6 +111,49 @@ class _IdentityBoundAudit:
     def log_freeze(self, frozen: bool, *, role: str = "", source: str = "ui") -> None:
         # Preserve AuditLog's legacy argument/event semantics exactly.
         self.log("freeze_toggle", new_value=frozen, role=role, source=source)
+
+    # Lifecycle methods act on the shared parent and record their own events
+    # (audit_writer_start, audit_writer_stop, audit_cleared). Pin the bound
+    # actor on those records as log() does; caller-supplied IDs are ignored.
+
+    def start_writer(
+        self,
+        path: str,
+        *,
+        queue_size: int = 1000,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> bool:
+        return self._audit.start_writer(
+            path, queue_size=queue_size, role=role, source=source,
+            user_id=self.user_id, session_id=self.session_id,
+        )
+
+    def stop_writer(
+        self,
+        *,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> None:
+        self._audit.stop_writer(
+            role=role, source=source, user_id=self.user_id, session_id=self.session_id,
+        )
+
+    def clear(
+        self,
+        *,
+        role: str = "",
+        source: str = "host",
+        user_id: str = "",
+        session_id: str = "",
+    ) -> int:
+        return self._audit.clear(
+            role=role, source=source, user_id=self.user_id, session_id=self.session_id,
+        )
 
 
 def bind_audit_identity(

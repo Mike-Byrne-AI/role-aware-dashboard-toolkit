@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +57,17 @@ class BaseAuditStore:
         raise NotImplementedError
 
 
-def redact_audit_event(event: Mapping[Any, Any]) -> dict[str, Any]:
+def redact_audit_event(
+    event: Mapping[Any, Any], *, declared_public_keys: Collection[str] = (),
+) -> dict[str, Any]:
+    """Return a redacted copy of an audit event.
+
+    A ``control_change`` event's old and new values are redacted when its key
+    looks secret, unless the key is in ``declared_public_keys``: controls the
+    host declared not secret through ``AuditLog.log_control_change(...,
+    sensitive=False)``. The declaration is never read from the event itself.
+    Secret-named fields nested in a value are redacted either way.
+    """
     filesystem_text_cache: _FilesystemTextCache = {}
     prepared, event_type, control_key, control_key_readable = _audit_context(
         event, cache=filesystem_text_cache
@@ -71,7 +81,10 @@ def redact_audit_event(event: Mapping[Any, Any]) -> dict[str, Any]:
     )
     if not isinstance(sanitized, dict):
         return {}
-    if event_type == "control_change" and (
+    # A control the host declared not secret keeps its values even when its
+    # key looks secret; nested secret fields were redacted above.
+    declared_public = control_key_readable and control_key in declared_public_keys
+    if event_type == "control_change" and not declared_public and (
         not control_key_readable or is_sensitive_name(control_key)
     ):
         sanitized["old"] = REDACTED_SECRET
@@ -131,9 +144,12 @@ class FileAuditStore(StoreReadDiagnosticsMixin, BaseAuditStore):
     def __init__(self, path: str) -> None:
         self._init_read_diagnostics()
         self.path = path
+        # Set by the AuditLog that owns this writer store: the control keys
+        # its host declared not secret.
+        self._declared_public_keys: Collection[str] = ()
 
     def append(self, event: dict[str, Any]) -> None:
-        sanitized = redact_audit_event(event)
+        sanitized = redact_audit_event(event, declared_public_keys=self._declared_public_keys)
         path = Path(self.path)
         rendered = (
             json.dumps(sanitized, ensure_ascii=False, default=str, allow_nan=False) + "\n"

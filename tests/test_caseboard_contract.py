@@ -359,7 +359,9 @@ def test_shared_json_reader_rejects_opened_file_substitution(tmp_path, monkeypat
     assert "outside-secret" not in "\n".join(errors[0].values())
     assert str(replacement) not in "\n".join(errors[0].values())
 
-    assert len(captured_flags) == 1
+    # A changed identity is re-validated and re-opened a bounded number of
+    # times (a concurrent replace is a newer version); the substitute is never read.
+    assert len(captured_flags) == store_diagnostics._STORE_RECORD_READ_ATTEMPTS
     for flag_name in (
         "O_BINARY",
         "O_CLOEXEC",

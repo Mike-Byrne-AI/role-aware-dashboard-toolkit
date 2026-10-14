@@ -33,18 +33,25 @@ def _parse_finite_json_float(value: str) -> float:
 
 
 def sanitize_non_finite_numbers(value: Any) -> Any:
-    """Replace non-finite floats with ``None`` in nested JSON-like values."""
+    """Replace non-finite floats with ``None`` in nested JSON-like values.
+
+    Containers are walked with plain loops, one stack frame per nesting level:
+    a comprehension adds a frame per level before Python 3.12, and a
+    generator does on every version, which halved the depth a packet could
+    reach.
+    """
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
-        return {
-            key: sanitize_non_finite_numbers(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [sanitize_non_finite_numbers(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(sanitize_non_finite_numbers(item) for item in value)
+        mapping: dict[Any, Any] = {}
+        for key, item in value.items():
+            mapping[key] = sanitize_non_finite_numbers(item)
+        return mapping
+    if isinstance(value, (list, tuple)):
+        items: list[Any] = []
+        for item in value:
+            items.append(sanitize_non_finite_numbers(item))
+        return items if isinstance(value, list) else tuple(items)
     return value
 
 

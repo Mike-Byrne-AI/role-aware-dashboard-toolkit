@@ -14,6 +14,7 @@ from role_aware_dashboard_toolkit.packet_core import VALID_PACKET_TYPES
 from role_aware_dashboard_toolkit.protocol.catalog import get_protocol_schema_version
 from role_aware_dashboard_toolkit.profiles import _InvalidProfileError
 from role_aware_dashboard_toolkit.validators import VALID_RECORD_TYPES, validate_record
+from tests.demo_role_helpers import start_as_admin
 
 
 def _registry():
@@ -240,6 +241,7 @@ def _invalid_profile_consumer():
         profiles = radt.InMemoryProfileStore()
         profiles.save({"profile_id": "saved", "values": {"workers": 8}})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, profile_store=profiles,
             sections=radt.DashboardSections(runbook=False, audit_writer=False,
                                            audit_log=False, plugin_details=False))
@@ -263,7 +265,7 @@ def _corrupt_after_preflight(monkeypatch, store):
 
 def test_native_load_rechecks_saved_data_after_successful_preview(monkeypatch):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_invalid_profile_consumer).run()
+    app = start_as_admin(AppTest.from_function(_invalid_profile_consumer)).run()
     app.selectbox(key="_radt_profile_choice").select("saved").run()
     assert not app.exception
     config = app.session_state["config"]
@@ -278,7 +280,7 @@ def test_native_load_rechecks_saved_data_after_successful_preview(monkeypatch):
 
 def test_native_save_rechecks_selected_parent_before_building_or_writing_child(monkeypatch):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_invalid_profile_consumer).run()
+    app = start_as_admin(AppTest.from_function(_invalid_profile_consumer)).run()
     app.selectbox(key="_radt_profile_choice").select("saved").run()
     app.text_input(key="_radt_profile_name").set_value("child").run()
     config = app.session_state["config"]
@@ -296,7 +298,7 @@ def test_native_save_rechecks_selected_parent_before_building_or_writing_child(m
 
 def test_known_invalid_selection_disables_save_and_load_but_preserves_authorized_delete():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_invalid_profile_consumer).run()
+    app = start_as_admin(AppTest.from_function(_invalid_profile_consumer)).run()
     config = app.session_state["config"]
     config.profile_store.save({"profile_id": "saved", "values": 42})
     app.selectbox(key="_radt_profile_choice").select("saved").run()

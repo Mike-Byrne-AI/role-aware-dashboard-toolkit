@@ -69,7 +69,10 @@ Existing calls keep their original result shape. With `include_telemetry=True`,
 each recorded metric appears under `telemetry_comparison.metrics`, including
 unchanged measurements. Each row contains `from`, `to`, `from_unit`, `to_unit`,
 `delta` and `status`. The delta is right minus left. It is calculated only for
-finite numeric values with equal unit strings. Two absent units mean unspecified
+finite numeric values with equal unit strings. The delta is the exact difference
+of the endpoints' shortest decimal forms, rounded once to a float (0.35 minus
+0.1 is 0.25, not 0.24999999999999997); `summarize_observability` drift deltas
+use the same rule. Two absent units mean unspecified
 units; one absent unit and one stated unit are a mismatch. Unit strings are
 trimmed and compared exactly, without case folding or conversion.
 

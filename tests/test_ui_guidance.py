@@ -12,6 +12,7 @@ import pytest
 from role_aware_dashboard_toolkit import DashboardPlugin, PluginRegistry
 from role_aware_dashboard_toolkit.diagnostics import build_diagnostic, diagnostic_text
 from role_aware_dashboard_toolkit.plugins import PluginErrorRecord
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 PAYLOAD = "SECRET-DO-NOT-LEAK C:/private/credential.json"
@@ -30,6 +31,7 @@ def _consumer(audit_dir):
         profiles = radt.InMemoryProfileStore()
         profiles.save({"profile_id": "saved", "values": {"count": 90, "message": "Restored"}})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             title="Guidance consumer", registry=registry, profile_store=profiles,
             audit_dir=audit_dir, sections=radt.DashboardSections(plugin_details=False))
     st.session_state["ctx"] = radt.render(st.session_state["config"])
@@ -42,8 +44,8 @@ def _healthy(app):
 
 @pytest.fixture
 def app(tmp_path):
-    return _healthy(AppTest.from_function(
-        _consumer, args=(str(tmp_path / "audit"),), default_timeout=15).run())
+    return _healthy(start_as_admin(AppTest.from_function(
+        _consumer, args=(str(tmp_path / "audit"),), default_timeout=15)).run())
 
 
 def _assert_help(app, code, capsys):
@@ -278,7 +280,7 @@ def test_core_only_missing_streamlit_exception_has_usable_installed_help(tmp_pat
 import json
 from role_aware_dashboard_toolkit import DashboardConfig, render
 try:
-    render(DashboardConfig())
+    render(DashboardConfig(auth_mode="demo"))
 except ModuleNotFoundError as exc:
     print(json.dumps({'message': str(exc), 'name': exc.name, 'diagnostic': exc.diagnostic}))
 else:

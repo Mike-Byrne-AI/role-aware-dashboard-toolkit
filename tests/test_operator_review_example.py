@@ -14,6 +14,7 @@ from examples.operator_review.workflow import (
     simulate_metrics,
     start_baseline,
 )
+from tests.demo_role_helpers import start_as_admin
 
 APP = Path(__file__).resolve().parents[1] / "examples" / "operator_review" / "app.py"
 RESOURCE_KEY = "_operator_review_session"
@@ -157,7 +158,7 @@ def test_signoff_permissions_cannot_bypass_missing_team_visibility(permission):
 @pytest.fixture
 def app():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    at = AppTest.from_file(str(APP), default_timeout=15).run()
+    at = start_as_admin(AppTest.from_file(str(APP), default_timeout=15)).run()
     healthy(at)
     return at
 

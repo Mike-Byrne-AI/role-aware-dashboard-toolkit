@@ -19,64 +19,225 @@ from typing import Sequence
 import warnings
 
 from .access import Identity, principal_id
-from .access_store import SQLiteAccessStore
+from .access_store import SQLiteAccessStore, _has_extended_acl
 
 _ROLES = ("Admin", "Operator", "Approver", "Auditor", "Viewer")
+_FAILED = "Provisioning failed"
+_GENERIC_MESSAGE = f"{_FAILED}. Check the protected directory and configuration."
+_ARGUMENT_MESSAGE = (
+    f"{_FAILED}: invalid or incomplete command-line arguments; nothing was changed. "
+    "Argument values are not repeated here. "
+    "Run python -m role_aware_dashboard_toolkit.access_cli --help for usage."
+)
+_LINK_MESSAGE = (
+    f"{_FAILED}: the path passes through a symbolic link or reparse point at {{link}}. "
+    "Choose a protected directory whose path contains no links that a non-root "
+    "account could change."
+)
+_MISSING_MESSAGE = f"{_FAILED}: the protected directory must already exist and be a directory."
+_REPOSITORY_MESSAGE = (
+    f"{_FAILED}: the protected directory is inside a Git repository. "
+    "Choose a directory outside every repository."
+)
+_OWNER_MESSAGE = (
+    f"{_FAILED}: the protected directory belongs to another account. Use a directory "
+    "owned by the account that runs provisioning and the dashboard."
+)
+_ANCESTOR_MESSAGE = (
+    f"{_FAILED}: another account could replace the protected directory, because "
+    "{path} above it belongs to another account or lets other accounts write to it "
+    "(through group or other permissions, or an access control list entry that allows "
+    "access). Every directory above the protected directory must belong to this "
+    "account or root, and only a root-owned sticky directory such as /tmp may be "
+    "group- or world-writable."
+)
+_ACL_MESSAGE = (
+    f"{_FAILED}: "
+    "{what} carries an extended access control list (ACL), which can give other "
+    "accounts access that its permissions do not show. Remove it (macOS: chmod -N; "
+    "Linux: setfacl -b) or use a new protected directory."
+)
+_PERMISSIONS_MESSAGE = (
+    f"{_FAILED}: the protected directory allows group or other access. "
+    "Restrict it to its owner (for example chmod 700)."
+)
+_INITIALIZED_MESSAGE = (
+    f"{_FAILED}: the protected directory already contains identity.key or access.sqlite3; "
+    "nothing was overwritten. Inspect it before trying again."
+)
+_KEY_MESSAGE = (
+    f"{_FAILED}: identity.key is missing, is not a private regular file owned by this "
+    "account, or does not hold a valid key. Restore it, or initialize a new protected "
+    "directory."
+)
+_MAX_LINKS = 40
 
 
 class ProvisioningError(RuntimeError):
-    """A fixed message avoids exposing paths, subjects, keys, or provider data."""
+    """Fixed messages never include subjects, keys, provider data or argument values.
 
-    def __init__(self) -> None:
-        super().__init__("Provisioning failed. Check the protected directory and configuration.")
+    The only path a message may contain is a refused link or parent directory on
+    the operator's own protected-directory path, so the operator can see which
+    component to change.
+    """
+
+    def __init__(self, message: str = _GENERIC_MESSAGE) -> None:
+        super().__init__(message)
 
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         # argparse's normal message may echo a mistakenly supplied secret.
-        raise ProvisioningError()
+        raise ProvisioningError(_ARGUMENT_MESSAGE)
 
 
-def _ordinary_path(path: Path) -> None:
-    for component in (path, *path.parents):
-        info = component.lstat()
-        if stat.S_ISLNK(info.st_mode) or (
-            getattr(info, "st_file_attributes", 0)
-            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        ):
-            raise ProvisioningError()
+def _is_link(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
+def _root_only(info: os.stat_result) -> bool:
+    # Owned by root and writable by nobody else: only root can replace entries.
+    return info.st_uid == 0 and not info.st_mode & 0o022
+
+
+def _ordinary_path(path: Path) -> Path:
+    """Return the link-free path, refusing every link a non-root account could change.
+
+    POSIX systems may route standard locations through root-owned links (macOS
+    /var and /tmp). Such a link is followed only when it is owned by root and
+    every directory above it is owned by root and is not group- or
+    world-writable. Every other link, and every Windows reparse point, is
+    refused. The directories of the returned path are checked separately
+    (``_changeable_ancestor``).
+    """
+    posix = os.name == "posix"
+    current = Path(path.anchor)
+    trusted = posix and _root_only(os.lstat(current))
+    pending = list(path.parts[1:])
+    followed = 0
+    while pending:
+        name = pending.pop(0)
+        if name in ("", "."):
+            continue
+        if name == "..":
+            current = current.parent
+            continue
+        candidate = current / name
+        info = os.lstat(candidate)
+        if not _is_link(info):
+            current = candidate
+            trusted = trusted and _root_only(info)
+            continue
+        followed += 1
+        if not (posix and stat.S_ISLNK(info.st_mode) and trusted and info.st_uid == 0) or followed > _MAX_LINKS:
+            raise ProvisioningError(_LINK_MESSAGE.format(link=candidate))
+        target = Path(os.readlink(candidate))
+        if target.is_absolute():
+            current = Path(target.anchor)
+            trusted = _root_only(os.lstat(current))
+            pending[:0] = target.parts[1:]
+        else:
+            pending[:0] = target.parts
+    return current
+
+
+def _owned_by_caller(info: os.stat_result) -> bool:
+    # Another account that owns the directory or key could replace its contents.
+    return os.name != "posix" or info.st_uid in {os.geteuid(), 0}
+
+
+def _changeable_ancestor(path: Path) -> Path | None:
+    """Return the first directory above ``path`` that another account could change.
+
+    OpenSSH's rule for every ancestor of the link-free path: it belongs to the
+    caller or root, and is group- or world-writable only when it is root-owned
+    and sticky (like /tmp), where no other account can rename what the caller
+    owns inside it.
+    """
+    if os.name != "posix":
+        return None
+    for parent in reversed(path.parents):
+        info = os.lstat(parent)
+        if info.st_uid not in {os.geteuid(), 0}:
+            return parent
+        if info.st_mode & 0o022 and not (info.st_uid == 0 and info.st_mode & stat.S_ISVTX):
+            return parent
+        # A deny-only ACL (macOS home directories deny "delete") changes nothing.
+        if _has_extended_acl(parent, allow_entries_only=True):
+            return parent
+    return None
+
+
+def _refuse_extended_acl(path: Path, what: str) -> None:
+    if _has_extended_acl(path):
+        raise ProvisioningError(_ACL_MESSAGE.format(what=what))
 
 
 def _directory(value: str | Path) -> Path:
     directory = Path(value).expanduser().absolute()
-    _ordinary_path(directory)
-    if not directory.is_dir():
+    try:
+        real = _ordinary_path(directory)
+        requested_info, real_info = os.stat(directory), os.stat(real)
+    except OSError:
+        raise ProvisioningError(_MISSING_MESSAGE) from None
+    if not stat.S_ISDIR(real_info.st_mode):
+        raise ProvisioningError(_MISSING_MESSAGE)
+    # The kernel must reach the same directory the walk validated.
+    if (requested_info.st_dev, requested_info.st_ino) != (real_info.st_dev, real_info.st_ino):
         raise ProvisioningError()
     # Repositories are unsuitable for either the key or pseudonymous policy.
-    for parent in (directory, *directory.parents):
+    # Check the requested path and, past any trusted system link, the real one.
+    for parent in (directory, *directory.parents, real, *real.parents):
         if (parent / ".git").exists():
-            raise ProvisioningError()
-    if os.name == "posix" and directory.stat().st_mode & 0o077:
-        raise ProvisioningError()
-    return directory
+            raise ProvisioningError(_REPOSITORY_MESSAGE)
+    changeable = _changeable_ancestor(real)
+    if changeable is not None:
+        raise ProvisioningError(_ANCESTOR_MESSAGE.format(path=changeable))
+    if not _owned_by_caller(real_info):
+        raise ProvisioningError(_OWNER_MESSAGE)
+    # Before the mode check: Linux setfacl widens the group bits to the ACL
+    # mask, and the operator must be told to remove the ACL, not to chmod.
+    _refuse_extended_acl(real, "the protected directory")
+    if os.name == "posix" and real_info.st_mode & 0o077:
+        raise ProvisioningError(_PERMISSIONS_MESSAGE)
+    return real
 
 
 def read_identity_key(directory: str | Path) -> bytes:
-    """Read the host-only binary key; reject links and broad POSIX permissions.
+    """Read the host-only binary key from a directory checked like provisioning.
+
+    Links a non-root account could change, broad POSIX permissions, a key or
+    directory owned by another account (other than root), a parent directory
+    another account could change and an extended ACL on the directory or key
+    (macOS ACLs, Linux POSIX ACLs) are refused.
 
     Windows operators must restrict the directory ACL themselves. This helper
     does not claim that chmod provides equivalent Windows access control.
     """
     try:
         path = _directory(directory) / "identity.key"
-        _ordinary_path(path)
-        if not path.is_file() or (os.name == "posix" and path.stat().st_mode & 0o077):
-            raise ProvisioningError()
+        try:
+            path = _ordinary_path(path)
+        except OSError:
+            raise ProvisioningError(_KEY_MESSAGE) from None
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode) or not _owned_by_caller(info):
+            raise ProvisioningError(_KEY_MESSAGE)
+        # Before the mode check: Linux setfacl widens the group bits to the
+        # ACL mask, so the ACL is the cause to name.
+        _refuse_extended_acl(path, "identity.key")
+        if os.name == "posix" and info.st_mode & 0o077:
+            raise ProvisioningError(_KEY_MESSAGE)
         with path.open("rb") as handle:
             key = handle.read(4097)
         if not 32 <= len(key) <= 4096:
-            raise ProvisioningError()
+            raise ProvisioningError(_KEY_MESSAGE)
         return key
+    except ProvisioningError:
+        raise
     except Exception:
         raise ProvisioningError() from None
 
@@ -92,11 +253,13 @@ def initialize_access(directory: str | Path) -> None:
         key_path = target / "identity.key"
         database_path = target / "access.sqlite3"
         if os.path.lexists(key_path) or os.path.lexists(database_path):
-            raise ProvisioningError()
+            raise ProvisioningError(_INITIALIZED_MESSAGE)
         descriptor = os.open(key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(secrets.token_bytes(32))
         SQLiteAccessStore.create(database_path)
+    except ProvisioningError:
+        raise
     except Exception:
         raise ProvisioningError() from None
 
@@ -148,13 +311,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Created an empty, frozen access store and a private identity key. No users were granted access.")
             return 0
         directory = _directory(args.directory)
+        for name in ("identity.key", "access.sqlite3"):
+            if os.path.lexists(directory / name):
+                _refuse_extended_acl(directory / name, name)
         store = SQLiteAccessStore(directory / "access.sqlite3")
         principal = args.principal or _subject_principal(directory, args.issuer)
         store.replace_grants(principal, args.role if args.command == "grant" else ())
         print("Role assignments updated." if args.command == "grant" else "All role assignments revoked.")
         return 0
+    except ProvisioningError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except (Exception, KeyboardInterrupt):
-        print(str(ProvisioningError()), file=sys.stderr)
+        print(_GENERIC_MESSAGE, file=sys.stderr)
         return 1
 
 

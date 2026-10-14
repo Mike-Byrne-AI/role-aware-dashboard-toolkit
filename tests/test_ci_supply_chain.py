@@ -115,7 +115,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert "permissions:\n  contents: read\n" in workflow
     assert "    permissions: {}\n" in workflow
     for forbidden in (
-        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "pull_request_target", "secrets.", "vars.", "RELEASE_CI_APPROVED_SHA", "contents: write",
         "id-token:", "continue-on-error", "twine upload", "actions/cache@",
     ):
         assert forbidden not in workflow
@@ -156,13 +156,19 @@ def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch
         exec(checks, {})
 
 
-def test_contributor_ci_runs_full_suite_on_windows_and_keeps_browser_evidence():
+def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_evidence():
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     tests = workflow.split("  tests:\n", 1)[1].split("  quality:\n", 1)[0]
     assert "    runs-on: ${{ matrix.os }}\n" in tests
     assert "        os: [ubuntu-latest]\n" in tests
     assert re.search(
         r"include:\n\s+- os: windows-latest\n\s+python-version: [\"']3\.11[\"']",
+        tests,
+    )
+    # macOS keeps the system temp directory under the /var symlink; the full
+    # suite must pass there from a clean checkout.
+    assert re.search(
+        r"\n\s+- os: macos-latest\n\s+python-version: [\"']3\.12[\"']",
         tests,
     )
     assert "      fail-fast: false\n" in tests
@@ -190,7 +196,7 @@ def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
     assert "permissions:\n  contents: read\n" in workflow
     assert "    permissions: {}\n" in workflow
     for forbidden in (
-        "pull_request_target", "secrets.", "vars.", "XL422", "contents: write",
+        "pull_request_target", "secrets.", "vars.", "RELEASE_CI_APPROVED_SHA", "contents: write",
         "id-token:", "continue-on-error", "twine upload", "actions/cache@",
     ):
         assert forbidden not in workflow
@@ -265,14 +271,16 @@ def test_hosted_ci_requires_manual_dispatch_and_exact_commit_authorization():
     assert {name for name, _block in job_blocks} == set(expected_timeouts)
     for name, block in job_blocks:
         guards = re.findall(r"^    if:\s*(.+)$", block, flags=re.MULTILINE)
-        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.XL422_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}"], name
+        assert guards == ["${{ github.event_name == 'workflow_dispatch' && vars.RELEASE_CI_APPROVED_SHA == github.sha && (github.ref == 'refs/heads/candidate' || github.ref == 'refs/heads/main') }}"], name
         assert re.findall(r"^    timeout-minutes: (\d+)$", block, flags=re.MULTILINE) == [str(expected_timeouts[name])]
     assert "permissions:\n  contents: read\n" in workflow
     assert len(re.findall(r"^\s*permissions:", workflow, flags=re.MULTILINE)) == 1
-    assert "concurrency:\n  group: xl422-candidate-validation\n  cancel-in-progress: false\n" in workflow
+    assert "concurrency:\n  group: release-candidate-validation\n  cancel-in-progress: false\n" in workflow
     assert "continue-on-error" not in workflow
     assert not re.search(r"^        if:", workflow, flags=re.MULTILINE)
-    assert workflow.count("          retention-days: 1\n") == ACTION_PINS["actions/upload-artifact"][2]
+    # Release notes cite these artifacts; keep them for GitHub's 90-day maximum.
+    assert workflow.count("          retention-days: 90\n") == ACTION_PINS["actions/upload-artifact"][2]
+    assert "retention-days: 1\n" not in workflow
     assert "twine upload" not in workflow
 
 
@@ -361,7 +369,7 @@ def test_actual_core_smoke_checks_missing_streamlit_diagnostic(monkeypatch, prob
             raise
 
     monkeypatch.setattr(radt, "render", render)
-    namespace = {"radt": radt, "config": radt.DashboardConfig()}
+    namespace = {"radt": radt, "config": radt.DashboardConfig(auth_mode="demo")}
     if problem is None:
         exec(checks, namespace)
     else:
@@ -468,3 +476,25 @@ def test_actual_auth_smoke_rejects_incomplete_or_invalid_installed_resources(lan
     else:
         with pytest.raises(SyntaxError if problem == "bad_python" else AssertionError):
             exec(checks, namespace)
+
+
+def test_workflow_dashboard_configs_construct_under_current_rules():
+    """The installed-wheel smokes build a DashboardConfig the local suite never runs.
+
+    A config rule change (such as requiring an explicit auth_mode) breaks the
+    release workflow without failing any local test, so construct each one here.
+    """
+    import role_aware_dashboard_toolkit as radt
+
+    workflows = (WORKFLOW_PATH, CONTRIBUTOR_WORKFLOW_PATH, DEPENDENCY_WORKFLOW_PATH)
+    texts = [path.read_text(encoding="utf-8") for path in workflows]
+    calls = [call for text in texts for call in re.findall(r"radt\.DashboardConfig\([^()\n]*\)", text)]
+    # Every call must be one this test can parse; a new multi-line call fails here.
+    assert len(calls) == sum(text.count("DashboardConfig(") for text in texts)
+    assert len(calls) == 3
+    for call in calls:
+        node = ast.parse(call, mode="eval").body
+        assert isinstance(node, ast.Call) and not node.args
+        kwargs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords}
+        config = radt.DashboardConfig(**kwargs)
+        assert config.icon == "Core"

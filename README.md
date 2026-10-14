@@ -60,7 +60,8 @@ Try a complete review workflow with synthetic data. No model account, identity
 provider, or external service is needed for this local example.
 
 Clone or download the [source repository](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit)
-and open PowerShell in its root directory. With Python 3.10 or later:
+and open a terminal in its root directory. With Python 3.10 or later, in
+PowerShell on Windows:
 
 ```powershell
 python -m venv .venv
@@ -68,8 +69,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
 ```
 
-If `.venv` already exists, reuse it and skip the first command. On macOS or
-Linux, use `.venv/bin/python` in place of `.\.venv\Scripts\python.exe`.
+In bash or zsh on macOS or Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install ".[workbench]"
+.venv/bin/python -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
+```
+
+If `.venv` already exists, reuse it and skip the first command.
 
 In the browser:
 
@@ -89,10 +97,17 @@ workflow, report reader, and persistence boundaries.
 ## Build your own application
 
 If you followed the quick start, stop the demo with `Ctrl+C` and activate the
-same environment from the repository root before changing directories:
+same environment from the repository root before changing directories. In
+PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+```
+
+In bash or zsh:
+
+```bash
+source .venv/bin/activate
 ```
 
 The commands below use `python` from that active environment. You can also use
@@ -100,12 +115,21 @@ the absolute path to its Python executable if you do not activate environments.
 
 For a new application, use the installed starter. From your own application
 directory, with the toolkit's `workbench` extra installed in the active Python
-environment:
+environment. In PowerShell:
 
 ```powershell
 python -m role_aware_dashboard_toolkit init my-dashboard --dry-run
 python -m role_aware_dashboard_toolkit init my-dashboard
 Set-Location my-dashboard
+python -m streamlit run app.py --server.address 127.0.0.1
+```
+
+In bash or zsh:
+
+```bash
+python -m role_aware_dashboard_toolkit init my-dashboard --dry-run
+python -m role_aware_dashboard_toolkit init my-dashboard
+cd my-dashboard
 python -m streamlit run app.py --server.address 127.0.0.1
 ```
 
@@ -117,7 +141,7 @@ inspect `python -m role_aware_dashboard_toolkit example starter --format json`.
 When working with a coding assistant, have it discover this installed version
 before changing your application:
 
-```powershell
+```shell
 python -m role_aware_dashboard_toolkit inspect --format json
 python -m role_aware_dashboard_toolkit guide start
 ```
@@ -159,6 +183,7 @@ config = radt.DashboardConfig(
     title="Service controls",
     registry=registry,
     audit=st.session_state["service_controls_audit"],
+    auth_mode="demo",  # local demo: each user picks a role
 )
 
 radt.render(config)
@@ -166,13 +191,31 @@ radt.render(config)
 
 The audit object survives reruns in this browser session. A new session or
 server restart starts a new in-memory history; choose a persistent audit store
-when records must survive restarts.
+when records must survive restarts. A new demo session starts as Viewer, which
+can only read; pick a role in the sidebar to change controls.
+
+For durable audit across sessions, share one log per process and start its
+writer where you create it, then pass `audit=shared_audit()` and
+`audit_dir="audit_logs"` to `DashboardConfig`:
+
+```python
+@st.cache_resource
+def shared_audit() -> radt.AuditLog:
+    audit = radt.AuditLog()
+    audit.start_writer("audit_logs/audit.jsonl")
+    return audit
+```
+
+Every session's and role's events then reach `audit_logs/audit.jsonl`. With one
+log per browser session, as in the minimal dashboard, the sidebar's writer
+toggle governs only that session's log. See
+[persist every session's events](docs/dashboard_tools.md#persist-every-sessions-events).
 
 For controls, profiles, runs, checkpoints, and packet export **without a UI**,
 follow the [core quickstart](docs/quickstart.md) or run this example from the
 repository root:
 
-```powershell
+```shell
 python -m examples.core_library
 ```
 

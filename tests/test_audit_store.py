@@ -1228,10 +1228,18 @@ class _StartFailureThread(_ControllableWriterThread):
         return super().is_alive()
 
 
+class _RecordingStore:
+    def __init__(self):
+        self.events = []
+
+    def append(self, event):
+        self.events.append(event)
+
+
 def _install_writer_state(audit, path, *, alive=True):
     writer_thread = _ControllableWriterThread(alive=alive)
     writer_queue = queue.Queue()
-    writer_store = object()
+    writer_store = _RecordingStore()
     audit._writer_thread = writer_thread
     audit._writer_queue = writer_queue
     audit._writer_store = writer_store
@@ -1300,7 +1308,7 @@ def test_start_writer_constructor_failure_is_atomic_and_retryable(
     audit.stop_writer()
 
     persisted = FileAuditStore(str(retry_path)).read_all()
-    assert [event["type"] for event in persisted] == ["retry_event"]
+    assert [event["type"] for event in persisted] == ["audit_writer_start", "retry_event", "audit_writer_stop"]
     retry_status = audit.writer_status()
     assert retry_status["writer_active"] is False
     assert retry_status["writer_error_count"] == 0
@@ -1340,7 +1348,7 @@ def test_start_writer_pre_live_failure_clears_state_and_rethrows_original(
     audit.log("retry_event")
     audit.stop_writer()
     assert [event["type"] for event in FileAuditStore(str(retry_path)).read_all()] == [
-        "retry_event"
+        "audit_writer_start", "retry_event", "audit_writer_stop"
     ]
     assert audit.writer_status()["writer_error_count"] == 0
 
@@ -1403,7 +1411,7 @@ def test_start_writer_live_failure_retains_ownership_until_reaped(
         audit_module._WRITER_STOP_TIMEOUT_SECONDS,
     ]
     assert [event["type"] for event in FileAuditStore(str(retry_path)).read_all()] == [
-        "retry_event"
+        "audit_writer_start", "retry_event", "audit_writer_stop"
     ]
     retry_status = audit.writer_status()
     assert retry_status["writer_error_count"] == 0
@@ -1586,8 +1594,13 @@ def test_stop_writer_timeout_retains_live_state_and_records_error(tmp_path):
     )
     assert audit_module._get_writer_startup_error(caught.value) == {}
 
+    # The stop is recorded in the view; the live thread still owns the file.
+    (stop,) = audit.all_events()
+    assert stop["type"] == "audit_writer_stop"
+    assert stop["detail"].startswith("stop requested:")
+    assert writer_store.events == []
     audit.log("after_stop_timeout")
-    assert [event["type"] for event in audit.all_events()] == ["after_stop_timeout"]
+    assert [event["type"] for event in audit.all_events()] == ["audit_writer_stop", "after_stop_timeout"]
     assert writer_queue.qsize() == 1
     assert audit.writer_status()["dropped_events"] == 0
 
@@ -1649,13 +1662,20 @@ def test_start_writer_same_path_is_idempotent_only_without_pending_stop(tmp_path
 def test_stop_writer_can_reap_after_prior_timeout(tmp_path):
     audit = AuditLog()
     writer_path = tmp_path / "active.jsonl"
-    writer_thread, _, _ = _install_writer_state(audit, writer_path)
+    writer_thread, _, writer_store = _install_writer_state(audit, writer_path)
 
     with pytest.raises(TimeoutError):
         audit.stop_writer()
+    # Finish the controllable thread's work before simulating its exit.
+    audit._writer_loop()
     writer_thread.alive = False
 
     audit.stop_writer()
+
+    # The worker appends the stop request once; the reaping stop adds none.
+    assert [event["type"] for event in writer_store.events] == ["audit_writer_stop"]
+    assert writer_store.events[0]["detail"].startswith("stop requested:")
+    assert [event["type"] for event in audit.all_events()] == ["audit_writer_stop"]
 
     status = audit.writer_status()
     assert audit._writer_thread is None

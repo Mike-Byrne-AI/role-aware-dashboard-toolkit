@@ -13,6 +13,7 @@ from role_aware_dashboard_toolkit.decision_store import InMemoryDecisionStore
 from role_aware_dashboard_toolkit.governance_store import InMemoryGovernanceStore
 from role_aware_dashboard_toolkit.operator_memory_store import InMemoryOperatorMemoryStore
 from role_aware_dashboard_toolkit.team_store import InMemoryTeamStore
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -41,15 +42,16 @@ def _app(*, active=True):
     cases = InMemoryCaseStore()
     cases.save(build_case_record("Existing case", case_id="case-one", linked_run_ids=["run-one"]))
     config = DashboardConfig(
+        auth_mode="demo",
         registry=registry, profile_store=InMemoryProfileStore(), run_store=run_store,
         team_store=InMemoryTeamStore(), operator_memory_store=InMemoryOperatorMemoryStore(),
         decision_store=InMemoryDecisionStore(), case_store=cases,
         governance_store=InMemoryGovernanceStore(),
         sections=DashboardSections(audit_writer=False, plugin_details=False),
     )
-    app = _healthy(AppTest.from_function(
+    app = _healthy(start_as_admin(AppTest.from_function(
         _consumer, args=(config, "run-one" if active else ""), default_timeout=15,
-    ).run())
+    )).run())
     for widget in app.text_input:
         if widget.key != "_radt_profile_name":
             widget.set_value("Retained draft")

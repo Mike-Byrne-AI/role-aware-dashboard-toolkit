@@ -29,6 +29,7 @@ from .replay import REPLAY_SCHEMA_VERSION
 from .runs import RUN_SCHEMA_VERSION, VALID_RUN_STATUSES
 from .team_ops import TEAM_SCHEMA_VERSION, VALID_ASSIGNMENT_STATUSES, VALID_HANDOFF_STATUSES, VALID_SIGNOFF_DECISIONS
 from .validators_parts.common import (
+    _schema_version_label,
     as_record_mapping as _as_record_mapping,
     check_enum_field as _check_enum_field,
     check_list_field as _check_list_field,
@@ -437,14 +438,15 @@ def validate_packet(record: dict[str, Any]) -> dict[str, Any]:
         if payload_schema_version is None:
             result["errors"].append(f"Missing or invalid payload_schema_version for packet_type '{packet_type}'.")
         elif payload_schema_version != expected_schema_version:
+            # Name the version without echoing an arbitrary saved value.
             result["errors"].append(
                 f"Unexpected payload_schema_version for packet_type '{packet_type}': "
-                f"{payload_schema_version} != {expected_schema_version}"
+                f"expected {expected_schema_version}, found {_schema_version_label(payload_schema_version)}."
             )
         if payload_body_schema_version is not None and payload_body_schema_version != expected_schema_version:
             result["errors"].append(
                 f"Unexpected payload.schema_version for packet_type '{packet_type}': "
-                f"{payload_body_schema_version} != {expected_schema_version}"
+                f"expected {expected_schema_version}, found {_schema_version_label(payload_body_schema_version)}."
             )
     elif extension_packet:
         if payload_schema_version is None:
@@ -462,8 +464,9 @@ def validate_packet(record: dict[str, Any]) -> dict[str, Any]:
         and payload_schema_version != payload_body_schema_version
     ):
         result["errors"].append(
-            f"payload_schema_version ({payload_schema_version}) does not match "
-            f"payload.schema_version ({payload_body_schema_version}) for packet_type '{packet_type}'."
+            f"payload_schema_version ({_schema_version_label(payload_schema_version)}) does not match "
+            f"payload.schema_version ({_schema_version_label(payload_body_schema_version)}) "
+            f"for packet_type '{packet_type}'."
         )
     if (
         packet_type in known_packet_types

@@ -510,7 +510,10 @@ class TestAuditLog:
             with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
             parsed = [json.loads(line) for line in lines]
-            assert [event["key"] for event in parsed] == ["k0", "k1", "k2"]
+            assert [event["type"] for event in parsed] == [
+                "audit_writer_start", "test_event", "test_event", "test_event", "audit_writer_stop",
+            ]
+            assert [event["key"] for event in parsed[1:-1]] == ["k0", "k1", "k2"]
 
 
 class TestProfiles:
@@ -598,7 +601,7 @@ class TestProfiles:
         source_path = tmp_path / "private" / "profile-source.json"
         source_path.parent.mkdir()
         save_profile("leaky", reg, {"a": 0.3, "b": True}, profile_dir=str(tmp_path), source=str(source_path))
-        config = DashboardConfig(registry=reg, profile_dir=str(tmp_path))
+        config = DashboardConfig(auth_mode="demo", registry=reg, profile_dir=str(tmp_path))
         fake_st = FakeStreamlit()
         fake_st.session_state["_radt_profile_choice"] = "leaky"
 
@@ -613,7 +616,7 @@ class TestHardeningHelpers:
         registry = ControlRegistry()
         audit = AuditLog()
 
-        config = DashboardConfig(registry=registry, audit=audit)
+        config = DashboardConfig(auth_mode="demo", registry=registry, audit=audit)
 
         assert config.registry is registry
         assert config.audit is audit
@@ -1498,7 +1501,10 @@ class TestDashboardPanels:
         allowed_ctx = make_security_context("Admin", {"can_manage_audit": True})
         dashboard_panels.render_audit_panel(fake_st, audit, allowed_ctx)
 
-        assert audit.all_events() == []
+        # Clearing leaves one attributed record of the clear.
+        assert [(e["type"], e["old"], e["role"]) for e in audit.all_events()] == [
+            ("audit_cleared", 1, "Admin"),
+        ]
         assert fake_st.rerun_calls == 1
         assert fake_st.button_calls[-1] == {
             "key": "_radt_audit_clear_btn",
@@ -1586,18 +1592,21 @@ class TestDashboardPanels:
 class TestDashboardSmoke:
     def test_sidebar_detects_role_and_freeze_changes_applied_before_rerun(self):
         fake_st = FakeStreamlit()
-        config = DashboardConfig()
+        fake_st.session_state["_radt_role"] = "Viewer"
+        config = DashboardConfig(auth_mode="demo")
 
         render_sidebar(fake_st, config)
-        fake_st.session_state["_radt_role"] = "Viewer"
+        # Switch to a role that may freeze and freeze in the same rerun.
+        fake_st.session_state["_radt_role"] = "Admin"
         fake_st.session_state["_radt_writable"] = False
         render_sidebar(fake_st, config)
 
         events = config.audit.all_events()
         assert [event["type"] for event in events] == ["role_switch", "freeze_toggle"]
-        assert events[0]["old"] == "Admin"
-        assert events[0]["new"] == "Viewer"
+        assert events[0]["old"] == "Viewer"
+        assert events[0]["new"] == "Admin"
         assert events[1]["new"] is False
+        assert events[1]["role"] == "Admin"
 
     @pytest.mark.parametrize(
         ("auth_value", "classification"),
@@ -1735,7 +1744,7 @@ class TestDashboardSmoke:
                 "_radt_profile_name": "forged",
             }
         )
-        config = DashboardConfig()
+        config = DashboardConfig(auth_mode="demo")
         denied_ctx = make_security_context(
             "Viewer",
             {"can_save_profiles": False, "can_load_profiles": False},
@@ -1783,7 +1792,7 @@ class TestDashboardSmoke:
                 "api_key": "stored-secret", "obsolete": "ignored",
             },
         })
-        config = DashboardConfig(registry=reg, profile_store=store)
+        config = DashboardConfig(auth_mode="demo", registry=reg, profile_store=store)
         fake_st = ProfileLoadStreamlit()
         fake_st.session_state.update({
             "mode": "safe", "governance_lock": False, "api_key": "live-secret",
@@ -1818,9 +1827,10 @@ class TestDashboardSmoke:
         audit_root = tmp_path / "audit"
         outside = tmp_path / "outside.jsonl"
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(outside)
-        config = DashboardConfig(audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit_dir=str(audit_root))
 
         render_sidebar(fake_st, config)
 
@@ -1832,16 +1842,19 @@ class TestDashboardSmoke:
         audit_root = tmp_path / "audit"
         audit_path = audit_root / "events.jsonl"
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
-        config = DashboardConfig(audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit_dir=str(audit_root))
 
         render_sidebar(fake_st, config)
         config.audit.log("test_event", role="Admin")
         config.audit.stop_writer()
 
         events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
-        assert [event["type"] for event in events] == ["test_event"]
+        assert [event["type"] for event in events] == [
+            "audit_writer_start", "test_event", "audit_writer_stop",
+        ]
 
 
     def test_sidebar_surfaces_one_redacted_startup_error_and_retries(
@@ -1851,9 +1864,10 @@ class TestDashboardSmoke:
         audit_path = audit_root / "private" / "events.jsonl"
         audit = AuditLog()
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
         startup_error = OSError(f"cannot open {audit_path}")
 
         def fail_store(_path):
@@ -1882,6 +1896,11 @@ class TestDashboardSmoke:
             "memory_only_after_sidebar_start_failure"
         ]
 
+        # The failed start shows the toggle off; turning it on again retries.
+        assert fake_st.session_state["_radt_audit_writer"] is False
+        render_sidebar(fake_st, config)
+        assert audit.writer_status()["writer_active"] is False
+        fake_st.session_state["_radt_audit_writer"] = True
         render_sidebar(fake_st, config)
         audit.log("retry_event")
         audit.stop_writer()
@@ -1890,8 +1909,12 @@ class TestDashboardSmoke:
             json.loads(line)
             for line in audit_path.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["type"] for event in persisted] == ["retry_event"]
-        assert fake_st.messages["error"] == [displayed_error]
+        assert [event["type"] for event in persisted] == [
+            "audit_writer_start", "retry_event", "audit_writer_stop",
+        ]
+        # The unresolved failure stays visible on the plain rerun; the
+        # successful retry adds no error.
+        assert fake_st.messages["error"] == [displayed_error, displayed_error]
         retry_status = audit.writer_status()
         assert retry_status["writer_error_count"] == 0
         assert retry_status["last_writer_error"] == {}
@@ -1924,9 +1947,10 @@ class TestDashboardSmoke:
         writer_thread = _UnknownLivenessThread()
         audit = AuditLog()
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
 
         with monkeypatch.context() as patch:
             patch.setattr(
@@ -2007,9 +2031,12 @@ class TestDashboardSmoke:
             json.loads(line)
             for line in audit_path.read_text(encoding="utf-8").splitlines()
         ]
+        # The demo session starts in its least-privileged role, here the
+        # forced "Locked" role itself, so no role switch is recorded.
         assert [event["type"] for event in events] == [
-            "role_switch",
+            "audit_writer_start",
             "writer_survived_read_only_render",
+            "audit_writer_stop",
         ]
 
 
@@ -2022,7 +2049,7 @@ class TestDashboardSmoke:
             "message": "cannot write <redacted-local-path>",
         }
         fake_st = FakeStreamlit()
-        config = DashboardConfig(audit=audit)
+        config = DashboardConfig(auth_mode="demo", audit=audit)
 
         render_sidebar(fake_st, config)
 
@@ -2054,7 +2081,9 @@ class TestDashboardSmoke:
         audit._writer_store = object()
         audit._writer_path = str(writer_path)
         fake_st = FakeStreamlit()
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
+        fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
 
         render_sidebar(fake_st, config)
 
@@ -2062,6 +2091,8 @@ class TestDashboardSmoke:
         assert errors == [
             "Audit writer error (TimeoutError): " + diagnostic_text("RADT-AUDIT-IO")
         ]
+        # The writer is still running, so the toggle shows it running.
+        assert fake_st.session_state["_radt_audit_writer"] is True
         assert str(writer_path) not in "\n".join(errors)
         status = audit.writer_status()
         assert status["writer_active"] is True
@@ -2073,18 +2104,25 @@ class TestDashboardSmoke:
 
     @pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
     def test_sidebar_does_not_swallow_unexpected_audit_writer_shutdown_errors(
-        self, monkeypatch, error_type
+        self, tmp_path, monkeypatch, error_type
     ):
+        audit_root = tmp_path / "audit"
         audit = AuditLog()
+        audit.start_writer(str(audit_root / "events.jsonl"))
 
-        def fail_shutdown():
+        def fail_shutdown(**_attribution):
             raise error_type("unexpected writer failure")
 
         monkeypatch.setattr(audit, "stop_writer", fail_shutdown)
         fake_st = FakeStreamlit()
-        config = DashboardConfig(audit=audit)
-        with pytest.raises(error_type, match="unexpected writer failure"):
-            render_sidebar(fake_st, config)
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
+        fake_st.session_state["_radt_audit_writer"] = False  # operator turns it off
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
+        try:
+            with pytest.raises(error_type, match="unexpected writer failure"):
+                render_sidebar(fake_st, config)
+        finally:
+            AuditLog.stop_writer(audit)
 
     @pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
     def test_sidebar_does_not_swallow_unmarked_start_writer_errors(
@@ -2094,14 +2132,15 @@ class TestDashboardSmoke:
         audit_path = audit_root / "events.jsonl"
         audit = AuditLog()
 
-        def fail_start(_path):
+        def fail_start(_path, **_attribution):
             raise error_type("unexpected start_writer failure")
 
         monkeypatch.setattr(audit, "start_writer", fail_start)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
 
         with pytest.raises(error_type, match="unexpected start_writer failure"):
             render_sidebar(fake_st, config)
@@ -2124,14 +2163,15 @@ class TestDashboardSmoke:
 
         audit = AuditLog()
 
-        def fail_start(_path):
+        def fail_start(_path, **_attribution):
             raise error
 
         monkeypatch.setattr(audit, "start_writer", fail_start)
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_path)
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
 
         with pytest.raises(RuntimeError) as caught:
             render_sidebar(fake_st, config)
@@ -2158,9 +2198,10 @@ class TestDashboardSmoke:
         audit._writer_store = object()
         audit._writer_path = str(audit_root / "old.jsonl")
         fake_st = FakeStreamlit()
+        fake_st.session_state["_radt_role"] = "Admin"  # manages the writer
         fake_st.session_state["_radt_audit_writer"] = True
         fake_st.session_state["_radt_audit_path"] = str(audit_root / "new.jsonl")
-        config = DashboardConfig(audit=audit, audit_dir=str(audit_root))
+        config = DashboardConfig(auth_mode="demo", audit=audit, audit_dir=str(audit_root))
 
         with pytest.raises(
             error_type, match="unexpected prior writer shutdown failure"
@@ -2176,7 +2217,7 @@ class TestDashboardSmoke:
 
         monkeypatch.setattr(audit, "writer_status", fail_status)
         fake_st = FakeStreamlit()
-        config = DashboardConfig(audit=audit)
+        config = DashboardConfig(auth_mode="demo", audit=audit)
 
         with pytest.raises(RuntimeError, match="unexpected writer_status failure"):
             render_sidebar(fake_st, config)
@@ -2206,6 +2247,7 @@ class TestDashboardSmoke:
         monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit_module)
         dashboard_mod = importlib.import_module("role_aware_dashboard_toolkit.dashboard")
         config = dashboard_mod.DashboardConfig(
+            auth_mode="demo",
             title="Setup Failure Test",
             plugins=registry,
         )
@@ -2227,6 +2269,7 @@ class TestDashboardSmoke:
 
         class BrokenEntryPoint:
             name = "broken_ep"
+            dist = types.SimpleNamespace(metadata={"Name": "fixture-plugins"})
 
             def load(self):
                 raise RuntimeError("entry point exploded")
@@ -2237,9 +2280,11 @@ class TestDashboardSmoke:
         )
         registry = PluginRegistry()
         with pytest.warns(RuntimeWarning, match="Role-Aware Dashboard Toolkit plugin discovery skipped role_aware_dashboard_toolkit.panels:broken_ep"):
-            assert registry.discover(trusted_entry_points=["role_aware_dashboard_toolkit.panels:broken_ep"]) == []
+            assert registry.discover(
+                trusted_entry_points=["fixture-plugins:role_aware_dashboard_toolkit.panels:broken_ep"]
+            ) == []
 
-        config = DashboardConfig(title="Smoke Test", plugins=registry)
+        config = DashboardConfig(auth_mode="demo", title="Smoke Test", plugins=registry)
         monkeypatch.setattr(dashboard_mod, "st", fake_st)
 
         dashboard_mod.render(config)

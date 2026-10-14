@@ -12,7 +12,9 @@ The OSS core owns:
 - roles, permission checks, and explicit write policy
 - access policy for trusted identities, live role grants, shared freeze state,
   and trusted operator provisioning
-- profiles and append-only audit records
+- profiles and audit records: the optional JSONL audit file is append-only;
+  the in-memory history is bounded (oldest events drop first) and clearable,
+  and clearing it writes an audit record of the clear
 - trusted plugin registration and lifecycle diagnostics
 - runs, checkpoints, comparisons, ledgers, and replay previews
 - neutral packet envelopes and protocol metadata

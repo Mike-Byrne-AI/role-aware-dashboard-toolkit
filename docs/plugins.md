@@ -37,10 +37,38 @@ and network permissions as the host app.
 
 Discovery is explicit trust opt-in:
 
-- `discover(trusted_entry_points=["role_aware_dashboard_toolkit.panels:my_plugin"])` to load only
-  an allowlisted entry-point set
+- `discover(trusted_entry_points=["acme-dashboard-plugins:role_aware_dashboard_toolkit.panels:my_plugin"])`
+  to load only an allowlisted entry-point set
 - `discover(allow_untrusted=True)` only for controlled local development when
   you intentionally trust every discovered entry point
+
+Each allowlist entry is `distribution:group:name`: the installed distribution
+(project) name as `pip show` reports it, the entry-point group
+(`role_aware_dashboard_toolkit.panels` or `role_aware_dashboard_toolkit.sidebar`)
+and the entry-point name. An entry point is imported only when its own
+distribution, group and name all match an entry; distribution names compare
+case-insensitively, with `-`, `_` and `.` treated alike. A same-named entry
+point published by another installed distribution is never imported; it is
+reported as a discovery error (`PermissionError`, diagnostic
+`RADT-PLUGIN-TRUST`) with a `RuntimeWarning`. A distribution's name is whatever
+its own metadata declares, so a second installed distribution can claim an
+allowlisted name: when installed distributions with an allowlisted name point
+an allowlisted entry point at different code, none of them is loaded and each
+is reported the same way. Remove the copy you did not install (a stale
+`.egg-info` or `.dist-info` directory with an old target also counts). Copies
+that point it at the same code count as one, such as the `.egg-info` that
+`pip install -e .` with setuptools leaves beside the installed `.dist-info`;
+which file is imported is then up to Python's import path, as for any module. An entry point whose distribution metadata is missing
+or unreadable is not trusted by an allowlist. Trust is by distribution name
+within the environment: anyone who can install packages there can also replace
+an allowlisted distribution's code, so the allowlist guards against
+unreviewed and same-named installs, not against an account that can write to
+the environment.
+
+Since 0.2.0 a `group:name` entry (the 0.1.0 form) is refused: `discover()`
+raises `ValueError` naming the entry before importing anything, as it does for
+any other malformed entry or unknown group. Prefix each old entry with the
+distribution that should provide it.
 
 `PluginRegistry.describe()` and `PluginRegistry.describe_sources()` expose loaded
 plugin source metadata (manual registration vs entry point, group/ref, and

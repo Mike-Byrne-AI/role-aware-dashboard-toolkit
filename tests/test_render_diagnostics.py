@@ -6,6 +6,7 @@ import json
 import logging
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -46,6 +47,7 @@ def _callback_consumer(callback_kind):
                           min_value=1, max_value=10, step=1,
                           callback=fail if callback_kind == "control" else None)
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=registry, on_change=fail if callback_kind == "global" else None,
         )
     radt.render(st.session_state["config"])
@@ -83,7 +85,7 @@ def _healthy(app):
 def test_retained_telemetry_is_explicitly_old_and_keeps_original_timestamp(mode):
     from role_aware_dashboard_toolkit.diagnostics import build_diagnostic
 
-    app = _healthy(AppTest.from_function(_telemetry_consumer).run())
+    app = _healthy(start_as_admin(AppTest.from_function(_telemetry_consumer)).run())
     prior = deepcopy(app.session_state["_radt_last_telemetry"])
     app.session_state["mode"] = mode
     _healthy(app.run())
@@ -109,7 +111,7 @@ def test_retained_telemetry_is_explicitly_old_and_keeps_original_timestamp(mode)
 
 @pytest.mark.parametrize("mode", ["failed", "empty"])
 def test_missing_first_sample_does_not_claim_a_retained_sample(mode):
-    app = _healthy(AppTest.from_function(_telemetry_consumer, args=(mode,)).run())
+    app = _healthy(start_as_admin(AppTest.from_function(_telemetry_consumer, args=(mode,))).run())
     assert "_radt_last_telemetry" not in app.session_state
     assert not app.metric
     assert any("No telemetry samples yet" in item.value for item in app.caption)
@@ -120,7 +122,7 @@ def test_missing_first_sample_does_not_claim_a_retained_sample(mode):
 def test_callback_diagnostic_hides_raw_exception_and_preserves_completed_effects(callback_kind):
     from role_aware_dashboard_toolkit.diagnostics import build_diagnostic
 
-    app = _healthy(AppTest.from_function(_callback_consumer, args=(callback_kind,)).run())
+    app = _healthy(start_as_admin(AppTest.from_function(_callback_consumer, args=(callback_kind,))).run())
     _healthy(app.number_input(key="workers").set_value(5).run())
     assert app.number_input(key="workers").value == 5
     assert app.session_state["callback_calls"] == 1
@@ -148,7 +150,7 @@ def test_mixed_audit_cells_render_without_arrow_fallback_or_raw_record_mutation(
     logger = logging.getLogger("streamlit.dataframe_util")
     monkeypatch.setattr(logger, "propagate", True)
     with caplog.at_level(logging.INFO, logger=logger.name):
-        app = _healthy(AppTest.from_function(_audit_consumer).run())
+        app = _healthy(start_as_admin(AppTest.from_function(_audit_consumer)).run())
     assert not any("Serialization of dataframe to Arrow" in record.getMessage()
                    for record in caplog.records)
     assert not any(record.exc_info for record in caplog.records

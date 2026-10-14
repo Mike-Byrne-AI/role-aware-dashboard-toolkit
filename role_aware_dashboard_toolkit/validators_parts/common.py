@@ -18,7 +18,9 @@ def check_enum_field(
         return
     value = record[field]
     if not isinstance(value, str) or value not in valid_values:
-        result["errors"].append(f"{message_prefix}: {value}")
+        result["errors"].append(
+            f"{message_prefix}: field '{field}' must be one of {_choices(valid_values)}."
+        )
 
 
 def check_literal_field(result: dict[str, Any], record: dict[str, Any], field: str, expected: str) -> None:
@@ -77,7 +79,9 @@ def check_record_items(
             continue
         value = item[value_field]
         if not isinstance(value, str) or value not in valid_values:
-            result["errors"].append(f"{field}[{index}] invalid {value_field}: {value}")
+            result["errors"].append(
+                f"{field}[{index}] invalid {value_field}: must be one of {_choices(valid_values)}."
+            )
 
 
 def validate_required_fields(
@@ -98,7 +102,10 @@ def validate_required_fields(
         type(record["schema_version"]) is not int
         or record["schema_version"] != expected_schema_version
     ):
-        errors.append(f"Unexpected schema_version for {record_type}: {record.get('schema_version')} != {expected_schema_version}")
+        errors.append(
+            f"Unexpected schema_version for {record_type}: expected {expected_schema_version}, "
+            f"found {_schema_version_label(record['schema_version'])}."
+        )
     return {"ok": not errors, "record_type": record_type, "errors": errors}
 
 
@@ -237,6 +244,19 @@ def record_shape_errors(
                 errors.extend(prefix_errors(prefix, record_shape_errors(
                     nested_type, child, _ancestors=ancestors)))
     return errors
+
+
+def _choices(valid_values: Iterable[str]) -> str:
+    # Allowed values are toolkit constants; the rejected value is saved data.
+    return ", ".join(f"'{value}'" for value in valid_values)
+
+
+def _schema_version_label(value: Any) -> str:
+    # A version number is shown; any other saved value is described, not echoed.
+    if type(value) is int:
+        return str(value) if abs(value) < 10**9 else "another integer"
+    labels = {str: "a string", bool: "a boolean", float: "a number", dict: "a mapping", list: "a list"}
+    return labels.get(type(value), "a value of another type")
 
 
 def finalize(result: dict[str, Any]) -> dict[str, Any]:

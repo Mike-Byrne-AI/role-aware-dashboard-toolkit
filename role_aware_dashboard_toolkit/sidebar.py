@@ -9,7 +9,7 @@ from ._profile_preview import InvalidProfilePreviewValues, build_profile_restore
 from ._ui_state import apply_pending_replay, remember_authorized_control_values
 from .profile_store import FileProfileStore
 from .diagnostics import build_diagnostic, diagnostic_text
-from .audit import _get_writer_shutdown_error, _get_writer_startup_error
+from .audit import _get_writer_shutdown_error, _get_writer_startup_error, _ui_attribution
 from .path_redaction import redact_text_local_paths
 from .plugins import PluginErrorRecord
 from .profiles import (
@@ -27,7 +27,7 @@ from .security import (
     has_perm,
     make_security_context,
 )
-from .store_diagnostics import StorePathSecurityError, safe_store_write_path
+from .store_diagnostics import StorePathSecurityError, safe_store_write_path, store_read_error_total
 
 
 @dataclass
@@ -72,6 +72,23 @@ def _resolve_authenticated_role(
 
 
 
+def _least_privileged_role(all_roles: list[str], custom_roles: Any) -> str:
+    """The demo session's starting role: the fewest granted permissions.
+
+    Ties keep declaration order (built-ins first). Built-in roles start as
+    Viewer; a host's custom role with fewer grants starts instead.
+    """
+    if not all_roles:
+        return "Viewer"
+
+    def granted(name: str) -> int:
+        role = get_role(name, custom_roles)
+        perms = role.perms if role is not None and isinstance(role.perms, dict) else {}
+        return sum(1 for value in perms.values() if value is True)
+
+    return min(all_roles, key=granted)
+
+
 def render_sidebar(st: Any, config: Any) -> SidebarResult:
     audit = config.audit
     all_roles = get_role_names(config.custom_roles)
@@ -95,9 +112,10 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
     with st.sidebar:
         st.header(f"{config.icon} {config.title}".strip())
 
-        current_role = st.session_state.get("_radt_role", all_roles[0] if all_roles else "Admin")
+        default_role = _least_privileged_role(all_roles, config.custom_roles)
+        current_role = st.session_state.get("_radt_role", default_role)
         if current_role not in all_roles and all_roles:
-            current_role = all_roles[0]
+            current_role = default_role
             st.session_state["_radt_role"] = current_role
 
         forced_role, auth_error = _resolve_authenticated_role(config.auth_hook, all_roles)
@@ -134,20 +152,26 @@ def render_sidebar(st: Any, config: Any) -> SidebarResult:
             audit.log_role_switch(previous_role, new_role)
         st.session_state["_radt_previous_role"] = new_role
 
-        current_writable = bool(st.session_state.get("_radt_writable", True))
+        role_def = get_role(new_role, config.custom_roles)
+        perms = dict(role_def.perms) if role_def else {}
+        can_manage_freeze = has_perm(make_security_context(new_role, perms), "can_manage_freeze")
+        requested_writable = bool(st.session_state.get("_radt_writable", True))
+        previous_writable = bool(st.session_state.get("_radt_previous_writable", requested_writable))
+        if requested_writable != previous_writable and not can_manage_freeze:
+            # A disabled toggle cannot send a change; refuse a forged one.
+            st.session_state["_radt_writable"] = previous_writable
         writable = st.toggle(
             "Controls Writable",
-            value=current_writable,
             key="_radt_writable",
-            help="OFF freezes all controls at their current values.",
+            help="OFF freezes all controls at their current values."
+            + ("" if can_manage_freeze else " Changing it requires permission to manage the freeze."),
+            disabled=not can_manage_freeze,
+            **({"value": True} if "_radt_writable" not in st.session_state else {}),
         )
-        previous_writable = bool(st.session_state.get("_radt_previous_writable", current_writable))
         if writable != previous_writable:
             audit.log_freeze(writable, role=new_role)
         st.session_state["_radt_previous_writable"] = writable
 
-        role_def = get_role(new_role, config.custom_roles)
-        perms = dict(role_def.perms) if role_def else {}
         ctx = make_security_context(new_role, perms, controls_writable=writable)
 
         return _render_authorized_sidebar(st, config, ctx, all_roles)
@@ -395,12 +419,12 @@ def _save_ui_profile(st: Any, config: Any, ctx: SecurityContext, store: Any,
 
 def _read_profile_save_target(config: Any, ctx: SecurityContext, store: Any, name: str,
                               known_profiles: list[str]) -> dict | None:
-    errors_before = len(getattr(store, "read_errors", ()))
+    errors_before = store_read_error_total(store)
     saved = _profile_read(
         ctx, load_profile_data, name, profile_dir=config.profile_dir, store=store,
     )
     if saved is None and (
-        name in known_profiles or len(getattr(store, "read_errors", ())) > errors_before
+        name in known_profiles or store_read_error_total(store) > errors_before
     ):
         # An unreadable/disappearing record is not permission to overwrite it.
         raise _ProfileStorageFailure("UnreadableProfile")
@@ -557,55 +581,90 @@ def _render_profile_actions(
 
 
 
+_AUDIT_WRITER_KEY = "_radt_audit_writer"
+_AUDIT_PATH_KEY = "_radt_audit_path"
+# What this session's form showed after its last render. A toggle or path that
+# differs from it was changed by the operator; anything else is not a request.
+_AUDIT_WRITER_SEEN_KEY = "_radt_audit_writer_seen"
+_AUDIT_PATH_SEEN_KEY = "_radt_audit_path_seen"
+
+
 def _render_audit_writer_controls(st: Any, config: Any, ctx: SecurityContext) -> None:
+    """Show the writer's live state; change it only on an explicit request.
+
+    A render never starts or stops the writer by itself: not when the form is
+    hidden, not for a role that cannot manage it, and not because this
+    session's widget holds a stale value while another session (or the host)
+    changed the shared writer.
+    """
     audit = config.audit
     audit_root = Path(getattr(config, "audit_dir", "audit_logs"))
     default_audit_path = (audit_root / "audit.jsonl").as_posix()
-    can_manage_writer = can_mutate(ctx, "can_manage_audit")
-
-    writer_on = bool(st.session_state.get("_radt_audit_writer", False))
-    audit_path = str(st.session_state.get("_radt_audit_path", default_audit_path))
-    if section_visible(config, "audit_writer"):
-        st.divider()
-        st.subheader("Audit Logging")
-        writer_on = st.toggle(
-            "Write audit to JSONL",
-            key="_radt_audit_writer",
-            help="Writes audit events to disk in a background thread.",
-            disabled=not can_manage_writer,
-        )
-        audit_path = st.text_input(
-            "Audit file path",
-            key="_radt_audit_path",
-            disabled=not can_manage_writer,
-            **({"value": audit_path} if "_radt_audit_path" not in st.session_state else {}),
-        )
     lifecycle_error: dict[str, str] = {}
     startup_error: dict[str, str] = {}
-    try:
-        if can_mutate(ctx, "can_manage_audit"):
-            if writer_on and audit_path.strip():
-                try:
-                    safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)
-                except (OSError, ValueError, StorePathSecurityError):
-                    st.error(
-                        "Audit file path must stay within configured audit directory. "
-                        + diagnostic_text("RADT-AUDIT-IO")
-                    )
-                    audit.stop_writer()
+    if section_visible(config, "audit_writer"):
+        state = st.session_state
+        live_active = bool(audit.writer_status().get("writer_active"))
+        requested = state.get(_AUDIT_WRITER_KEY)
+        seen = state.get(_AUDIT_WRITER_SEEN_KEY, live_active)
+        audit_path = str(state.get(_AUDIT_PATH_KEY, default_audit_path))
+        seen_path = str(state.get(_AUDIT_PATH_SEEN_KEY, audit_path))
+        toggled = requested is not None and bool(requested) != bool(seen)
+        wants_on = bool(requested) if toggled else live_active
+        path_edited = wants_on and live_active and audit_path.strip() != seen_path.strip()
+        try:
+            if (toggled or path_edited) and can_mutate(ctx, "can_manage_audit"):
+                attribution = _ui_attribution(audit, ctx)
+                if not wants_on:
+                    audit.stop_writer(**attribution)
+                elif not audit_path.strip():
+                    st.warning("Enter an audit file path.")
                 else:
                     try:
-                        audit.start_writer(str(safe_path))
-                    except Exception as exc:
-                        startup_error = _get_writer_startup_error(exc)
-                        if not startup_error:
-                            raise
-            else:
-                audit.stop_writer()
-    except TimeoutError as exc:
-        lifecycle_error = _get_writer_shutdown_error(exc)
-        if not lifecycle_error:
-            raise
+                        safe_path = safe_store_write_path(Path(audit_path.strip()), root_dir=audit_root)
+                    except (OSError, ValueError, StorePathSecurityError):
+                        # Refuse the change; a running writer keeps running.
+                        st.error(
+                            "Audit file path must stay within configured audit directory. "
+                            + diagnostic_text("RADT-AUDIT-IO")
+                        )
+                    else:
+                        try:
+                            audit.start_writer(str(safe_path), **attribution)
+                        except Exception as exc:
+                            startup_error = _get_writer_startup_error(exc)
+                            if not startup_error:
+                                raise
+        except TimeoutError as exc:
+            lifecycle_error = _get_writer_shutdown_error(exc)
+            if not lifecycle_error:
+                raise
+
+        # Every role sees the live state, not what this session last chose.
+        # A failed start leaves ownership uncertain, so do not probe it.
+        live_status = {} if startup_error else audit.writer_status()
+        live_active = bool(live_status.get("writer_active"))
+        state[_AUDIT_WRITER_KEY] = live_active
+        state[_AUDIT_WRITER_SEEN_KEY] = live_active
+        state[_AUDIT_PATH_SEEN_KEY] = audit_path
+        can_manage_writer = can_mutate(ctx, "can_manage_audit")
+        st.divider()
+        st.subheader("Audit Logging")
+        st.toggle(
+            "Write audit to JSONL",
+            key=_AUDIT_WRITER_KEY,
+            help="Writes audit events to disk in a background thread. Shows the live writer state.",
+            disabled=not can_manage_writer,
+        )
+        st.text_input(
+            "Audit file path",
+            key=_AUDIT_PATH_KEY,
+            disabled=not can_manage_writer,
+            **({"value": audit_path} if _AUDIT_PATH_KEY not in state else {}),
+        )
+        live_path = str(live_status.get("writer_path") or "")
+        if live_active and live_path != str(Path(audit_path.strip())):
+            st.caption("The writer is running on a different file than the path shown.")
 
     writer_status = {} if startup_error else audit.writer_status()
     dropped_events = int(writer_status.get("dropped_events", 0) or 0)

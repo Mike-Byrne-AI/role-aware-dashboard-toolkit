@@ -24,7 +24,7 @@ def build_public_api_usage_recipe_lines() -> list[str]:
         "registry = radt.ControlRegistry()",
         'registry.register("Queue depth", kind="number", key="queue_depth", min_value=0, default=0)',
         'registry.register("Maintenance mode", kind="toggle", key="maintenance", default=False)',
-        "config = radt.DashboardConfig(registry=registry)",
+        'config = radt.DashboardConfig(auth_mode="demo", registry=registry)',
         "radt.render(config)",
         "```",
         "",

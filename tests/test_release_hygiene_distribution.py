@@ -128,6 +128,18 @@ def test_wheel_and_sdist_contain_only_the_public_oss_boundary(
     assert "schemas/run.schema.json" in sdist_members
 
 
+def test_wheel_metadata_carries_license_expression_and_typing_classifier(built_release_artifacts):
+    with zipfile.ZipFile(built_release_artifacts["wheel"]) as archive:
+        metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+        metadata = archive.read(metadata_name).decode("utf-8")
+    headers = [line for line in metadata.split("\n\n", 1)[0].splitlines()]
+    assert "License-Expression: MIT" in headers
+    assert "License-File: LICENSE" in headers
+    assert "Classifier: Typing :: Typed" in headers
+    assert not any(line.startswith("Classifier: License ::") for line in headers)
+    assert not any(line.startswith("License: ") for line in headers)
+
+
 def test_release_artifacts_do_not_embed_the_build_checkout_path(
     built_release_artifacts,
 ):
@@ -268,7 +280,7 @@ assert set(starter) == {"app.py", ".streamlit/config.toml", "AGENTS.md", "README
 assert 'auth_mode="authenticated"' in starter["app.py"]
 assert "access_cli grant" in read_guide("authentication")["content"]
 assert "header_down Set-Cookie" in read_guide("deployment")["content"]
-config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None)
+config = radt.DashboardConfig(icon="Core", layout="columns", run_store=None, auth_mode="demo")
 run = radt.build_run({"temperature": 0.2}, actor="wheel-smoke")
 packet = radt.build_run_packet(run)
 assert config.icon == "Core"

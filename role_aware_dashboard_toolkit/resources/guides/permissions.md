@@ -1,6 +1,8 @@
 # Preserve authority while customizing
 
-In demo mode the role selector is a local demonstration of authorization.
+In demo mode the role selector is a local demonstration of authorization. A
+new demo session starts in its least-privileged role (Viewer for the built-in
+roles), and only a role with `can_manage_freeze` can change Controls Writable.
 Shared apps should use `init my-dashboard --auth` and `guide authentication`:
 verified identity receives server-owned role grants and can select only assigned
 roles. Shared freeze is checked again at protected writes. The legacy
@@ -17,12 +19,14 @@ roles = {
          "can_save_profiles": True, "can_load_profiles": True},
     ),
 }
-config = radt.DashboardConfig(registry=registry, custom_roles=roles)
+config = radt.DashboardConfig(auth_mode="demo", registry=registry, custom_roles=roles)
 ```
 
 Custom definitions extend/override named built-in roles; they do not remove
 other built-ins. A custom permission is not automatically granted to Admin:
-define that grant explicitly when the application needs it.
+define that grant explicitly when the application needs it. Permission values
+must be `True` or `False`; other values raise `TypeError`, and only an explicit
+`True` grants.
 
 A registered control requires its declared permission and an enabled writable
 switch. Native profile loads and replays check every affected control before

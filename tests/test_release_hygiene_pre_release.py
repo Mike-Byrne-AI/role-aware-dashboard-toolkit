@@ -57,6 +57,40 @@ def test_changelog_gate_requires_exact_release_version_heading(monkeypatch, tmp_
     assert result["status"] == expected_status
 
 
+@pytest.mark.parametrize("unreleased,expected_status", [
+    (None, "pass"),
+    ("", "pass"),
+    ("### Added\n\n### Fixed\n", "pass"),
+    ("### Fixed\n\n- A fix that this release would ship.\n", "fail"),
+    ("A paragraph describing unreleased work.\n", "fail"),
+    ("* An asterisk bullet.\n", "fail"),
+])
+def test_release_gate_refuses_entries_left_under_unreleased(monkeypatch, tmp_path, unreleased, expected_status):
+    pre_release = load_pre_release_check_module()
+    section = "" if unreleased is None else f"## Unreleased\n\n{unreleased}\n"
+    (tmp_path / "CHANGELOG.md").write_text(
+        f"# Changelog\n\n{section}## 0.1.0 (2026-10-13)\n\n### Fixed\n\n- Shipped fix.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pre_release, "REPO_ROOT", tmp_path)
+
+    result = pre_release._check_changelog_unreleased()
+
+    assert result["id"] == "changelog_unreleased"
+    assert result["status"] == expected_status
+    if expected_status == "fail":
+        assert "Unreleased" in result["detail"]
+
+
+def test_unreleased_gate_runs_only_in_release_mode(monkeypatch):
+    pre_release = load_pre_release_check_module()
+    monkeypatch.setattr(pre_release, "_check_source_tree_clean", lambda: pre_release._record("source_tree_clean", "pass", "stub"))
+    development = {item["id"] for item in pre_release.build_report()["checks"]}
+    release = {item["id"] for item in pre_release.build_report(require_clean=True)["checks"]}
+    assert "changelog_unreleased" not in development
+    assert release - development == {"changelog_unreleased", "source_tree_clean"}
+
+
 def test_security_contact_helper_rejects_unrelated_contact_tokens():
     pre_release = load_pre_release_check_module()
 

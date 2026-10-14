@@ -19,6 +19,7 @@ from role_aware_dashboard_toolkit.appearance import (
 from role_aware_dashboard_toolkit.controls import ControlRegistry
 from role_aware_dashboard_toolkit.dashboard_panels import render_groups
 from role_aware_dashboard_toolkit.security import make_security_context
+from tests.demo_role_helpers import start_as_admin
 
 try:
     import tomllib
@@ -224,6 +225,7 @@ def _appearance_consumer(layout):
     registry.register("Maintenance", kind="toggle", key="maintenance", group="Safety",
                       default=False)
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, profile_store=radt.InMemoryProfileStore(), layout=layout,
         card_background_color="#DDEEFF", group_background_colors={"Safety": "#FFEEDD"},
     ))
@@ -232,7 +234,7 @@ def _appearance_consumer(layout):
 @pytest.mark.parametrize("layout", ["stacked", "columns"])
 def test_real_streamlit_styled_groups_keep_controls_working_across_reruns(layout):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_appearance_consumer, args=(layout,)).run()
+    app = start_as_admin(AppTest.from_function(_appearance_consumer, args=(layout,))).run()
     assert not app.exception, [item.message for item in app.exception]
     app.number_input(key="workers").set_value(24)
     app.toggle(key="maintenance").set_value(True)
@@ -256,6 +258,7 @@ def _plugin_group_consumer():
 
     plugins.register(radt.DashboardPlugin(name="group-provider", setup=setup))
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, plugins=plugins, profile_store=radt.InMemoryProfileStore(),
         group_background_colors={"Plugin group": "#DDEEFF"}))
     st.caption("Plugin setup complete")
@@ -263,7 +266,7 @@ def _plugin_group_consumer():
 
 def test_real_render_validates_group_names_after_plugin_registration():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_plugin_group_consumer).run()
+    app = start_as_admin(AppTest.from_function(_plugin_group_consumer)).run()
     assert not app.exception, [item.message for item in app.exception]
     assert app.text_input(key="plugin_status").value == "ready"
     assert any(item.value == "Plugin setup complete" for item in app.caption)
@@ -284,6 +287,7 @@ def _unsupported_style_consumer():
     import role_aware_dashboard_toolkit as radt
 
     config = radt.DashboardConfig(
+        auth_mode="demo",
         card_background_color="#112233", profile_store=radt.InMemoryProfileStore())
     original = st.container
 
@@ -299,7 +303,7 @@ def _unsupported_style_consumer():
 
 def test_unsupported_runtime_reports_configuration_error_before_sidebar_actions():
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_unsupported_style_consumer).run()
+    app = start_as_admin(AppTest.from_function(_unsupported_style_consumer)).run()
     assert len(app.exception) == 1
     assert "Streamlit >=1.39" in app.exception[0].message
     assert not app.button
@@ -373,6 +377,7 @@ def _plugin_control_lifecycle_consumer(styled):
     if "lifecycle_runs" not in st.session_state:
         st.session_state["lifecycle_runs"] = radt.InMemoryRunStore()
     radt.render(radt.DashboardConfig(
+        auth_mode="demo",
         registry=registry, plugins=plugins, profile_store=radt.InMemoryProfileStore(),
         run_store=st.session_state["lifecycle_runs"],
         group_background_colors={"Plugin group": "#DDEEFF"} if styled else None,
@@ -382,7 +387,7 @@ def _plugin_control_lifecycle_consumer(styled):
 @pytest.mark.parametrize("styled", [False, True])
 def test_plugin_registered_controls_survive_start_checkpoint_and_end_reruns(styled):
     AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
-    app = AppTest.from_function(_plugin_control_lifecycle_consumer, args=(styled,)).run()
+    app = start_as_admin(AppTest.from_function(_plugin_control_lifecycle_consumer, args=(styled,))).run()
     assert not app.exception, [item.message for item in app.exception]
 
     def set_values(workers):

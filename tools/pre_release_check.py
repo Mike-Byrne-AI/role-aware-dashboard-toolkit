@@ -73,7 +73,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-clean",
         action="store_true",
-        help="Fail unless the Git working tree contains no tracked or untracked changes.",
+        help=(
+            "Release mode: fail unless the Git working tree contains no tracked or untracked "
+            "changes and CHANGELOG.md holds no entries under Unreleased."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -103,6 +106,7 @@ def build_report(*, require_clean: bool = False) -> dict[str, Any]:
     ]
     if require_clean:
         checks.append(_check_source_tree_clean())
+        checks.append(_check_changelog_unreleased())
     status = _overall_status(checks)
     blocked = [item["id"] for item in checks if item["status"] == "blocked"]
     failures = [item["id"] for item in checks if item["status"] == "fail"]
@@ -149,6 +153,25 @@ def _check_changelog(radt: Any) -> dict[str, Any]:
     if version and re.search(heading_pattern, changelog, flags=re.MULTILINE):
         return _record("changelog_version", "pass", f"CHANGELOG.md has a release heading for {version}")
     return _record("changelog_version", "fail", f"CHANGELOG.md has no release heading for {version}")
+
+
+def _check_changelog_unreleased() -> dict[str, Any]:
+    # Anything still listed under Unreleased ships in this release unlabelled.
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    entries = []
+    inside = False
+    for line in changelog.splitlines():
+        if re.match(r"^##[ \t]", line):
+            inside = re.match(r"^##[ \t]+unreleased[ \t]*$", line, flags=re.IGNORECASE) is not None
+        elif inside and line.strip() and not line.lstrip().startswith("#"):
+            entries.append(line)
+    if not entries:
+        return _record("changelog_unreleased", "pass", "CHANGELOG.md has no entries under Unreleased")
+    return _record(
+        "changelog_unreleased", "fail",
+        f"CHANGELOG.md still lists {len(entries)} line(s) under Unreleased",
+        remediation="Move them under the dated release heading before building the release.",
+    )
 
 
 def _check_release_audit_doc(radt: Any) -> dict[str, Any]:

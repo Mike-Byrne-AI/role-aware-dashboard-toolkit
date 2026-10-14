@@ -8,13 +8,24 @@ and audit history. It uses the installed Role-Aware Dashboard Toolkit package.
 Install the toolkit's `workbench` extra in the environment that will run this
 dashboard. It applies the supported Streamlit and server dependency requirements.
 From this application directory, replace the example path below with the absolute
-path to your reviewed toolkit source checkout:
+path to your reviewed toolkit source checkout. In PowerShell on Windows:
 
 ```powershell
 python -m pip install "C:\path\to\role-aware-dashboard-toolkit[workbench]"
 python -m pip check
 python -m streamlit run app.py
 ```
+
+In bash or zsh on macOS or Linux:
+
+```bash
+python -m pip install "/path/to/role-aware-dashboard-toolkit[workbench]"
+python -m pip check
+python -m streamlit run app.py
+```
+
+`python` means the environment's interpreter; without an active environment,
+use its path (for example `.venv/bin/python` or `.\.venv\Scripts\python.exe`).
 
 Alternatively, pass the absolute filename of your reviewed local toolkit wheel
 with `[workbench]` appended to the same `pip install` command. Both forms apply
@@ -26,12 +37,15 @@ already exists.
 
 ## Try it
 
-1. Change Weekly target and Completion. The three summary values update.
+1. A new session starts as Viewer, which can only read. Select Admin in the
+   sidebar, then change Weekly target and Completion. The three summary
+   values update.
 2. Select Progress in the sidebar; change Chart color to recolor the chart.
 3. Switch to Planner. Planning controls remain editable; Intake open is locked.
-4. Turn Controls Writable off. All registered controls freeze.
-5. Switch back to Admin and turn writable on. Save a profile, change values,
-   then select and load that profile.
+4. Switch back to Admin, the role here that can change Controls Writable, and
+   turn it off. All registered controls freeze, for Admin too.
+5. Turn writable on again. Save a profile, change values, then select and load
+   that profile.
 6. To enable runs and checkpoints, change `runbook=False` to `runbook=True`
    in `build_dashboard_config()`, save the file and rerun.
 
@@ -57,7 +71,7 @@ does not automatically write these records to disk.
 Keep stable field keys when renaming labels. The chart color field affects the
 chart only. Group overrides use exact group names.
 
-```powershell
+```shell
 python -m role_aware_dashboard_toolkit guide
 python -m role_aware_dashboard_toolkit guide appearance
 python -m role_aware_dashboard_toolkit inspect --format json

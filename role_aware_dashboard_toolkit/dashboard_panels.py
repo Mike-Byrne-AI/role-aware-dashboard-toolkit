@@ -13,7 +13,7 @@ from ._optional_pandas import load_optional_pandas
 from ._record_projection import project_audit_events, project_record
 from ._ui_state import last_authorized_control_value, remember_authorized_control_values
 from .appearance import group_background_color, styled_group_container
-from .audit import audit_event_view
+from .audit import _ui_attribution, audit_event_view
 from .controls import ControlDef, _looks_like_hex_color, _looks_like_int, _numeric_bounds, _validate_numeric_configuration
 from .diagnostics import attach_diagnostic, diagnostic_text
 from .security import SecurityContext, can_write, can_mutate
@@ -92,7 +92,7 @@ def render_audit_panel(
                 disabled=not can_clear,
             )
             if clear_requested and can_mutate(ctx, "can_manage_audit"):
-                audit.clear()
+                audit.clear(**_ui_attribution(audit, ctx))
                 st.rerun()
             return
 
@@ -111,7 +111,7 @@ def render_audit_panel(
                 disabled=not can_clear,
             )
             if clear_requested and can_mutate(ctx, "can_manage_audit"):
-                audit.clear()
+                audit.clear(**_ui_attribution(audit, ctx))
                 st.rerun()
 
         source_events = project_audit_events(audit.all_events(), registry) if hasattr(audit, "all_events") else events
@@ -127,9 +127,10 @@ def render_audit_panel(
         else:
             # Mixed control kinds share these columns. Convert only display cells;
             # the audit records, replay preview, and exports keep their original types.
+            # The table's built-in CSV download exports these cells, so they get
+            # the same formula protection as the dedicated audit.csv view.
             display_events = [
-                {key: str(value) if key in {"old", "new"} and value is not None else value
-                 for key, value in event.items()}
+                {key: _timeline_cell(key, value) for key, value in event.items()}
                 for event in filtered
             ]
             radt = pandas.DataFrame(display_events)
@@ -162,26 +163,42 @@ def _spreadsheet_safe_audit_csv(events: list[dict[str, Any]]) -> str:
     CSV-reader compatibility. JSONL remains the lossless format and downstream
     re-export needs its own policy.
     """
-    def cell(value: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        probe = unicodedata.normalize("NFKC", value)
-        while probe and (probe[0].isspace() or unicodedata.category(probe[0]) in {"Cc", "Cf"}):
-            probe = probe[1:]
-        # Python 3.10's CSV reader rejects NULs even inside quoted fields.
-        # Inspect the original prefix first, preserving formula protection.
-        display = value.replace("\x00", "\\x00")
-        if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
-            return "'" + display
-        return display
-
     fields = list(dict.fromkeys(key for event in events for key in event))
     output = StringIO(newline="")
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
-    writer.writerow([cell(str(key)) for key in fields])
+    writer.writerow([_spreadsheet_safe_cell(str(key)) for key in fields])
     for event in events:
-        writer.writerow([cell(event.get(key)) for key in fields])
+        writer.writerow([_spreadsheet_safe_cell(event.get(key)) for key in fields])
     return output.getvalue()
+
+
+def _timeline_cell(key: str, value: Any) -> Any:
+    """One Timeline table cell, with the audit CSV's formula protection.
+
+    ``old`` and ``new`` hold mixed kinds and are shown as text. A number keeps
+    its plain text (-5, not '-5); text and every other value, including a host
+    object whose text starts like a formula, are protected.
+    """
+    if key in {"old", "new"} and value is not None and not isinstance(value, str):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        value = str(value)
+    return _spreadsheet_safe_cell(value)
+
+
+def _spreadsheet_safe_cell(value: Any) -> Any:
+    """Make formula-like text explicit text; leave other values unchanged."""
+    if not isinstance(value, str):
+        return value
+    probe = unicodedata.normalize("NFKC", value)
+    while probe and (probe[0].isspace() or unicodedata.category(probe[0]) in {"Cc", "Cf"}):
+        probe = probe[1:]
+    # Python 3.10's CSV reader rejects NULs even inside quoted fields.
+    # Inspect the original prefix first, preserving formula protection.
+    display = value.replace("\x00", "\\x00")
+    if probe.startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+        return "'" + display
+    return display
 
 
 def _sensitive_replacement(ctrl: ControlDef, value: str, registry: Any) -> Any:
@@ -412,7 +429,7 @@ def _record_control_change(st: Any, ctrl: ControlDef, ctx: SecurityContext, conf
         old_value,
         new_value,
         role=ctx.role,
-        sensitive=ctrl.sensitive,
+        sensitive=config.registry._audit_sensitivity(ctrl),
     )
     if ctrl.callback is not None:
         try:

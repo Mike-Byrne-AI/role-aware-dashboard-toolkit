@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from tests.demo_role_helpers import start_as_admin
 
 AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
 
@@ -33,6 +34,7 @@ def _consumer():
         roles["Blind operator"] = RoleDef(
             "Blind operator", {**roles["Operator"].perms, "can_view_metrics": False})
         st.session_state["config"] = radt.DashboardConfig(
+            auth_mode="demo",
             registry=reg, profile_store=store, run_store=radt.InMemoryRunStore(),
             custom_roles=roles, title="Lifecycle consumer",
             observability=radt.ObservabilityConfig(enabled=True))
@@ -58,7 +60,7 @@ def _consumer():
 
 @pytest.fixture
 def app():
-    return _healthy(AppTest.from_function(_consumer, default_timeout=15).run())
+    return _healthy(start_as_admin(AppTest.from_function(_consumer, default_timeout=15)).run())
 
 
 def _healthy(app):

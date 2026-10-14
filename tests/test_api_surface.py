@@ -199,7 +199,7 @@ def test_api_preserves_caller_provided_empty_audit(api_registry):
         allow_anonymous=True,
         anonymous_role="Admin",
     )
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
     response = client.patch("/controls", json={"values": {"temp": 1.2}})
 
@@ -357,9 +357,10 @@ def test_api_profile_activation_returns_applied_sanitized_state(api_registry, mo
     monkeypatch.delenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", raising=False)
     monkeypatch.delenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_ALLOW_ANONYMOUS", raising=False)
     app = create_app(api_registry, profile_store=store, allow_anonymous=True, anonymous_role="Admin")
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
-    activated = client.post("/profiles/unsafe/activate")
+    # Anonymous state changes must be non-simple requests (cross-site guard).
+    activated = client.post("/profiles/unsafe/activate", headers={"Content-Type": "application/json"})
     assert activated.status_code == 200
     payload = activated.json()
     assert payload["profile_id"] == "unsafe"
@@ -471,7 +472,7 @@ def test_api_profile_activation_checks_controls_changed_only_by_sanitization(mon
 
 
 @requires_fastapi
-def test_api_control_update_reports_sanitized_stored_value(api_registry, monkeypatch):
+def test_api_control_update_refuses_out_of_range_value(api_registry, monkeypatch):
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("ROLE_AWARE_DASHBOARD_TOOLKIT_API_KEY", "secret-key")
@@ -480,16 +481,21 @@ def test_api_control_update_reports_sanitized_stored_value(api_registry, monkeyp
     client = TestClient(app)
     headers = {"X-API-Key": "secret-key"}
 
-    updated = client.patch("/controls", json={"values": {"temp": 99.0}}, headers=headers)
+    refused = client.patch("/controls", json={"values": {"temp": 99.0}}, headers=headers)
+
+    assert refused.status_code == 422
+    assert refused.json() == {
+        "detail": "Control 'temp' needs a number from 0 to 2. Nothing was changed.",
+    }
+    assert client.get("/controls/temp", headers=headers).json()["value"] == 0.5
+    assert client.get("/audit", headers=headers).json() == []
+
+    updated = client.patch("/controls", json={"values": {"temp": 2.0}}, headers=headers)
 
     assert updated.status_code == 200
     assert updated.json()[0]["value"] == 2.0
-    current = client.get("/controls/temp", headers=headers)
-    assert current.status_code == 200
-    assert current.json()["value"] == 2.0
-    audit_response = client.get("/audit", headers=headers)
-    assert audit_response.status_code == 200
-    control_events = [event for event in audit_response.json() if event["type"] == "control_change"]
+    control_events = [event for event in client.get("/audit", headers=headers).json()
+                      if event["type"] == "control_change"]
     assert control_events[-1]["old"] == 0.5
     assert control_events[-1]["new"] == 2.0
 
@@ -515,7 +521,7 @@ def test_api_numeric_update_cannot_store_or_emit_nonfinite_values(api_registry, 
         allow_anonymous=True,
         anonymous_role="Admin",
     )
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://localhost")
 
     updated = client.patch(
         "/controls",
@@ -525,7 +531,7 @@ def test_api_numeric_update_cannot_store_or_emit_nonfinite_values(api_registry, 
     current = client.get("/controls/temp")
     audit_response = client.get("/audit")
 
-    assert updated.status_code == 200
+    assert updated.status_code == 422
     assert current.status_code == 200
     assert audit_response.status_code == 200
 
@@ -539,20 +545,14 @@ def test_api_numeric_update_cannot_store_or_emit_nonfinite_values(api_registry, 
         )
         for response in responses
     ]
-    assert decoded[0][0]["value"] == 0.5
+    # "NaN" and "Infinity" strings are not JSON numbers; 1e9999 parses as infinity.
+    assert decoded[0]["detail"] in {
+        "Control 'temp' needs a number. Nothing was changed.",
+        "Control 'temp' needs a finite number. Nothing was changed.",
+    }
     assert decoded[1]["value"] == 0.5
-    event = decoded[2][-1]
-    assert event["old"] == 0.5
-    assert event["new"] == 0.5
-    assert all(
-        math.isfinite(value)
-        for value in (
-            decoded[0][0]["value"],
-            decoded[1]["value"],
-            event["old"],
-            event["new"],
-        )
-    )
+    assert math.isfinite(decoded[1]["value"])
+    assert decoded[2] == []
 
 
 @requires_fastapi
@@ -568,7 +568,7 @@ def test_api_control_batch_update_is_atomic_on_unknown_key(api_registry, monkeyp
     audit_before = client.get("/audit", headers=headers)
     assert audit_before.status_code == 200
 
-    failed = client.patch("/controls", json={"values": {"temp": 99.0, "unknown": "boom"}}, headers=headers)
+    failed = client.patch("/controls", json={"values": {"temp": 1.5, "unknown": "boom"}}, headers=headers)
 
     assert failed.status_code == 404
     assert failed.json() == {"detail": "Control 'unknown' not found"}
@@ -722,7 +722,7 @@ def test_api_profile_store_takes_precedence_over_profile_dir(api_registry, monke
             allow_anonymous=True,
             anonymous_role="Admin",
         )
-        client = TestClient(app)
+        client = TestClient(app, base_url="http://localhost")
 
         saved = client.post(
             "/profiles",

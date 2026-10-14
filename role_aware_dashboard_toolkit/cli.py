@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import stat
 import sys
 from typing import Any, Sequence
@@ -13,7 +15,23 @@ from .guidance import inspect_capabilities, list_guide_topics, read_guide, read_
 from .version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 
 _COMMAND = "python -m role_aware_dashboard_toolkit"
-_RUN_COMMAND = "python -m streamlit run app.py --server.address 127.0.0.1"
+_RUN_ARGUMENTS = "-m streamlit run app.py --server.address 127.0.0.1"
+
+
+def _run_command(executable: str | None = None, *, windows: bool | None = None) -> str:
+    """Name the interpreter that ran this command, quoted for the local shell.
+
+    A bare ``python`` is absent on many macOS and Linux hosts and may name a
+    different environment. Windows output targets PowerShell, the documented shell.
+    """
+    executable = sys.executable if executable is None else executable
+    if not executable:
+        return f"python {_RUN_ARGUMENTS}"
+    if os.name == "nt" if windows is None else windows:
+        if re.fullmatch(r"[A-Za-z0-9_.:\\/-]+", executable):
+            return f"{executable} {_RUN_ARGUMENTS}"
+        return "& '" + executable.replace("'", "''") + f"' {_RUN_ARGUMENTS}"
+    return f"{shlex.quote(executable)} {_RUN_ARGUMENTS}"
 
 
 class _CommandError(Exception):
@@ -112,7 +130,7 @@ def initialize_project(destination: str, *, dry_run: bool = False,
     path = _new_destination(destination)
     contents = read_starter(authenticated=authenticated)
     result = {"destination": str(path), "dry_run": bool(dry_run), "files": list(contents),
-              "created_files": [], "run_command": _RUN_COMMAND,
+              "created_files": [], "run_command": _run_command(),
               "auth_mode": "authenticated" if authenticated else "demo",
               "setup_required": bool(authenticated)}
     if authenticated:
@@ -198,7 +216,8 @@ def _render_text(command: str, result: dict[str, Any]) -> str:
         return output + (
             "\n\nLocal demo: self-selected roles do not authenticate users.\n"
             "For a shared dashboard, create a new project with init --auth.\n"
-            f"\nFrom the generated directory, run:\n{result['run_command']}"
+            "\nFrom the generated directory, run it with this Python environment, which needs\n"
+            f"the toolkit's workbench extra:\n{result['run_command']}"
         )
     return json.dumps(result, indent=2, ensure_ascii=True)
 

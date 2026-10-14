@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import errno
 import hashlib
 import json
@@ -7,6 +8,8 @@ import logging
 import os
 import stat
 import tempfile
+import threading
+import time
 import warnings
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,17 @@ _STORE_RECORD_CREATE_FLAGS = (
     _STORE_RECORD_APPEND_FLAGS | os.O_CREAT | os.O_EXCL
 )
 _STORE_RECORD_READ_CHUNK_BYTES = 64 * 1024
+# A concurrent replace between probe and open is retried this many times in all.
+_STORE_RECORD_READ_ATTEMPTS = 3
+_STORE_TEMP_PREFIX = ".radt-record-"
+_STORE_TEMP_SUFFIX = ".tmp"
+# A temp file this old cannot belong to a write still in progress: a crashed
+# writer left it, with a full record inside.
+_STALE_TEMP_AGE_SECONDS = 15 * 60
+# Sweep a directory at most this often per process; a sweep lists the directory.
+_TEMP_SWEEP_INTERVAL_SECONDS = 5 * 60
+_TEMP_SWEEP_LAST_RUN: dict[str, float] = {}
+_TEMP_SWEEP_LOCK = threading.Lock()
 _STORE_FILENAME_MAX_BYTES = 255
 _STORE_RECORD_CHANGED_MESSAGE = "store record changed between validation and read"
 _STORE_RECORD_APPEND_CHANGED_MESSAGE = (
@@ -46,22 +60,114 @@ _STORE_RECORD_UNSAFE_MESSAGE = (
 _STORE_RECORD_APPEND_UNSAFE_MESSAGE = (
     "store append target must be a single-link regular file"
 )
+_STORE_RECORD_ID_MISMATCH_MESSAGE = "store record id does not match its file"
+_STORE_RECORD_ID_CONFLICT_MESSAGE = "store record file holds a different record id"
 
 
 class StorePathSecurityError(Exception):
     """Raised when a store path fails boundary or file-identity checks."""
 
 
+# A long-lived store re-reports the same unreadable record on every listing.
+# Keep the newest errors only; count every one so callers can still detect an
+# error added by a single read.
+_READ_ERRORS_RETAINED = 200
+
+
+class _ReadErrorLog(collections.deque):
+    """Newest store read errors, bounded, with a total of every error recorded.
+
+    Every way of adding an error counts it. A copy (``copy.copy``,
+    ``deepcopy``, ``.copy()``, ``+``) or pickle keeps the total rather than
+    recounting the retained errors.
+    """
+
+    def __init__(self, iterable: Iterable[StoreReadError] = (), maxlen: int | None = _READ_ERRORS_RETAINED) -> None:
+        super().__init__(maxlen=maxlen)
+        self.total = 0
+        for item in iterable:
+            self.append(item)
+
+    def append(self, item: StoreReadError) -> None:
+        self.total += 1
+        super().append(item)
+
+    def appendleft(self, item: StoreReadError) -> None:
+        self.total += 1
+        super().appendleft(item)
+
+    def extend(self, items: Iterable[StoreReadError]) -> None:
+        for item in items:
+            self.append(item)
+
+    def extendleft(self, items: Iterable[StoreReadError]) -> None:
+        for item in items:
+            self.appendleft(item)
+
+    def insert(self, index: int, item: StoreReadError) -> None:
+        super().insert(index, item)
+        self.total += 1
+
+    def __iadd__(self, items: Iterable[StoreReadError]) -> _ReadErrorLog:  # type: ignore[override]
+        self.extend(items)
+        return self
+
+    def __copy__(self) -> _ReadErrorLog:
+        # deque's own copy re-appends every retained error through __init__.
+        return _restore_read_error_log(list(self), self.maxlen, self.total)
+
+    copy = __copy__
+
+    def __add__(self, items: Iterable[StoreReadError]) -> _ReadErrorLog:  # type: ignore[override]
+        combined = self.__copy__()
+        combined.extend(items)
+        return combined
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (_restore_read_error_log, (list(self), self.maxlen, self.total))
+
+
+def _restore_read_error_log(
+    items: list[StoreReadError], maxlen: int | None, total: int,
+) -> _ReadErrorLog:
+    log = _ReadErrorLog(maxlen=maxlen)
+    collections.deque.extend(log, items)  # already counted in ``total``
+    log.total = total
+    return log
+
+
 class StoreReadDiagnosticsMixin:
     def _init_read_diagnostics(self) -> None:
-        self._read_errors: list[StoreReadError] = []
+        self._read_errors: MutableSequence[StoreReadError] = _ReadErrorLog()
 
     @property
     def read_errors(self) -> list[StoreReadError]:
+        """The newest read errors (at most ``_READ_ERRORS_RETAINED``)."""
         return list(self._read_errors)
+
+    @property
+    def read_error_count(self) -> int:
+        """Every read error recorded by this store; ``clear_read_errors`` keeps it.
+
+        Compare it before and after an operation to detect errors that
+        operation added; ``len(read_errors)`` stops growing once full.
+        """
+        return int(getattr(self._read_errors, "total", len(self._read_errors)))
 
     def clear_read_errors(self) -> None:
         self._read_errors.clear()
+
+
+def store_read_error_total(store: Any) -> int:
+    """Monotonic read-error count for any store, for before/after comparisons.
+
+    Uses ``read_error_count`` when the store has it, else ``len(read_errors)``
+    (custom stores that keep an unbounded list).
+    """
+    count = getattr(store, "read_error_count", None)
+    if isinstance(count, int) and not isinstance(count, bool):
+        return count
+    return len(getattr(store, "read_errors", ()) or ())
 
 
 def _directory_enumeration_error_message(exc: OSError | ValueError | RuntimeError) -> str:
@@ -161,20 +267,33 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
     def _save_record(self, record: dict[str, Any], record_id: str | None = None) -> str:
         resolved_id = self._default_record_id(record_id) if record_id is not None else self._record_id_from_payload(record)
         path = self._path_for_write(resolved_id)
-        atomic_write_json_record(path, {**record, self._record_id_field: resolved_id}, root_dir=self._record_store_root())
+        root = self._record_store_root()
+        _refuse_foreign_record_overwrite(path, self._record_id_field, resolved_id, root_dir=root)
+        atomic_write_json_record(path, {**record, self._record_id_field: resolved_id}, root_dir=root)
         return str(path)
 
     def _load_record(self, record_id: str) -> dict[str, Any] | None:
         path = self._resolve_record_path(record_id, diagnose_read_errors=True)
         if path is None:
             return None
-        return self._read_path(path)
+        record = self._read_path(path)
+        if record is not None and record[self._record_id_field] != canonical_store_id(record_id):
+            # A wrong-backup copy or a filename-digest collision: the file at
+            # this id's path belongs to another record.
+            self._read_errors.append(build_read_error(
+                path, StorePathSecurityError(_STORE_RECORD_ID_MISMATCH_MESSAGE),
+                root_dir=self._record_store_root(),
+            ))
+            return None
+        return record
 
     def _delete_record(self, record_id: str) -> bool:
         path = self._resolve_record_path(record_id)
         if path is None:
             return False
-        return safe_delete_store_record(path, root_dir=self._record_store_root())
+        root = self._record_store_root()
+        _refuse_foreign_record_overwrite(path, self._record_id_field, canonical_store_id(record_id), root_dir=root)
+        return safe_delete_store_record(path, root_dir=root)
 
     def _list_record_items(self) -> list[tuple[Path, dict[str, Any]]]:
         root = self._record_store_root()
@@ -239,6 +358,12 @@ class _JsonRecordFileStoreMixin(StoreReadDiagnosticsMixin):
             except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
                 self._read_errors.append(build_read_error(path, exc, root_dir=self._record_store_root()))
                 return None
+            if not _is_record_file_name_for(path, record[self._record_id_field]):
+                self._read_errors.append(build_read_error(
+                    path, StorePathSecurityError(_STORE_RECORD_ID_MISMATCH_MESSAGE),
+                    root_dir=self._record_store_root(),
+                ))
+                return None
         return record
 
 
@@ -253,6 +378,7 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
         store_root = self._collection_store_root()
         target_dir = store_root / subdir
         path = _record_file_path(target_dir, object_id)
+        _refuse_foreign_record_overwrite(path, id_key, object_id, root_dir=store_root)
         atomic_write_json_record(path, {**record, id_key: object_id}, root_dir=store_root)
         return str(path)
 
@@ -287,10 +413,44 @@ class _JsonCollectionFileStoreMixin(StoreReadDiagnosticsMixin):
                 except (OSError, ValueError, RuntimeError, StorePathSecurityError) as exc:
                     self._read_errors.append(build_read_error(path, exc, root_dir=store_root))
                     continue
+                # Collections list manually added files under any name and have
+                # no read by id, so a file's name is not checked against its id.
             if any(value and str(loaded.get(key) or "") != str(value) for key, value in filters.items()):
                 continue
             rows.append(loaded)
         return rows
+
+
+def _is_record_file_name_for(path: Path, identifier: str) -> bool:
+    """True when ``path`` is a filename the store would use for ``identifier``.
+
+    Both the bounded name and an exact legacy (unbounded) name are accepted.
+    """
+    return path.name in {
+        f"{hashed_store_filename(identifier)}.json",
+        f"{_unbounded_hashed_store_filename(identifier)}.json",
+    }
+
+
+def _refuse_foreign_record_overwrite(
+    path: Path, id_field: str, identifier: str, *, root_dir: Path,
+) -> None:
+    """Refuse to replace a readable record that belongs to another id.
+
+    A filename-digest collision or a misplaced copy must not let one record's
+    save destroy another. Missing or unreadable targets keep the existing
+    write behaviour.
+    """
+    try:
+        if not path.is_file():
+            return
+    except OSError:
+        return
+    existing = read_json_record(path, None, root_dir=root_dir)
+    if existing is None:
+        return
+    if canonical_store_id(existing.get(id_field)) != canonical_store_id(identifier):
+        raise StorePathSecurityError(_STORE_RECORD_ID_CONFLICT_MESSAGE)
 
 
 def read_json_record(
@@ -328,42 +488,56 @@ def read_text_record(
     *,
     root_dir: Path | None = None,
 ) -> str | None:
-    expected_stat = _probe_safe_store_read_file(path, root_dir=root_dir, errors=errors)
-    if expected_stat is None:
-        return None
-    try:
-        return _read_validated_store_text(path, expected_stat)
-    except FileNotFoundError:
+    # Another writer's atomic replace between the safety probe and the open
+    # changes the file's identity. That is a newer version, not a missing or
+    # unsafe record: validate the new file from scratch and read it. Only a
+    # record that keeps changing is diagnosed.
+    for attempt in range(_STORE_RECORD_READ_ATTEMPTS):
+        final_attempt = attempt == _STORE_RECORD_READ_ATTEMPTS - 1
+        expected_stat = _probe_safe_store_read_file(path, root_dir=root_dir, errors=errors)
+        if expected_stat is None:
+            return None
         try:
-            path.stat(follow_symlinks=False)
+            return _read_validated_store_text(path, expected_stat)
         except FileNotFoundError:
-            parent_error = _missing_path_parent_error(path)
-            if parent_error is not None and errors is not None:
-                errors.append(build_read_error(path, parent_error, root_dir=root_dir))
-            return None
-        except (OSError, ValueError, RuntimeError) as probe_exc:
+            try:
+                path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                parent_error = _missing_path_parent_error(path)
+                if parent_error is not None and errors is not None:
+                    errors.append(build_read_error(path, parent_error, root_dir=root_dir))
+                return None
+            except (OSError, ValueError, RuntimeError) as probe_exc:
+                if errors is not None:
+                    errors.append(build_read_error(path, probe_exc, root_dir=root_dir))
+                return None
+            if not final_attempt:
+                continue
             if errors is not None:
-                errors.append(build_read_error(path, probe_exc, root_dir=root_dir))
-            return None
-        if errors is not None:
-            errors.append(
-                build_read_error(
-                    path,
-                    StorePathSecurityError(_STORE_RECORD_CHANGED_MESSAGE),
-                    root_dir=root_dir,
+                errors.append(
+                    build_read_error(
+                        path,
+                        StorePathSecurityError(_STORE_RECORD_CHANGED_MESSAGE),
+                        root_dir=root_dir,
+                    )
                 )
-            )
-        return None
-    except (
-        OSError,
-        RuntimeError,
-        TypeError,
-        ValueError,
-        StorePathSecurityError,
-    ) as exc:
-        if errors is not None:
-            errors.append(build_read_error(path, exc, root_dir=root_dir))
-        return None
+            return None
+        except StorePathSecurityError as exc:
+            if not final_attempt and exc.args == (_STORE_RECORD_CHANGED_MESSAGE,):
+                continue
+            if errors is not None:
+                errors.append(build_read_error(path, exc, root_dir=root_dir))
+            return None
+        except (
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            if errors is not None:
+                errors.append(build_read_error(path, exc, root_dir=root_dir))
+            return None
+    return None
 
 
 def append_text_record(
@@ -393,18 +567,27 @@ def atomic_write_json_record(path: Path, value: dict[str, Any], *, root_dir: Pat
 def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = None) -> Path:
     target = _resolve_safe_store_write_path(path, root_dir=root_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = _existing_record_mode(target)
 
     fd, tmp_name = tempfile.mkstemp(
         # The temporary name needs its own budget: a valid final filename can
         # already occupy the filesystem's entire component length allowance.
-        prefix=".radt-record-",
-        suffix=".tmp",
+        prefix=_STORE_TEMP_PREFIX,
+        suffix=_STORE_TEMP_SUFFIX,
         dir=str(target.parent),
     )
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            if existing_mode is not None:
+                # Keep the read access an operator set; mkstemp's 0600 is for
+                # new records. Group and other write bits are never kept, as
+                # 0.1.0 never kept them: another account could rewrite it.
+                os.fchmod(handle.fileno(), existing_mode & ~0o022)
+            # The new contents must be durable before the rename publishes them.
+            os.fsync(handle.fileno())
         os.replace(tmp_path, target)
     except Exception as write_exc:
         try:
@@ -423,7 +606,72 @@ def atomic_write_text_record(path: Path, text: str, *, root_dir: Path | None = N
                 stacklevel=2,
             )
         raise
+    _fsync_directory(target.parent)
+    _sweep_stale_store_temps(target.parent)
     return target
+
+
+def _existing_record_mode(target: Path) -> int | None:
+    """Permission bits of the record being replaced (POSIX), else None."""
+    if os.name == "nt" or not hasattr(os, "fchmod"):
+        return None
+    try:
+        target_stat = target.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    if not stat.S_ISREG(target_stat.st_mode):
+        return None
+    return stat.S_IMODE(target_stat.st_mode) & 0o777
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Make a rename durable where the platform supports a directory fsync."""
+    if os.name == "nt":
+        return
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        # Some filesystems reject a directory fsync; the record is written.
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def _sweep_stale_store_temps(directory: Path) -> None:
+    """Best-effort removal of this store's own crash-orphaned temp files.
+
+    Only regular files named ``.radt-record-*.tmp`` and older than
+    ``_STALE_TEMP_AGE_SECONDS`` are removed; links and other names are left.
+    """
+    key = str(directory)
+    now = time.monotonic()
+    with _TEMP_SWEEP_LOCK:
+        last = _TEMP_SWEEP_LAST_RUN.get(key)
+        if last is not None and now - last < _TEMP_SWEEP_INTERVAL_SECONDS:
+            return
+        _TEMP_SWEEP_LAST_RUN[key] = now
+    cutoff = time.time() - _STALE_TEMP_AGE_SECONDS
+    try:
+        entries = os.scandir(directory)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            name = entry.name
+            if not (name.startswith(_STORE_TEMP_PREFIX) and name.endswith(_STORE_TEMP_SUFFIX)):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                    continue
+                os.unlink(entry.path)
+            except OSError:
+                continue
 
 
 def safe_delete_store_record(path: Path, *, root_dir: Path | None = None) -> bool:
@@ -703,6 +951,12 @@ def _append_validated_store_text(
             raise StorePathSecurityError(_STORE_RECORD_APPEND_CHANGED_MESSAGE)
 
         payload = text.replace("\n", os.linesep).encode("utf-8")
+        if not _store_file_ends_at_line_boundary(path, opened_stat):
+            # A failed short write or a crash left a torn last line. Start
+            # this record on its own line so it stays readable; the torn line
+            # remains for read diagnostics. Truncating it instead could drop
+            # another appender's complete line written after it.
+            payload = os.linesep.encode("utf-8") + payload
         _write_all_store_bytes(fd, payload)
     except BaseException as exc:
         primary_error = exc
@@ -710,6 +964,35 @@ def _append_validated_store_text(
     finally:
         if fd is not None:
             _close_store_record_descriptor(fd, primary_error)
+
+
+def _store_file_ends_at_line_boundary(path: Path, opened_stat: os.stat_result) -> bool:
+    """Report whether an append target is empty or ends with a newline.
+
+    Reads the last byte through a separate read-only descriptor of the same
+    file. When the tail cannot be read (for example a write-only file), keep
+    the previous behaviour and append without a separator.
+    """
+    if opened_stat.st_size <= 0:
+        return True
+    fd: int | None = None
+    try:
+        fd = os.open(path, _STORE_RECORD_OPEN_FLAGS)
+        tail_stat = os.fstat(fd)
+        if not _same_stable_store_file_identity(opened_stat, tail_stat):
+            return True
+        if tail_stat.st_size <= 0:
+            return True
+        os.lseek(fd, -1, os.SEEK_END)
+        return os.read(fd, 1) == b"\n"
+    except OSError:
+        return True
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _write_all_store_bytes(fd: int, payload: bytes) -> None:
@@ -790,4 +1073,5 @@ __all__ = [
     "safe_store_filename",
     "safe_store_write_path",
     "sorted_store_ids",
+    "store_read_error_total",
 ]
