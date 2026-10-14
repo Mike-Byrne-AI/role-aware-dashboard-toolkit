@@ -198,7 +198,7 @@ def test_path_edit_moves_an_active_writer_and_a_bad_path_keeps_it(tmp_path):
     try:
         fake_st.session_state["_radt_audit_path"] = str(second)
         _render_audit_writer_controls(fake_st, config, ctx)
-        assert audit.writer_status()["writer_path"] == str(second)
+        assert audit.writer_status()["writer_path"] == str(second), fake_st.messages
 
         fake_st.session_state["_radt_audit_path"] = str(tmp_path / "outside.jsonl")
         _render_audit_writer_controls(fake_st, config, ctx)
@@ -381,9 +381,10 @@ def test_a_stop_that_times_out_is_recorded_and_reaches_the_file_once(tmp_path, m
 
     stops = [event for event in audit.all_events() if event["type"] == "audit_writer_stop"]
     assert len(stops) == 1
-    assert "timed out" in stops[0]["detail"]
+    assert stops[0]["detail"].startswith("stop requested:")
     assert stops[0]["role"] == "Admin" and stops[0]["source"] == "ui"
     assert str(tmp_path) not in stops[0]["detail"]
+    assert audit.writer_status()["last_writer_error"]["error_type"] == "TimeoutError"
 
     release.set()
     assert _wait_for(lambda: not audit.writer_status()["writer_active"])
@@ -391,4 +392,4 @@ def test_a_stop_that_times_out_is_recorded_and_reaches_the_file_once(tmp_path, m
 
     assert [event["type"] for event in audit.all_events()].count("audit_writer_stop") == 1
     assert _types(path) == ["audit_writer_start", "queued", "audit_writer_stop"]
-    assert "timed out" in _disk(path)[-1]["detail"]
+    assert _disk(path)[-1] == stops[0]

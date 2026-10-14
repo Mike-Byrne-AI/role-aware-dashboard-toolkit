@@ -1597,7 +1597,7 @@ def test_stop_writer_timeout_retains_live_state_and_records_error(tmp_path):
     # The stop is recorded in the view; the live thread still owns the file.
     (stop,) = audit.all_events()
     assert stop["type"] == "audit_writer_stop"
-    assert stop["detail"].startswith("timed out after 3 seconds")
+    assert stop["detail"].startswith("stop requested:")
     assert writer_store.events == []
     audit.log("after_stop_timeout")
     assert [event["type"] for event in audit.all_events()] == ["audit_writer_stop", "after_stop_timeout"]
@@ -1666,13 +1666,15 @@ def test_stop_writer_can_reap_after_prior_timeout(tmp_path):
 
     with pytest.raises(TimeoutError):
         audit.stop_writer()
+    # Finish the controllable thread's work before simulating its exit.
+    audit._writer_loop()
     writer_thread.alive = False
 
     audit.stop_writer()
 
-    # The reaping stop appends the timed-out stop record once, and adds none.
+    # The worker appends the stop request once; the reaping stop adds none.
     assert [event["type"] for event in writer_store.events] == ["audit_writer_stop"]
-    assert writer_store.events[0]["detail"].startswith("timed out")
+    assert writer_store.events[0]["detail"].startswith("stop requested:")
     assert [event["type"] for event in audit.all_events()] == ["audit_writer_stop"]
 
     status = audit.writer_status()

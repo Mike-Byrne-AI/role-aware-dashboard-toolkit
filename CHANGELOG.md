@@ -12,9 +12,11 @@ changes.
   or moves it, and the toggle shows the live state to every role.
 - Starting or stopping the audit writer and `AuditLog.clear()` record
   `audit_writer_start`, `audit_writer_stop` and `audit_cleared` events; an
-  identity-bound audit view pins its actor on them. A stop that times out
-  records its `audit_writer_stop` (detail "timed out ...") before raising,
-  and the stop that finds the writer ended appends it to the file.
+  identity-bound audit view pins its actor on them. `audit_writer_stop`
+  records a stop request (detail "stop requested ..."); the worker appends
+  it after draining queued events, within the shutdown timeout. A timeout
+  retains the worker and reports an error; retries keep the original request
+  and actor without appending a duplicate.
 - The audit Timeline table and its CSV download get the audit CSV's formula
   protection.
 - Path redaction runs in linear time and scans at most 1 MiB of a string;
@@ -140,6 +142,8 @@ changes.
 
 ### Fixed
 
+- API text-control writes preserve large JSON integers as exact strings
+  instead of raising an overflow error.
 - An audit writer still running at exit is drained (three-second cap) and
   records its stop; a dropped `AuditLog` stops its writer thread.
 - An audit append after a torn line starts on a new line.

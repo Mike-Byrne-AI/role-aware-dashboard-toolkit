@@ -184,6 +184,7 @@ def _run_writer_loop(
     queue_ref: queue.Queue,
     store: BaseAuditStore,
     stop_event: threading.Event,
+    stop_record: dict[str, Any],
 ) -> None:
     """Persist queued events until stopped and drained.
 
@@ -197,13 +198,21 @@ def _run_writer_loop(
             if stop_event.is_set():
                 break
             continue
-        try:
-            store.append(item)
-        except Exception as exc:
-            owner = owner_ref()
-            if owner is not None:
-                owner._record_writer_error(exc)
-            del owner
+        _append_writer_event(owner_ref, store, item)
+    if stop_record:
+        # The request is published before stop_event is set, independently of
+        # the bounded queue. Persist it last, within the caller's timed join.
+        _append_writer_event(owner_ref, store, stop_record)
+
+
+def _append_writer_event(owner_ref: Any, store: BaseAuditStore, event: Any) -> None:
+    try:
+        store.append(event)
+    except Exception as exc:
+        owner = owner_ref()
+        if owner is not None:
+            owner._record_writer_error(exc)
+        del owner
 
 
 def _abandon_writer(stop_event: threading.Event, exit_hook: Any) -> None:
@@ -308,8 +317,9 @@ class AuditLog:
         self._writer_path: str | None = None
         self._writer_exit_hook: Any = None
         self._writer_finalizer: weakref.finalize | None = None
-        # A stop that timed out: its record, for the file once the thread ends.
-        self._writer_stop_record: dict[str, Any] | None = None
+        # Filled before setting the stop event, then immutable until this
+        # writer exits. Its worker appends it after draining the event queue.
+        self._writer_stop_record: dict[str, Any] = {}
         # Control keys the host declared not secret (log_control_change with
         # sensitive=False). Redaction takes them as an argument, never from an
         # event's own fields.
@@ -603,7 +613,7 @@ class AuditLog:
                 writer_queue = queue.Queue(maxsize=queue_size)
                 writer_thread = threading.Thread(
                     target=_run_writer_loop,
-                    args=(weakref.ref(self), writer_queue, writer_store, self._writer_stop),
+                    args=(weakref.ref(self), writer_queue, writer_store, self._writer_stop, self._writer_stop_record),
                     name="radt-audit-writer",
                     daemon=True,
                 )
@@ -650,11 +660,12 @@ class AuditLog:
         user_id: str = "",
         session_id: str = "",
     ) -> None:
-        """Drain and stop the writer, then record an ``audit_writer_stop`` event.
+        """Record a stop request, then drain and stop the writer within its timeout.
 
-        The stop event is recorded only once the writer has drained and
-        stopped; it is appended to the same file as the last line. Stopping
-        when no writer runs records nothing.
+        The worker appends ``audit_writer_stop`` as its final line. A timeout
+        keeps ownership of that worker; a retry waits for the same request,
+        without duplicating the event or changing its actor. Stopping when
+        no writer runs records nothing.
         """
         attribution = _lifecycle_attribution(role, source, user_id, session_id)
         with self._writer_lock:
@@ -662,10 +673,17 @@ class AuditLog:
 
     def _stop_writer_locked(self, attribution: Mapping[str, str] | None = None) -> None:
         was_running = self._writer_running_locked()
-        stopped_store = self._writer_store
-        stopped_path = self._writer_path
         actor = attribution or _lifecycle_attribution("", "host", "", "")
+        if was_running and self._writer_store is not None:
+            evt = _make_event(
+                "audit_writer_stop",
+                detail=f'stop requested: "{self._writer_path or ""}"',
+                **actor,
+            )
+            self._writer_stop_record.update(redact_audit_event(evt))
         self._writer_stop.set()
+        if was_running and self._writer_stop_record:
+            self._store_event(self._writer_stop_record, writer_locked=True)
         writer_thread = self._writer_thread
         if writer_thread is not None:
             writer_thread.join(timeout=_WRITER_STOP_TIMEOUT_SECONDS)
@@ -675,41 +693,15 @@ class AuditLog:
                 )
                 record = self._record_writer_error(error)
                 _attach_writer_shutdown_error(error, record)
-                if was_running and stopped_store is not None:
-                    # Record the stop now, in the view only: the thread still
-                    # writes the file. The stop that finds it ended (a retry
-                    # or the exit drain) appends this record as the last line.
-                    evt = _make_event(
-                        "audit_writer_stop",
-                        # Quoted, so redaction removes a path with spaces whole.
-                        detail=(
-                            f"timed out after {_WRITER_STOP_TIMEOUT_SECONDS:g} seconds "
-                            f'waiting for the writer to drain: "{stopped_path or ""}"'
-                        ),
-                        **actor,
-                    )
-                    self._writer_stop_record = self._store_event(
-                        redact_audit_event(evt), writer_locked=True,
-                    )
                 raise error
         self._clear_writer_state_locked()
-        stored = self._writer_stop_record
-        self._writer_stop_record = None
-        if stored is None and was_running and stopped_store is not None:
-            evt = _make_event("audit_writer_stop", detail=str(stopped_path or ""), **actor)
-            stored = self._store_event(redact_audit_event(evt), writer_locked=True)
-        if stored is not None and stopped_store is not None:
-            try:
-                # The thread has exited: this is the file's last line.
-                stopped_store.append(stored)
-            except Exception as exc:
-                self._record_writer_error(exc)
 
     def _clear_writer_state_locked(self) -> None:
         self._writer_thread = None
         self._writer_queue = None
         self._writer_store = None
         self._writer_path = None
+        self._writer_stop_record = {}
         if self._writer_finalizer is not None:
             self._writer_finalizer.detach()
             self._writer_finalizer = None
@@ -762,7 +754,7 @@ class AuditLog:
         store = self._writer_store
         if queue_ref is None or store is None:
             return
-        _run_writer_loop(weakref.ref(self), queue_ref, store, self._writer_stop)
+        _run_writer_loop(weakref.ref(self), queue_ref, store, self._writer_stop, self._writer_stop_record)
 
     def _record_writer_error(self, exc: Exception) -> dict[str, str]:
         record = {

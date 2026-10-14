@@ -101,7 +101,7 @@ REFUSED_WRITES = [
     ("ratio", 1.5), ("ratio", -0.1), ("ratio", "Infinity"),
     ("mode", "thorough"), ("mode", None), ("mode", ["Fast"]),
     ("maint", "yes please"), ("maint", None), ("maint", 2), ("maint", ""), ("maint", {}),
-    ("banner", None), ("banner", True), ("banner", ["SECRET-CANARY"]),
+    ("banner", None), ("banner", True), ("banner", False), ("banner", ["SECRET-CANARY"]),
     ("banner", {"note": "SECRET-CANARY"}),
     ("accent", "red"), ("accent", None), ("accent", "#12345"), ("accent", ""), ("accent", 123456),
 ]
@@ -121,10 +121,14 @@ def test_api_refuses_a_value_it_would_have_to_replace_or_clamp(typed_api, key, v
     assert audit.all_events() == []
 
 
-@pytest.mark.parametrize("request_body", [
-    '{"values":{"workers":1e9999}}', '{"values":{"workers":"-Infinity"}}',
+@pytest.mark.parametrize("key,request_body,original", [
+    ("workers", '{"values":{"workers":1e9999}}', 8),
+    ("workers", '{"values":{"workers":"-Infinity"}}', 8),
+    ("banner", '{"values":{"banner":1e9999}}', "ready"),
+    ("banner", '{"values":{"banner":-1e9999}}', "ready"),
+    ("banner", '{"values":{"banner":NaN}}', "ready"),
 ])
-def test_api_refuses_non_finite_numbers_with_standard_json(typed_api, request_body):
+def test_api_refuses_non_finite_numbers_with_standard_json(typed_api, key, request_body, original):
     import json
 
     client, audit, _profiles = typed_api
@@ -134,7 +138,7 @@ def test_api_refuses_non_finite_numbers_with_standard_json(typed_api, request_bo
 
     assert response.status_code == 422
     json.loads(response.text, parse_constant=lambda token: pytest.fail(f"non-standard {token}"))
-    assert client.get("/controls/workers", headers=HEADERS).json()["value"] == 8
+    assert client.get(f"/controls/{key}", headers=HEADERS).json()["value"] == original
     assert audit.all_events() == []
 
 
@@ -144,6 +148,7 @@ def test_api_refuses_non_finite_numbers_with_standard_json(typed_api, request_bo
     ("mode", "Fast", "Fast"),
     ("maint", True, True), ("maint", "on", True), ("maint", "FALSE", False), ("maint", 1, True),
     ("banner", "maintenance window", "maintenance window"), ("banner", 5, "5"),
+    ("banner", 5.25, "5.25"),
     ("accent", " #ABCDEF ", "#ABCDEF"),
 ])
 def test_api_stores_an_accepted_value_exactly(typed_api, key, value, stored):
@@ -155,6 +160,24 @@ def test_api_stores_an_accepted_value_exactly(typed_api, key, value, stored):
     assert response.json()[0]["value"] == stored
     assert client.get(f"/controls/{key}", headers=HEADERS).json()["value"] == stored
     assert audit.all_events()[-1]["new"] == stored
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)], ids=["positive", "negative"])
+def test_api_preserves_huge_integer_text_and_audits_the_exact_string(value):
+    from fastapi.testclient import TestClient
+
+    audit = AuditLog()
+    with TestClient(create_app(_typed_registry(), audit=audit, api_role="Admin"),
+                    raise_server_exceptions=False) as client:
+        response = client.patch("/controls", headers=HEADERS, json={"values": {"banner": value}})
+
+        assert response.status_code == 200
+        assert response.json()[0]["value"] == str(value)
+        assert client.get("/controls/banner", headers=HEADERS).json()["value"] == str(value)
+        event, = audit.all_events()
+        assert event["type"] == "control_change"
+        assert event["old"] == "ready"
+        assert event["new"] == str(value)
 
 
 def test_one_refused_value_refuses_the_whole_batch(typed_api):

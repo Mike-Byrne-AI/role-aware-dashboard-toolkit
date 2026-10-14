@@ -273,12 +273,19 @@ session's writer where you create its log if those sessions must be persisted.
 ### Shut down the writer
 
 Call `audit.stop_writer()` or `cleanup_runtime(audit=audit)` when the host
-shuts down. It drains the queued events, then records `audit_writer_stop` as
-the file's last line. A writer still running at a normal interpreter exit is
-drained the same way, bounded to three seconds, and its stop record has the
-source `atexit`. A killed process (`SIGKILL`, `os._exit`, power loss) loses
+shuts down. The call records one `audit_writer_stop` request in memory; the
+worker drains the queued events and appends that request as its last line.
+Its `detail` says `stop requested`: it records who requested the stop, not
+proof that persistence finished. The three-second drain timeout includes that
+final append. A timeout raises `TimeoutError`, appears in `writer_status()`,
+and retains ownership of the worker; another stop waits for the same request
+without changing its actor or appending it twice. A writer still running at a
+normal interpreter exit is drained the same way, with source `atexit`; an
+exit-drain timeout is logged as a warning. A killed process (`SIGKILL`,
+`os._exit`, power loss) loses
 events still queued. When a host drops an `AuditLog` with a running writer,
-the log is collected and its writer drains and exits without a stop record.
+the log is collected and its writer drains and exits. It appends a stop
+request only if one was recorded before collection.
 Events logged faster than the writer persists them are queued up to
 `queue_size` (1000 by default); beyond that they are dropped and counted in
 `writer_status()["dropped_events"]`.

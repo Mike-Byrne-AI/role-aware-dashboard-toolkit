@@ -384,7 +384,9 @@ def _exact_control_value(ctrl: ControlDef, value: Any) -> Any:
     elif ctrl.kind == "text":
         if isinstance(value, str):
             converted = value
-        elif isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        elif isinstance(value, int) and not isinstance(value, bool):
+            converted = str(value)
+        elif isinstance(value, float) and math.isfinite(value):
             converted = str(value)
         else:
             raise _RejectedControlValue(f"Control '{ctrl.key}' needs a text string")
