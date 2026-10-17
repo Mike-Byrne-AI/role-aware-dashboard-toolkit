@@ -17,7 +17,9 @@ LIVE_DOCS = frozenset(
         "docs/dashboard_tools.md",
         "docs/decision_model.md",
         "docs/distribution.md",
+        "docs/first_dashboard.md",
         "docs/governance.md",
+        "docs/migration_0_2.md",
         "docs/operator_memory.md",
         "docs/oss_boundary.md",
         "docs/plugins.md",
@@ -29,6 +31,7 @@ LIVE_DOCS = frozenset(
         "docs/release_audit.md",
         "docs/release_checklist.md",
         "docs/release_runbook.md",
+        "docs/record_workflows.md",
         "docs/replay.md",
         "docs/run_model.md",
         "docs/shared_store_patterns.md",
@@ -49,6 +52,9 @@ PUBLIC_ROOT_DOCS = frozenset(
         "examples/README.md",
         "examples/studio_dispatch/README.md",
         "examples/operator_review/README.md",
+        "examples/host_integration/README.md",
+        "examples/record_workflows/README.md",
+        "examples/landscaping/README.md",
     }
 )
 

@@ -13,7 +13,7 @@ from role_aware_dashboard_toolkit import __version__
 
 
 TOPICS = ("start", "controls", "appearance", "sections", "plugins", "permissions",
-          "profiles", "runs", "telemetry", "api", "troubleshooting")
+          "authentication", "deployment", "workflows", "profiles", "runs", "telemetry", "api", "troubleshooting")
 RESOURCE_FILES = {"role_aware_dashboard_toolkit/resources/guides/" + topic + ".md"
                   for topic in TOPICS} | {
     "role_aware_dashboard_toolkit/resources/starter/" + name
@@ -48,7 +48,7 @@ assert sys.argv[1] in radt.__file__
 assert 'streamlit' not in sys.modules
 assert 'fastapi' not in sys.modules
 for topic in ('start','controls','appearance','sections','plugins','permissions',
-              'profiles','runs','telemetry','api','troubleshooting'):
+              'authentication','deployment','workflows','profiles','runs','telemetry','api','troubleshooting'):
     assert guidance.read_guide(topic)
 assert guidance.read_starter()
 report = guidance.inspect_capabilities()

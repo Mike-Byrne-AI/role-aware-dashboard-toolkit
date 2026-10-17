@@ -56,6 +56,15 @@ python -m streamlit run app.py
 
 `init` prints the exact launch command for the interpreter that ran it.
 
+Keep the launch terminal running and open Streamlit's printed Local URL in a
+browser on the same computer. Opening `app.py` as a file does not run the
+dashboard. Stop it with `Ctrl+C`; closing a browser tab alone leaves the server
+running. To restart, open a terminal in the generated project directory and
+repeat the launch command using the same environment's Python executable.
+If the port is occupied, append `--server.port 8502` and open the new printed
+URL. A server started on a remote machine needs that tool's supported port
+forwarding; its local URL does not point to your own computer.
+
 `init` refuses existing destinations; it does not merge or replace an existing
 AGENTS.md. For existing projects, read `example starter` and adapt the relevant
 files under the host's instructions.
@@ -63,6 +72,7 @@ files under the host's instructions.
 For shared use, choose `init my-dashboard --auth` and read `guide authentication`
 for provider configuration and explicit role provisioning. Plain `init` is the
 local role-selection demo, with no protection against choosing Admin.
+Its records are in memory: a new browser session or server restart starts fresh.
 
 Edit the starter's named functions: `build_controls`, `build_roles`,
 `render_view_menu`, `render_project_panel`, `build_dashboard_config` and

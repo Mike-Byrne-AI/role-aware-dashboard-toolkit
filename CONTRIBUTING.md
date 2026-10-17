@@ -63,22 +63,71 @@ tests on Linux with Python 3.10–3.14, Windows with Python 3.11 and macOS with
 Python 3.12, lint, coverage, package build/metadata validation, and a Chromium
 dashboard smoke.
 The browser smoke checks profile restoration, role changes, and frozen
-controls using synthetic local state; it does not test an external login provider.
+controls using synthetic local state. It also generates the Project Pulse
+starter and exercises desktop and mobile layouts, navigation and keyboard
+editing. It does not test an external login provider.
+The dedicated Linux landscaping job also installs the demo's optional
+dependencies and runs its API/security suite against the checkout, plus Chromium
+flows against the installed toolkit. The job also runs the disposable local
+TLS/restore drill and verifies the demo from a freshly installed source
+distribution. See the [demo guide](examples/landscaping/README.md) for local
+commands and evidence boundaries. These checks use newly generated fictional
+accounts and private temporary storage; they never use an existing dashboard's
+data. A source regression requires the copied landscaping action helper to match
+the generic workflow helper byte for byte; update both together when changing
+that recipe.
 The stable required check is `contributor-checks`; failed, skipped, or cancelled
-test, quality, or browser jobs make it fail. Browser diagnostics are retained
+test, quality, browser, or landscaping jobs make it fail. Browser diagnostics are retained
 for seven days. The workflow has read-only permissions and does not receive
 release credentials. GitHub may require a maintainer to approve the first
 workflow run for a fork contributor.
 
-`.github/workflows/dependency-audit.yml` audits freshly resolved `api` and
-`full` runtime dependencies on pull requests, pushes to `main`, manual dispatch,
-and Mondays at 09:17 UTC. Its `dependency-checks` result requires both audits
+To run these browser checks locally, install Playwright in the development
+environment. From the repository root, in PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install "playwright==1.63.0"
+.\.venv\Scripts\python.exe -m playwright install chromium
+$browserEvidence = Join-Path ([System.IO.Path]::GetTempPath()) ("radt-browser-" + [guid]::NewGuid())
+.\.venv\Scripts\python.exe tools/browser_smoke.py --output-dir $browserEvidence
+```
+
+In bash or zsh:
+
+```bash
+.venv/bin/python -m pip install "playwright==1.63.0"
+.venv/bin/python -m playwright install chromium
+browser_evidence=$(mktemp -d "${TMPDIR:-/tmp}/radt-browser-XXXXXX")
+.venv/bin/python tools/browser_smoke.py --output-dir "$browser_evidence"
+```
+
+If a managed environment already supplies Chromium, pass
+`--browser-executable /path/to/chromium` instead of downloading a browser. The
+output directory must be empty and outside the checkout. Inspect `summary.json`,
+screenshots and traces; retain a failed run separately when retrying. The runner
+owns and stops its servers and uses temporary sample data. CI adds
+`--installed-package` to exercise its non-editable installation; use that option
+with an isolated wheel installation when checking packaged starter resources.
+
+`.github/workflows/dependency-audit.yml` audits three freshly resolved runtime
+environments: `api`, `full`, and `landscaping` (the toolkit's `api` extra plus
+the demo requirements, including Argon2). It runs on pull requests, pushes to
+`main`, manual dispatch, and Mondays at 09:17 UTC. Its `dependency-checks`
+result requires all three audits
 to complete without known vulnerabilities or skipped packages. Scanner and
 network errors fail separately from vulnerability findings. Reports and exact
 resolved versions are retained for seven days. The local toolkit and environment
 installation tools (`pip`, `setuptools`, `wheel`) are explicitly excluded;
 the scanner runs in a separate environment. Advisories require maintainer
 review; the workflow does not upgrade packages automatically.
+
+The artifact smoke and operational drill are complementary. The artifact smoke
+checks an actual source package, isolated installation, protected HTTP actions
+and restart. The drill verifies a temporary certificate and hostname, session
+cookie attributes and restoring synthetic data while reconciling revoked
+access. Neither establishes public HTTPS/proxy configuration, a real OIDC
+provider, browser cookie enforcement or the Windows-to-WSL first-run experience.
+Record those as separate host acceptance work, not implied CI coverage.
 
 Maintainers should require `contributor-checks` and `dependency-checks` on `main`, with the branch up
 to date before merging and force pushes/deletions disabled. Check the live

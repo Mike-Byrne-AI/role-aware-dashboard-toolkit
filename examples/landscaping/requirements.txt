@@ -1,0 +1,5 @@
+# Install the current toolkit first: python -m pip install -e ".[api]"
+# These are optional demonstration dependencies, not toolkit core requirements.
+fastapi==0.143.3
+uvicorn==0.54.0
+argon2-cffi==25.1.0

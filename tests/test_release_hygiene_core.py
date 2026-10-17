@@ -36,7 +36,7 @@ def test_changelog_release_headings_are_dated_and_follow_unreleased():
     headings = re.findall(r"^## (.+)$", changelog, flags=re.MULTILINE)
     releases = [heading for heading in headings if heading != "Unreleased"]
     assert releases
-    assert all(re.fullmatch(r"\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\)", heading) for heading in releases), releases
+    assert all(re.fullmatch(r"\d+\.\d+\.\d+(?:rc[1-9]\d*)? \(\d{4}-\d{2}-\d{2}\)", heading) for heading in releases), releases
     assert "Unreleased" not in headings or headings[0] == "Unreleased"
 
 
@@ -759,7 +759,7 @@ else:
     assert result.returncode == 0, result.stderr
 
 
-def test_boundary_docs_and_sdist_describe_generic_example_surface():
+def test_boundary_docs_and_sdist_describe_curated_source_examples():
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     oss_boundary = (REPO_ROOT / "docs" / "oss_boundary.md").read_text(encoding="utf-8")
@@ -773,8 +773,11 @@ def test_boundary_docs_and_sdist_describe_generic_example_surface():
     assert "dashboard_admin_controls_app.py" in examples_readme
     assert "plugin_template.py" in examples_readme
     assert "source-distribution material, not modules installed" in examples_readme
-    assert "public documentation and fixture-free examples" in oss_boundary
-    assert "product-specific adapters or application integrations" in oss_boundary
+    boundary_text = " ".join(oss_boundary.split())
+    assert "public documentation and selected fictional examples" in boundary_text
+    assert "Private application integrations, saved datasets and runtime credentials are excluded" in boundary_text
+    assert "landscaping example is source-distribution material only" in boundary_text
+    assert "do not become library APIs" in boundary_text
     assert "private records and internal maintenance data" in oss_boundary
     assert "one Python distribution with a dependency-free core" in distribution
     for install_target in [
@@ -789,6 +792,8 @@ def test_boundary_docs_and_sdist_describe_generic_example_surface():
         "/examples/README.md",
         "/examples/dashboard_admin_controls_app.py",
         "/examples/plugin_template.py",
+        "/examples/landscaping/README.md",
+        "/examples/landscaping/run.py",
         "/.github/workflows/ci.yml",
     }.issubset(sdist_includes)
     public_docs = "\n".join((readme, examples_readme, oss_boundary, distribution)).lower()

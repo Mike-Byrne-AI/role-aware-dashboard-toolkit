@@ -7,6 +7,8 @@ decision.
 ## Public metadata
 
 - `pyproject.toml` version matches `role_aware_dashboard_toolkit/version.py` and the changelog
+- a candidate uses its exact prerelease version, dated notes and
+  [migration guidance](migration_0_2.md); it is not described as a published stable release
 - repository, issues, documentation, and homepage URLs match the configured
   `Mike-Byrne-AI/role-aware-dashboard-toolkit` repository
 - `[tool.role_aware_dashboard_toolkit.release]` selects `github-source`, names
@@ -83,8 +85,13 @@ require all contributor test, quality, browser, and dependency audit jobs to suc
 
 Contributor tests cover Linux Python 3.10–3.14, the full Windows suite on
 Python 3.11, and the full macOS suite on Python 3.12. The required browser job exercises a local Chromium dashboard
-with synthetic state. Dependency CI audits independently resolved `api` and
-`full` installations on every pull request and weekly; a failed scanner or
+with synthetic state. The Linux landscaping job adds its own API/security and
+browser suite, a fresh source-package installation/restart check and a disposable
+TLS/restore drill. The copied landscaping action helper must stay byte-identical
+to the generic workflow helper; source tests guard that boundary.
+Dependency CI audits independently resolved `api`, `full` and `landscaping`
+installations on every pull request and weekly. The landscaping lane includes
+the demo's complete runtime requirements, including Argon2. A failed scanner or
 incomplete audit must not count as a clean result. Review the retained inventory
 and advisory report for any finding. Neither check establishes external identity
 provider or deployment acceptance.
@@ -129,7 +136,8 @@ Confirm artifacts exclude:
 - private records and internal maintenance data
 - tests, fixtures, repository task state, and maintainer-only docs
 - caches, coverage data, temporary files, and stale build output
-- application-specific adapters and local datasets
+- private application adapters and local datasets; the explicitly curated
+  fictional landscaping source example is included without runtime data
 
 ## Install smokes
 
@@ -157,6 +165,57 @@ remove that environment from the import search path.
 Authentication install smokes do not contact an identity provider or provision
 accounts. Actual provider configuration and deployment acceptance remain host
 responsibilities described in the authentication guide.
+
+### Verify the packaged landscaping demo
+
+On Linux, macOS or WSL, use the fresh release interpreter and the exact reviewed
+source distribution. Set `release_python` to that environment's `bin/python`
+and `candidate_sdist` to the built `.tar.gz` path. From the repository root, in
+bash or zsh:
+
+```bash
+export PYTHONDONTWRITEBYTECODE=1
+artifact_evidence=$(mktemp -d "${TMPDIR:-/tmp}/radt-landscape-artifact-XXXXXX")
+"$release_python" tools/landscaping_artifact_smoke.py --sdist "$candidate_sdist" --output-dir "$artifact_evidence"
+```
+
+The runner audits the archive against the checkout's exact release closure,
+installs it with build isolation in a fresh environment, checks protected
+actions, and verifies that accounts, passwords, saved work and history survive
+restart. It verifies that the source and archive remain unchanged. Require a
+successful exit and `passed: true` in `summary.json`, with a SHA-256 matching the
+audited source distribution. The archive is trusted executable code; safe
+extraction alone does not establish code safety. Keep the private output
+directory outside the checkout; retain the summary as release evidence rather
+than uploading its entire installation tree.
+
+### Run the disposable TLS and restore drill
+
+Use a POSIX environment with the demo runtime requirements installed and
+`openssl` on `PATH`. In the same POSIX shell:
+
+```bash
+"$release_python" -m pip install -r examples/landscaping/requirements.txt
+operations_evidence=$(mktemp -d "${TMPDIR:-/tmp}/radt-landscape-operations-XXXXXX")
+"$release_python" examples/landscaping/scripts/operational_check.py --output-dir "$operations_evidence"
+```
+
+Require a successful exit, `success: true` and `stage: complete` in its
+`summary.json`. The drill owns temporary data, certificates and listeners. It
+checks verified loopback TLS, rejected trust/hostname failures, session-cookie
+attributes, authorization/CSRF/freeze boundaries and a stopped backup restored
+to a different directory. It demonstrates offline that an old backup can
+resurrect revoked access, then invalidates restored sessions, reapplies the
+revocation and keeps writes frozen before opening the restored listener.
+Generated accounts, keys and databases are removed; the retained summary uses
+fixed labels without secrets.
+
+This is a synthetic recovery scenario, not a production backup utility. These
+two checks do not verify a public proxy/domain, real OIDC login, browser cookie
+enforcement, Windows/WSL installation or production backup policy. Keep actual
+deployment acceptance, restore practice and Windows first-run evidence separate.
+Real recovery must reconcile every account, grant, password and business-data
+change since the backup; the drill's single revocation is not that inventory.
 
 ## CI and artifacts
 

@@ -176,6 +176,60 @@ def test_revoked_selected_role_falls_back_to_remaining_grant_and_discards_replay
     assert "resource" not in app.session_state
 
 
+def test_queued_freeze_click_cannot_transfer_to_another_account_with_the_same_role():
+    host = _host()
+    app = _app(host)
+    before = host.store.read_freeze()
+    old_session = app.session_state["test_context"].session_id
+    host.identity = Identity("https://provider.invalid", "second-admin", time.time() + 3600)
+    second_principal = principal_id(host.identity, host.key)
+    host.store.replace_grants(second_principal, ("Admin",))
+
+    # Streamlit runs the old widget callback before the new account rerenders.
+    _healthy(app.toggle(key="_radt_shared_frozen").set_value(False).run())
+
+    assert host.store.read_freeze() == before
+    ctx = app.session_state["test_context"]
+    assert ctx.user_id == second_principal and ctx.role == "Admin"
+    assert ctx.session_id != old_session
+    assert not any(event["type"] == "shared_freeze_changed" for event in host.audit.all_events())
+
+    # The second account can perform its own fresh action after the rerender.
+    _healthy(app.toggle(key="_radt_shared_frozen").set_value(False).run())
+    assert host.store.read_freeze().changed_by == second_principal
+    events = [event for event in host.audit.all_events() if event["type"] == "shared_freeze_changed"]
+    assert len(events) == 1 and events[0]["user_id"] == second_principal
+
+
+def test_valid_pending_replay_is_discarded_when_an_equally_privileged_account_signs_in():
+    from role_aware_dashboard_toolkit._ui_state import queue_replay
+    from role_aware_dashboard_toolkit.replay import build_replay_packet_from_checkpoint
+
+    host = _host()
+    host.store.compare_and_set_freeze(False, 0, host.principal)
+    app = _app(host)
+    packet = build_replay_packet_from_checkpoint({
+        "checkpoint_id": "previous-account", "controls": {"review_note": "Previous account note"},
+    })
+    queue_replay(app.session_state, packet, "previous-account")
+    host.identity = Identity("https://provider.invalid", "second-admin", time.time() + 3600)
+    second_principal = principal_id(host.identity, host.key)
+    host.store.replace_grants(second_principal, ("Admin",))
+
+    _healthy(app.run())
+
+    assert app.session_state["test_context"].user_id == second_principal
+    assert app.text_input(key="review_note").value == "Initial"
+    assert "_radt_pending_replay" not in app.session_state
+    assert not any(event["type"] == "checkpoint_replay" for event in host.audit.all_events())
+
+    queue_replay(app.session_state, packet, "current-account")
+    _healthy(app.run())
+    assert app.text_input(key="review_note").value == "Previous account note"
+    events = [event for event in host.audit.all_events() if event["type"] == "checkpoint_replay"]
+    assert len(events) == 1 and events[0]["user_id"] == second_principal
+
+
 def test_admin_freeze_callback_is_shared_across_sessions_and_audit_is_bound():
     host = _host()
     first = _app(host)

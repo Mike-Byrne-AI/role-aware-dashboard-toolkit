@@ -1,8 +1,10 @@
 # Public distribution boundary
 
 This document defines the supported Role-Aware Dashboard Toolkit distribution.
-The source distribution includes public documentation and fixture-free examples.
-It does not include product-specific adapters or application integrations.
+The source distribution includes public documentation and selected fictional
+examples, including the [landscaping demo](../examples/landscaping/README.md).
+Their seed generators create fresh synthetic records locally. Private application
+integrations, saved datasets and runtime credentials are excluded.
 
 ## Included
 
@@ -44,6 +46,11 @@ selected examples. Both artifacts exclude:
 - cache, coverage, temporary, and generated report files;
 - local build output and stale distribution artifacts;
 - application-specific adapters and local datasets.
+
+The curated landscaping example is source-distribution material only. Its host
+authentication and business rules do not become library APIs, and its optional
+server/password dependencies do not become core dependencies. Its private data,
+account sheet and identity key are generated outside the checkout, never shipped.
 
 Release audit helpers reject unsafe member names and excluded paths. Inspect
 the actual wheel and source distribution before publication.

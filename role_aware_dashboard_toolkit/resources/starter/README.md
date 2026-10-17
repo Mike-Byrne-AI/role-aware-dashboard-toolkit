@@ -1,7 +1,8 @@
 # Project Pulse
 
-A local dashboard with editable planning controls, a progress chart, profiles
-and audit history. It uses the installed Role-Aware Dashboard Toolkit package.
+A local dashboard with a focused overview, editable planning controls, a
+progress chart, profiles and audit history. It uses the installed Role-Aware
+Dashboard Toolkit package and Streamlit's native, responsive widgets.
 
 ## Run
 
@@ -37,16 +38,22 @@ already exists.
 
 ## Try it
 
-1. A new session starts as Viewer, which can only read. Select Admin in the
-   sidebar, then change Weekly target and Completion. The three summary
-   values update.
-2. Select Progress in the sidebar; change Chart color to recolor the chart.
-3. Switch to Planner. Planning controls remain editable; Intake open is locked.
-4. Switch back to Admin, the role here that can change Controls Writable, and
-   turn it off. All registered controls freeze, for Admin too.
-5. Turn writable on again. Save a profile, change values, then select and load
-   that profile.
-6. To enable runs and checkpoints, change `runbook=False` to `runbook=True`
+1. A new session starts as Viewer on **Overview**. The four cards show the
+   weekly target, calculated completed and remaining tasks, and completion rate.
+   These are local planning figures, not live project measurements.
+2. Select **Plan** under Show. Viewer can inspect the controls but cannot edit
+   them. Select Admin in the sidebar, then change Weekly target and Completion.
+   Return to Overview to see the updated cards; your values survive navigation.
+3. Select **Progress** to see the chart. To recolor it, change Chart color in
+   Plan, then return to Progress. Select **Activity** to inspect Audit Log.
+4. In Plan, switch to Planner. Planning controls remain editable; Intake open
+   is locked. The sidebar explains the current access level.
+5. Switch back to Admin, the role here that can change Controls Writable, and
+   turn it off. All registered controls freeze, for Admin too. The sidebar
+   shows **Changes paused**, while read-only views remain available.
+6. Turn writable on again. Save a profile, change values, then select and load
+   that profile. Check Overview and Plan to confirm the restoration.
+7. To enable runs and checkpoints, change `runbook=False` to `runbook=True`
    in `build_dashboard_config()`, save the file and rerun.
 
 The role selector is an explicit local demo and permits choosing Admin. For
@@ -62,14 +69,28 @@ does not automatically write these records to disk.
 |---|---|
 | Fields, labels, defaults, bounds and groups | `build_controls()` |
 | Permissions and custom roles | `build_roles()` |
-| Sidebar menu | `render_view_menu()` |
+| Sidebar views and access explanations | `VIEWS` and `render_view_menu()` |
 | Metrics and chart | `render_project_panel()` |
-| Card fills, layout and built-in sections | `build_dashboard_config()` |
+| Card fills, layout and sections shown in each view | `build_dashboard_config()` |
 | Page, sidebar, input, text and accent colors | `.streamlit/config.toml` |
 | Data-store lifetime and durability | `session_resources()` |
 
 Keep stable field keys when renaming labels. The chart color field affects the
-chart only. Group overrides use exact group names.
+chart only. Group overrides use exact group names. The starter's cream page,
+sage sidebar and forest accent use official Streamlit configuration; no custom
+HTML, browser JavaScript, external fonts or private CSS selectors are needed.
+
+Keep the overview short and move editing and detailed history into named views.
+Use native containers, columns and metrics so Streamlit can adapt the layout.
+Use plain-text rendering for user-authored names; headings and instructions
+can remain fixed application copy. Preserve the permission checks in callbacks
+when adding views: hiding a section does not authorize its data or actions.
+
+After changing presentation, inspect the actual browser at desktop and phone
+widths. Open the phone sidebar, navigate to Plan, and confirm that field labels
+and actions remain usable without horizontal page scrolling. Test keyboard
+editing, profile restoration, Viewer/Planner restrictions and the frozen state;
+an attractive screenshot alone does not establish those behaviors.
 
 ```shell
 python -m role_aware_dashboard_toolkit guide

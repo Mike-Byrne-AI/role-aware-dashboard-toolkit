@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 from role_aware_dashboard_toolkit.release_audit import audit_release_artifact_members
+from role_aware_dashboard_toolkit.version import ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION
 from tests.release_hygiene_helpers import REPO_ROOT
 
 
@@ -167,44 +168,44 @@ def test_release_artifacts_do_not_embed_the_build_checkout_path(
 def test_release_artifact_audit_rejects_archive_and_removed_lanes():
     audit = audit_release_artifact_members(
         [
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/__init__.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/_archive_review/README.md",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/integrations/product.py",
-            "role_aware_dashboard_toolkit-0.1.0/portable/bundle.json",
-            "role_aware_dashboard_toolkit-0.1.0/snapshot_manifests/release.json",
-            "role_aware_dashboard_toolkit-0.1.0/tests/test_private.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/action_receipts.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/federation.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/semantic_store.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/review_cockpit.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/customer_adapter.py",
-            "role_aware_dashboard_toolkit-0.1.0/docs/private_launch.md",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/__init__.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/_archive_review/README.md",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/integrations/product.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/portable/bundle.json",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/snapshot_manifests/release.json",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/tests/test_private.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/action_receipts.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/federation.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/semantic_store.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/review_cockpit.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/customer_adapter.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/docs/private_launch.md",
             "role_aware_dashboard_toolkit-9.9.9/role_aware_dashboard_toolkit/__init__.py",
         ]
     )
 
     assert audit["ok"] is False
     assert set(audit["blocked_members"]) == {
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/_archive_review/README.md",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/integrations/product.py",
-        "role_aware_dashboard_toolkit-0.1.0/portable/bundle.json",
-        "role_aware_dashboard_toolkit-0.1.0/snapshot_manifests/release.json",
-        "role_aware_dashboard_toolkit-0.1.0/tests/test_private.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/action_receipts.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/federation.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/semantic_store.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/review_cockpit.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/customer_adapter.py",
-        "role_aware_dashboard_toolkit-0.1.0/docs/private_launch.md",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/_archive_review/README.md",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/integrations/product.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/portable/bundle.json",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/snapshot_manifests/release.json",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/tests/test_private.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/action_receipts.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/federation.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/semantic_store.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/review_cockpit.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/customer_adapter.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/docs/private_launch.md",
         "role_aware_dashboard_toolkit-9.9.9/role_aware_dashboard_toolkit/__init__.py",
     }
     assert set(audit["unexpected_members"]) == {
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/action_receipts.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/federation.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/semantic_store.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/review_cockpit.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/customer_adapter.py",
-        "role_aware_dashboard_toolkit-0.1.0/docs/private_launch.md",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/action_receipts.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/federation.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/semantic_store.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/review_cockpit.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/customer_adapter.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/docs/private_launch.md",
         "role_aware_dashboard_toolkit-9.9.9/role_aware_dashboard_toolkit/__init__.py",
     }
 
@@ -212,22 +213,22 @@ def test_release_artifact_audit_rejects_archive_and_removed_lanes():
 def test_release_artifact_audit_rejects_unsafe_archive_member_names():
     audit = audit_release_artifact_members(
         [
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/__init__.py",
-            "role_aware_dashboard_toolkit-0.1.0/../evil.py",
-            "role_aware_dashboard_toolkit-0.1.0//double/slash.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/__init__.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/../evil.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}//double/slash.py",
             "/absolute/path.py",
             "C:/outside/path.py",
-            "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/\u0000nul.py",
+            f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/\u0000nul.py",
         ]
     )
 
     assert audit["ok"] is False
     assert set(audit["blocked_members"]) == {
-        "role_aware_dashboard_toolkit-0.1.0/../evil.py",
-        "role_aware_dashboard_toolkit-0.1.0//double/slash.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/../evil.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}//double/slash.py",
         "/absolute/path.py",
         "C:/outside/path.py",
-        "role_aware_dashboard_toolkit-0.1.0/role_aware_dashboard_toolkit/\u0000nul.py",
+        f"role_aware_dashboard_toolkit-{ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION}/role_aware_dashboard_toolkit/\u0000nul.py",
     }
 
 
@@ -301,6 +302,27 @@ print("ok")
     assert result.stdout.strip() == "ok"
 
 
+def test_landscaping_source_demo_ships_without_private_runtime_or_vendored_toolkit(
+    built_release_artifacts,
+):
+    members = _logical_members(built_release_artifacts["sdist"])
+    prefix = "examples/landscaping/"
+    expected = {
+        "README.md", "run.py", "requirements.txt", "requirements-dev.txt", "pyproject.toml",
+        "landscape/__init__.py", "landscape/app.py", "landscape/db.py",
+        "landscape/security.py", "landscape/seed.py", "landscape/action_workflow.py",
+        "landscape/paths.py", "landscape/launcher.py",
+        "landscape/static/index.html", "landscape/static/app.js", "landscape/static/styles.css",
+        "scripts/browser_check.py", "scripts/operational_check.py",
+    }
+    assert {name[len(prefix):] for name in members if name.startswith(prefix)} == expected
+    assert not any(name.startswith("examples/") for name in _logical_members(built_release_artifacts["wheel"]))
+    for artifact in (built_release_artifacts["wheel"], built_release_artifacts["sdist"]):
+        for name in _logical_members(artifact):
+            assert Path(name).name not in {"identity.key", "TRIAL_ACCOUNTS.md", "landscape.sqlite3"}
+            assert not name.startswith(prefix + "vendor/")
+
+
 def test_sdist_shipped_examples_compile_from_extracted_artifact(
     tmp_path,
     built_release_artifacts,
@@ -323,6 +345,10 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         sdist_root / "examples" / "studio_dispatch" / "app.py",
         *(sdist_root / "examples" / "section_access" / name
           for name in ("app.py", "demo.py", "policy.py", "provision.py")),
+        sdist_root / "examples" / "landscaping" / "run.py",
+        sdist_root / "examples" / "landscaping" / "scripts" / "operational_check.py",
+        *(sdist_root / "examples" / "landscaping" / "landscape" / name
+          for name in ("app.py", "db.py", "security.py", "seed.py", "action_workflow.py", "paths.py", "launcher.py")),
     ]
 
     for script in scripts:

@@ -7,8 +7,8 @@ Assistant edit map (host instructions and user intent remain authoritative):
 - build_dashboard_config(): layout, card fills and sections; guide appearance / sections
 - .streamlit/config.toml: page, sidebar, input, text and accent colors.
 
-Only toolkit stores live in session state. Definitions rebuild each rerun so
-source edits apply while in-memory profiles, audit events and runs are retained.
+Definitions rebuild each rerun. Session-owned stores and stable control keys
+keep the plan, profiles and audit history when switching views.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ APP_TITLE = "Project Pulse"
 PLAN_GROUP = "Plan"
 PRESENTATION_GROUP = "Presentation"
 RESOURCE_KEY = "_project_pulse_resources"
+VIEWS = ("Overview", "Plan", "Progress", "Activity")
 
 
 def build_controls() -> radt.ControlRegistry:
@@ -44,7 +45,7 @@ def build_controls() -> radt.ControlRegistry:
         help="Only the Admin role can change whether new work is accepted.")
     registry.register(
         "Chart color", kind="color", key="chart_color", group=PRESENTATION_GROUP,
-        default="#0F766E", help="Changes the progress chart, not the page theme.")
+        default="#2F614B", help="Changes the progress chart, not the page theme.")
     return registry
 
 
@@ -77,7 +78,20 @@ def render_view_menu(context: dict) -> None:
     ui = context["st"]
     ui.divider()
     ui.subheader("Project view")
-    ui.radio("Show", ["Overview", "Progress"], key="pulse_view")
+    ui.radio("Show", VIEWS, key="pulse_view")
+    ctx = context["ctx"]
+    if not ctx.controls_writable:
+        ui.warning("Changes paused")
+        ui.caption("An Admin can turn Controls Writable on to resume editing. Views remain available.")
+    elif radt.can_write(ctx, "can_manage_intake"):
+        ui.caption("Administrative access")
+        ui.caption("Edit the plan, manage intake, and pause changes for this demo session.")
+    elif radt.can_write(ctx, "can_edit_controls"):
+        ui.caption("Planning access")
+        ui.caption("Edit the plan and use profiles. Intake remains administrator-controlled.")
+    else:
+        ui.caption("Read-only access")
+        ui.caption("Explore the plan, progress and activity. Editing requires a permitted role.")
 
 
 def render_project_panel(context: dict) -> None:
@@ -85,31 +99,46 @@ def render_project_panel(context: dict) -> None:
     if not radt.has_perm(context["ctx"], "can_view_metrics"):
         return
     ui = context["st"]
+    view = ui.session_state.get("pulse_view", "Overview")
+    if view == "Activity":
+        ui.caption("Activity records changes made in this demo session. Open Audit Log below to inspect them.")
+        return
+    if view == "Plan":
+        ui.caption("Plan values are kept when you change views. Use Profiles in the sidebar to save a named baseline.")
+        return
     values = context["config"].registry.persistable_snapshot(ui.session_state)
     target = int(values["weekly_target"])
     completed = round(target * float(values["completion_percent"]) / 100)
     remaining = max(0, target - completed)
 
-    ui.divider()
-    ui.subheader(str(values["project_name"]) or "Untitled project")
+    ui.subheader("Project overview" if view == "Overview" else "Project progress")
+    # User-authored names are plain text, not Markdown links or remote images.
+    ui.text(str(values["project_name"]) or "Untitled project")
     ui.caption(f"{values['priority']} priority · {'Intake open' if values['intake_open'] else 'Intake paused'}")
-    columns = ui.columns(3)
-    for column, label, value in zip(
-        columns, ["Planned tasks", "Completed", "Remaining"],
-        [target, completed, remaining], strict=True,
-    ):
+    columns = ui.columns(4)
+    metrics = (
+        ("Planned tasks", target, "The weekly target entered in Plan."),
+        ("Completed", completed, "Weekly target multiplied by Completion, rounded to a whole task."),
+        ("Remaining", remaining, "Planned tasks minus completed tasks."),
+        ("Completion rate", f"{float(values['completion_percent']):g}%", "The completion percentage entered in Plan."),
+    )
+    for column, (label, value, help_text) in zip(columns, metrics, strict=True):
         with column:
-            ui.metric(label, value)
-    ui.progress(float(values["completion_percent"]) / 100)
+            ui.metric(label, value, help=help_text, border=True)
+    ui.progress(float(values["completion_percent"]) / 100,
+                text=f"{completed} of {target} planned tasks complete")
 
-    if ui.session_state.get("pulse_view", "Overview") == "Progress":
+    if view == "Progress":
         ui.bar_chart(
             {"Stage": ["Completed", "Remaining"], "Tasks": [completed, remaining]},
             x="Stage", y="Tasks", color=str(values["chart_color"]), height=260,
         )
     else:
-        ui.info("Choose Progress in the sidebar to see the chart. Adjust the plan above to update this overview.")
-    ui.caption("Counts are calculated from your local plan inputs.")
+        with ui.container(border=True):
+            ui.subheader("Next steps")
+            ui.write("Use **Plan** to adjust inputs, **Progress** to inspect the chart, and **Activity** to review changes.")
+            ui.caption("Save a profile before trying a different plan; loading it restores its permitted control values.")
+    ui.caption("Calculated from local demo inputs; these figures are not connected to a live project.")
 
 
 def session_resources() -> dict:
@@ -130,15 +159,17 @@ def build_dashboard_config(resources: dict) -> radt.DashboardConfig:
         name="project-view", description="Project overview and progress chart.",
         render_sidebar=render_view_menu, render_panel=render_project_panel,
     ))
+    view = st.session_state.get("pulse_view", "Overview")
     return radt.DashboardConfig(
-        title=APP_TITLE, subtitle="A clear view of this week's work.", icon="◈",
+        title=APP_TITLE, subtitle="Plan the work. Track progress. Review changes.", icon="",
         registry=build_controls(), custom_roles=build_roles(), auth_mode="demo",
         audit=resources["audit"], profile_store=resources["profiles"],
         run_store=resources["runs"], plugins=plugins,
         layout="columns", columns_per_row=2,
         card_background_color="#FFFFFF",
-        group_background_colors={PLAN_GROUP: "#EFF6FF", PRESENTATION_GROUP: "#F0FDFA"},
+        group_background_colors={PLAN_GROUP: "#EEF3E9", PRESENTATION_GROUP: "#FFFFFF"},
         sections=radt.DashboardSections(
+            controls=view == "Plan", audit_log=view == "Activity",
             audit_writer=False, plugin_details=False, runbook=False,
         ),
         # For shared use, see `guide authentication` and `init --auth`.
@@ -150,7 +181,7 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, page_icon="◈", layout="wide")
     context = radt.render(build_dashboard_config(session_resources()))
     if radt.has_perm(context, "can_view_metrics"):
-        st.caption("Local demo · toolkit records stay in this browser session")
+        st.caption("Local role demo · Choose a role in the sidebar. This does not authenticate users.")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        extra: [api, full]
+        extra: [api, full, landscaping]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -44,9 +44,22 @@ jobs:
         run: |
           python -m venv "$RUNNER_TEMP/audit-runtime"
           python -m venv "$RUNNER_TEMP/audit-tool"
-          wheel=$(find "$RUNNER_TEMP/audit-dist" -maxdepth 1 -name '*.whl' -type f)
-          test -n "$wheel"
-          "$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheel}[${AUDIT_EXTRA}]"
+          wheels=("$RUNNER_TEMP/audit-dist"/*.whl)
+          test "${#wheels[@]}" -eq 1
+          test -f "${wheels[0]}"
+          case "$AUDIT_EXTRA" in
+            api|full)
+              "$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheels[0]}[${AUDIT_EXTRA}]"
+              ;;
+            landscaping)
+              "$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheels[0]}[api]" \
+                -r examples/landscaping/requirements.txt
+              ;;
+            *)
+              echo "Unsupported dependency audit environment." >&2
+              exit 1
+              ;;
+          esac
           "$RUNNER_TEMP/audit-runtime/bin/python" -m pip check
           "$RUNNER_TEMP/audit-tool/bin/python" -m pip install "pip-audit==2.10.1"
           "$RUNNER_TEMP/audit-tool/bin/python" -m pip check

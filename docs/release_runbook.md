@@ -27,6 +27,10 @@ report delivery, human monitoring, or public visibility.
 
 The release channel is `github-source` and `package-index-publication` is
 false. No PyPI name ownership, reservation, or publishing authority is claimed.
+A release candidate keeps its exact prerelease version in package metadata,
+dated changelog notes and artifact names. Review the
+[migration guide](migration_0_2.md) with the implementation; a candidate label
+does not substitute for the remaining checks or authorize a stable release.
 
 ## Build once
 
@@ -54,6 +58,22 @@ authentication checks in the `full` smoke too. These installation checks do not
 establish an external identity provider or deployment configuration. Keep
 source-distribution build isolation enabled. Use isolated Python and verify
 imports resolve to the installed environment rather than the source checkout.
+
+Run the checklist's `tools/landscaping_artifact_smoke.py` against that same
+source distribution. Retain its `summary.json` and require its artifact digest
+to match the audited `.tar.gz`; the smoke must not rebuild a replacement source
+archive. It verifies a separate installation, protected HTTP workflows, saved
+state after restart and unchanged archive/source bytes. Upload the summary,
+not the temporary environment or synthetic private storage.
+
+Also run `examples/landscaping/scripts/operational_check.py` in a POSIX
+environment with the demo dependencies and OpenSSL. Retain its separate
+secret-free summary for verified loopback TLS and disposable recovery, including
+session invalidation and revocation reconciliation before restored service
+opens. A passing local drill does not establish public HTTPS/proxy, external
+OIDC, browser cookie enforcement or Windows/WSL installation. For a real host,
+collect its own deployment and restore evidence using the
+[deployment acceptance sequence](../role_aware_dashboard_toolkit/resources/guides/deployment.md).
 
 ## Verify source did not move
 
@@ -95,6 +115,10 @@ up to date before merging, and disable force pushes and branch deletions.
 Contributor CI runs on pull requests and pushes to `main` without the release
 approval variable. Keep the manually gated release jobs separate from required
 PR status checks. Verify the intended security settings as well.
+The dependency status must include the `api`, `full` and `landscaping` runtime
+inventories; the demo's Argon2 dependency must not disappear from audit coverage.
+The contributor landscaping job includes the artifact and operational checks;
+require their retained summaries, not just a job name or a past local run.
 
 Verify that GitHub private vulnerability reporting is still enabled and its
 public form is reachable. Check the maintainer's notification configuration
@@ -116,6 +140,9 @@ and final SHA. A skipped, cancelled, or merely green-looking incomplete run
 is not proof. Review artifact digests, source SHA, branch, run ID, and attempt.
 Hosted artifacts and evidence are kept for 90 days; copy the evidence into
 the release record, then remove the approval variable to disarm the workflow.
+The release packaging job runs the landscaping artifact smoke on its validated
+source archive and retains the matching receipt. Check that receipt's SHA-256
+against the candidate artifacts along with the other installation evidence.
 
 If a real failure requires a code change, review a new commit and repeat the
 checks affected by it. Never reuse hosted evidence from an older SHA or attempt.

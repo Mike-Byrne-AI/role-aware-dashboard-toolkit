@@ -115,6 +115,13 @@ Role-Aware Dashboard Toolkit is not:
 Applications can compose those systems around Role-Aware Dashboard Toolkit through ordinary Python
 APIs, trusted plugins, or their own namespaced packets.
 
+Curated fictional applications can live in `examples/` to demonstrate this
+composition. The [landscaping demo](examples/landscaping/README.md) supplies its
+own password sessions, SQLite business data and web interface around toolkit
+access policy. These remain example code, outside the installed library API.
+Its optional dependencies, generated credentials and private runtime storage are
+separate from the library's core and source artifacts.
+
 ## Installed guidance boundary
 
 The standard-library CLI reads version-matched package resources. It does not

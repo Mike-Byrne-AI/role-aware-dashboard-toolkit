@@ -41,7 +41,7 @@ def test_catalog_and_every_topic_are_available_from_unrelated_directory(tmp_path
     topics = catalog["result"]["topics"]
     assert [item["id"] for item in topics] == [
         "start", "controls", "appearance", "sections", "plugins", "permissions",
-        "authentication", "deployment", "profiles", "runs", "telemetry", "api", "troubleshooting",
+        "authentication", "deployment", "workflows", "profiles", "runs", "telemetry", "api", "troubleshooting",
     ]
     for item in topics:
         code, response = _command("guide", item["id"], cwd=tmp_path)
@@ -259,7 +259,7 @@ def test_module_helpers_do_not_expand_root_exports():
     assert "read_guide" not in radt.__all__
     assert {topic["id"] for topic in list_guide_topics()} == {
         "start", "controls", "appearance", "sections", "plugins", "permissions",
-        "authentication", "deployment", "profiles", "runs", "telemetry", "api", "troubleshooting",
+        "authentication", "deployment", "workflows", "profiles", "runs", "telemetry", "api", "troubleshooting",
     }
 
 

@@ -1,6 +1,6 @@
 # Role-Aware Dashboard Toolkit release audit
 
-- Version: `0.1.0`
+- Version: `0.2.0rc1`
 - Distribution strategy: `single-package-optional-extras`
 - Artifacts: `api`, `auth`, `core`, `full`, `pandas`, `workbench`
 - Public API families: `app-shell`, `authenticated-access`, `controls-and-security`, `installed-guidance`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`

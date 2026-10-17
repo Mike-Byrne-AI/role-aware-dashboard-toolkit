@@ -8,6 +8,8 @@ precedence over these repository defaults.
 - Keep changes small and preserve public APIs unless their change is requested.
 - Keep application-specific integrations, private data, credentials, historical
   evidence, and development-harness state outside the public source tree.
+  Curated fictional applications such as `examples/landscaping` may demonstrate
+  host integration; their runtime data and credentials must stay outside the checkout.
 - Discover package capabilities with `python -m role_aware_dashboard_toolkit
   inspect` and read only relevant `guide` topics. Do not invent supported APIs.
 - Verify imports resolve to this checkout when testing source changes. An older

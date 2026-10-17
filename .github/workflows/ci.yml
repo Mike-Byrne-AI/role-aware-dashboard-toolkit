@@ -440,6 +440,35 @@ jobs:
               finally:
                   os.chdir(previous_directory)
           PY
+      - name: Landscaping extracted-sdist startup and restart
+        run: |
+          sdist="$(python - <<'PYTHON'
+          import pathlib
+
+          sdists = sorted(pathlib.Path("dist").glob("role_aware_dashboard_toolkit-*.tar.gz"))
+          assert len(sdists) == 1, "expected exactly one sdist"
+          print(sdists[0])
+          PYTHON
+          )"
+          python tools/landscaping_artifact_smoke.py --sdist "$sdist" --output-dir "$RUNNER_TEMP/landscaping-artifact-smoke"
+          python - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          receipt = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "landscaping-artifact-smoke" / "summary.json").read_text())
+          sdist = next(pathlib.Path("dist").glob("role_aware_dashboard_toolkit-*.tar.gz"))
+          assert receipt["passed"] is True
+          assert receipt["artifact"] == {"filename": sdist.name, "sha256": hashlib.sha256(sdist.read_bytes()).hexdigest()}
+          PYTHON
+      - name: Upload landscaping artifact verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: role_aware_dashboard_toolkit-landscaping-artifact-evidence
+          path: ${{ runner.temp }}/landscaping-artifact-smoke/summary.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Upload validated distribution artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -3,7 +3,7 @@
 This recipe covers one dashboard process, one local access database and a Caddy
 HTTPS reverse proxy on the same host, with an existing Keycloak OIDC provider.
 A server operator must control the domain, certificates, service account and
-provider. Dashforge supplies the dashboard and permission checks; it does not
+provider. The toolkit supplies the dashboard and permission checks; it does not
 operate these services. Multiple people can use separate browser sessions.
 
 Complete [authentication](authentication.md) first. Generate with `init --auth`;

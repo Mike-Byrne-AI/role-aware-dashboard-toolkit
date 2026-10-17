@@ -2,11 +2,18 @@
 
 ## Unreleased
 
-The next release is 0.2.0: the changes under "Changed (BREAKING)" need host
-changes.
+## 0.2.0rc1 (2026-10-17)
+
+Release candidate for 0.2.0; this heading does not establish publication or
+deployment readiness. The changes under "Changed (BREAKING)" require host
+updates. Follow the [0.1 to 0.2 migration guide](docs/migration_0_2.md) before
+upgrading an existing application.
 
 ### Security
 
+- Checkpoint creation rechecks live access and writable state after reading
+  evidence and before saving. Approval is derived after those reads, so a
+  permission change during evidence retrieval cannot retain earlier authority.
 - A dashboard render no longer stops a host-started audit writer. Only an
   explicit toggle or path change by a `can_manage_audit` role starts, stops
   or moves it, and the toggle shows the live state to every role.
@@ -178,6 +185,31 @@ changes.
 
 ### Added
 
+- Fresh-source-package landscaping verification installs the reviewed source
+  distribution in a separate environment, exercises protected actions and
+  restart, and records the unchanged artifact's digest.
+- A disposable landscaping TLS/recovery drill checks certificate verification,
+  session cookies and a separate restore, including the need to invalidate old
+  sessions and reapply revocations before restored service opens.
+- Dependency CI includes the complete landscaping runtime with Argon2 alongside
+  the API and full toolkit environments. A source regression prevents the
+  landscaping copy of the generic action helper from drifting.
+- Cedar & Stone Landscaping as a runnable source demo with fictional accounts,
+  shared scheduling, admin job controls and history, customer and metrics views,
+  isolated private storage, and dedicated API/security and browser checks.
+- A generic record-workflow example with reusable transaction-backed action
+  helpers, a consumer acceptance runner and implementation recipes for editing,
+  rescheduling and status changes. The new installed `guide workflows` topic
+  explains integration boundaries and verification; no core public API is added.
+
+- The Project Pulse starter separates Overview, Plan, Progress and Activity,
+  with a restrained light theme, summary cards and visible access/freeze status.
+- A dependency-free host integration example demonstrates private records,
+  live grants, shared freeze and deferred actions bound to the current account.
+- Browser acceptance covers the generated starter on desktop and mobile,
+  including keyboard edits and navigation; CI uses the installed package.
+- A first-dashboard guide explains native Windows, macOS and Linux setup,
+  browser launch, restart, session lifetime and common startup failures.
 - Pull-request CI now runs the full Windows test suite, Linux tests on Python
   3.13 and 3.14, and a Chromium dashboard smoke with retained diagnostics.
 - Dependency CI audits resolved API and full runtime installations on pull

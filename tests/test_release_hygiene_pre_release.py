@@ -57,6 +57,23 @@ def test_changelog_gate_requires_exact_release_version_heading(monkeypatch, tmp_
     assert result["status"] == expected_status
 
 
+@pytest.mark.parametrize("heading,expected_status", [
+    ("## 0.2.0rc1 (2026-10-17)", "pass"),
+    ("## 0.2.0 (2026-10-17)", "fail"),
+    ("## 0.2.0rc10 (2026-10-17)", "fail"),
+    ("## 0.2.0rc1.post1 (2026-10-17)", "fail"),
+    ("### 0.2.0rc1 (2026-10-17)", "fail"),
+])
+def test_changelog_gate_distinguishes_candidate_from_stable_release(monkeypatch, tmp_path, heading, expected_status):
+    pre_release = load_pre_release_check_module()
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n{heading}\n\nCandidate notes.\n", encoding="utf-8")
+    monkeypatch.setattr(pre_release, "REPO_ROOT", tmp_path)
+
+    result = pre_release._check_changelog(SimpleNamespace(__version__="0.2.0rc1"))
+
+    assert result["status"] == expected_status
+
+
 @pytest.mark.parametrize("unreleased,expected_status", [
     (None, "pass"),
     ("", "pass"),

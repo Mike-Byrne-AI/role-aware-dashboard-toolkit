@@ -28,3 +28,7 @@ venv/
 .env
 .streamlit/secrets.toml
 access.sqlite3*
+# Fictional application credentials and runtime state never belong in source.
+landscape.sqlite3*
+TRIAL_ACCOUNTS.md
+identity.key

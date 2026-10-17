@@ -7,9 +7,10 @@ it does not write a file or modify a running app.
 from role_aware_dashboard_toolkit.appearance import build_streamlit_theme_toml
 
 snippet = build_streamlit_theme_toml(
-    base="light", background_color="#F3F6FA",
-    secondary_background_color="#E2E8F0", text_color="#172033",
-    primary_color="#0F766E", sidebar_background_color="#E8EEF4",
+    base="light", background_color="#F6F7F2",
+    secondary_background_color="#FFFFFF", text_color="#1D342A",
+    primary_color="#2F614B", sidebar_background_color="#E7EDE1",
+    sidebar_secondary_background_color="#FFFFFF", sidebar_text_color="#1D342A",
 )
 ```
 
@@ -26,7 +27,7 @@ config = radt.DashboardConfig(
     auth_mode="demo",
     registry=registry, layout="columns", columns_per_row=2,
     card_background_color="#FFFFFF",
-    group_background_colors={"Plan": "#EFF6FF"},
+    group_background_colors={"Plan": "#EEF3E9"},
 )
 ```
 
@@ -40,6 +41,36 @@ keyed-container API for group fills in >=1.39; unsupported runtimes fail clearly
 With no fill options, default rendering is preserved. Current runtime details
 are available through `inspect`.
 
+## Make the screen useful before adding decoration
+
+The installed Project Pulse starter demonstrates this palette with four named
+views: Overview, Plan, Progress and Activity. Its overview shows a small set of
+metrics with stated units and sources. Editing controls and audit details have
+their own views, using `DashboardSections` rather than hiding generated HTML.
+The sidebar explains the current role's editing access and displays Changes
+paused when the writable switch is off. Permission checks still run inside
+callbacks; presentation never grants access.
+
+Use native Streamlit containers, columns, metrics, labels and help text. Prefer
+clear task names and visible actions over decorative panels. Keep a restrained
+palette, distinguish surfaces from accents, and do not communicate status by
+color alone. Render user-authored names as plain text, not Markdown images or
+links. The starter's Chart color field recolors its chart, not the global theme.
+
+These are Streamlit patterns, not an arbitrary HTML/CSS theme adapter. Avoid
+targeting Streamlit's private generated DOM selectors. The toolkit's group-fill
+implementation uses only its documented keyed containers and validated colors.
+
+## Check the rendered workflow
+
 Verify page, sidebar, inputs and each group in the actual browser, in both
-layouts you use. Check text contrast and rerun after editing a control. The
-starter's Chart color field recolors its chart, not the global theme.
+layouts you use. Check text contrast and rerun after editing a control. Also
+inspect a phone-width viewport: open its sidebar, navigate between views, and
+confirm that labels, values and actions remain visible without horizontal page
+scrolling. Test keyboard focus and editing, not only pointer clicks.
+
+Switch between Viewer, Planner and Admin where the application provides those
+demo roles. Check that restrictions and the frozen state remain clear, values
+survive navigation, and saving then loading a profile restores permitted values.
+Keep screenshots alongside interaction results when reviewing a visual change;
+screenshots alone do not prove authorization or successful state updates.

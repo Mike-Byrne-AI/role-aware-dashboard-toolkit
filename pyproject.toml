@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "role-aware-dashboard-toolkit"
-version = "0.1.0"
+version = "0.2.0rc1"
 description = "Dashboard/admin-control library for governed operator controls, profile workflows, audit history, plugin surfaces, and explicit operational review"
 readme = "README.md"
 license = "MIT"
@@ -175,6 +175,33 @@ include = [
     "/examples/section_access/policy.py",
     "/examples/section_access/provision.py",
     "/examples/section_access/README.md",
+    "/examples/host_integration/service.py",
+    "/examples/host_integration/demo.py",
+    "/examples/host_integration/README.md",
+    "/examples/record_workflows/actions.py",
+    "/examples/record_workflows/service.py",
+    "/examples/record_workflows/demo.py",
+    "/examples/record_workflows/app.py",
+    "/examples/record_workflows/acceptance.py",
+    "/examples/record_workflows/README.md",
+    "/examples/landscaping/README.md",
+    "/examples/landscaping/requirements.txt",
+    "/examples/landscaping/requirements-dev.txt",
+    "/examples/landscaping/pyproject.toml",
+    "/examples/landscaping/run.py",
+    "/examples/landscaping/landscape/__init__.py",
+    "/examples/landscaping/landscape/action_workflow.py",
+    "/examples/landscaping/landscape/app.py",
+    "/examples/landscaping/landscape/db.py",
+    "/examples/landscaping/landscape/seed.py",
+    "/examples/landscaping/landscape/security.py",
+    "/examples/landscaping/landscape/paths.py",
+    "/examples/landscaping/landscape/launcher.py",
+    "/examples/landscaping/landscape/static/index.html",
+    "/examples/landscaping/landscape/static/app.js",
+    "/examples/landscaping/landscape/static/styles.css",
+    "/examples/landscaping/scripts/browser_check.py",
+    "/examples/landscaping/scripts/operational_check.py",
     "/docs/README.md",
     "/docs/api_security.md",
     "/docs/assets/dashboard_admin_controls_app.png",
@@ -182,7 +209,9 @@ include = [
     "/docs/dashboard_tools.md",
     "/docs/decision_model.md",
     "/docs/distribution.md",
+    "/docs/first_dashboard.md",
     "/docs/governance.md",
+    "/docs/migration_0_2.md",
     "/docs/operator_memory.md",
     "/docs/oss_boundary.md",
     "/docs/plugins.md",
@@ -192,6 +221,7 @@ include = [
     "/docs/release_audit.md",
     "/docs/release_checklist.md",
     "/docs/release_runbook.md",
+    "/docs/record_workflows.md",
     "/docs/replay.md",
     "/docs/run_model.md",
     "/docs/shared_store_patterns.md",
@@ -212,6 +242,7 @@ include = [
     "/tools/pre_release_check.py",
     "/tools/audit_dependencies.py",
     "/tools/browser_smoke.py",
+    "/tools/landscaping_artifact_smoke.py",
     "/README.md",
     "/SECURITY.md",
     "/CONTRIBUTING.md",

@@ -29,7 +29,7 @@ ACTION_PINS = {
     "actions/upload-artifact": (
         "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
         "v7.0.1",
-        4,
+        5,
     ),
     "actions/download-artifact": (
         "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
@@ -121,12 +121,12 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
         assert forbidden not in workflow
     refs = re.findall(r"^\s*-?\s*uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
     assert Counter(refs) == Counter({
-        f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 3,
-        f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 3,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 1,
+        f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 4,
+        f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 4,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 3,
     })
-    assert workflow.count("persist-credentials: false") == 3
-    assert workflow.count("timeout-minutes:") == 4
+    assert workflow.count("persist-credentials: false") == 4
+    assert workflow.count("timeout-minutes:") == 5
     assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in workflow
     assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
     assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
@@ -134,16 +134,16 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
-@pytest.mark.parametrize("job", ["tests", "quality", "browser"])
+@pytest.mark.parametrize("job", ["tests", "quality", "browser", "landscaping"])
 def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch, result, job):
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     gate = workflow.split("  required:\n", 1)[1]
     assert "    name: contributor-checks\n" in gate
     assert "    if: ${{ always() }}\n" in gate
-    assert "    needs: [tests, quality, browser]\n" in gate
+    assert "    needs: [tests, quality, browser, landscaping]\n" in gate
     body = re.search(r"python - <<'PY'\n(.*?)^          PY$", gate, flags=re.MULTILINE | re.DOTALL).group(1)
     checks = compile(textwrap.dedent(body), "contributor-required-check", "exec")
-    results = {name: {"result": "success"} for name in ("tests", "quality", "browser")}
+    results = {name: {"result": "success"} for name in ("tests", "quality", "browser", "landscaping")}
     results[job]["result"] = result
     monkeypatch.setenv("NEEDS_JSON", json.dumps(results))
     if result == "success":
@@ -154,6 +154,24 @@ def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch
     monkeypatch.setenv("NEEDS_JSON", json.dumps({name: data for name, data in results.items() if name != job}))
     with pytest.raises(SystemExit, match="All contributor jobs must succeed"):
         exec(checks, {})
+
+
+def test_contributor_ci_exercises_landscaping_with_its_required_dependencies():
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    demo = workflow.split("  landscaping:\n", 1)[1].split("  required:\n", 1)[0]
+    assert "    runs-on: ubuntu-latest\n" in demo
+    assert 'python -m pip install ".[api]" -r examples/landscaping/requirements-dev.txt' in demo
+    assert "python -m pip check" in demo
+    assert "python -m pytest -c examples/landscaping/pyproject.toml examples/landscaping/tests --import-mode=importlib -q" in demo
+    assert "python examples/landscaping/scripts/browser_check.py --output-dir" in demo
+    assert "python examples/landscaping/scripts/operational_check.py --output-dir" in demo
+    assert 'python -m build --sdist --outdir "$RUNNER_TEMP/landscaping-dist"' in demo
+    assert 'python tools/landscaping_artifact_smoke.py --sdist "${sdists[0]}" --output-dir' in demo
+    assert '${{ runner.temp }}/landscaping-operations/summary.json' in demo
+    assert '${{ runner.temp }}/landscaping-artifact/summary.json' in demo
+    assert "python -m playwright install --with-deps chromium" in demo
+    assert "if: ${{ always() }}" in demo
+    assert "path: ${{ runner.temp }}/landscaping-browser" in demo
 
 
 def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_evidence():
@@ -207,7 +225,7 @@ def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
     })
     assert workflow.count("persist-credentials: false") == 1
     assert workflow.count("timeout-minutes:") == 2
-    assert re.search(r"extra: \[[\"']?api[\"']?, [\"']?full[\"']?\]", workflow)
+    assert re.search(r"extra: \[[\"']?api[\"']?, [\"']?full[\"']?, [\"']?landscaping[\"']?\]", workflow)
     assert "pip-audit==2.10.1" in workflow
     assert "--python" in workflow
     assert "--audit-python" in workflow

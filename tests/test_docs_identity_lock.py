@@ -65,6 +65,8 @@ def test_readme_primary_paths_use_only_retained_generic_examples():
         "examples/README.md",
         "examples/dashboard_admin_controls_app.py",
         "examples/operator_review",
+        "examples/landscaping",
+        "examples/record_workflows",
         "examples/section_access",
         "examples/studio_dispatch",
     }

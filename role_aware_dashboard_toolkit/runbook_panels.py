@@ -143,6 +143,18 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Checkpoint", key="_radt_run_checkpoint", disabled=not can_manage) and can_mutate(ctx, "can_manage_runs"):
+            # Evidence adapters can take time or change current access. Read
+            # first, then derive approval and recheck before committing a save.
+            audit_events = (
+                config.audit.recent(25)
+                if has_perm(ctx, "can_view_audit", default=False)
+                else []
+            )
+            telemetry = (
+                _latest_telemetry(st.session_state)
+                if has_perm(ctx, "can_view_metrics", default=False)
+                else {}
+            )
             updated = append_checkpoint(
                 active_run,
                 config.registry.persistable_snapshot(st.session_state),
@@ -152,19 +164,13 @@ def render_runbook_sidebar(st: Any, config: Any, ctx: Any) -> None:
                 actor=_record_actor(ctx, st.session_state),
                 role=ctx.role,
                 source="ui",
-                audit_events=(
-                    config.audit.recent(25)
-                    if has_perm(ctx, "can_view_audit", default=False)
-                    else []
-                ),
-                telemetry=(
-                    _latest_telemetry(st.session_state)
-                    if has_perm(ctx, "can_view_metrics", default=False)
-                    else {}
-                ),
+                audit_events=audit_events,
+                telemetry=telemetry,
             )
             updated["active_profile_id"] = _selected_profile_id(st.session_state)
-            if _save_record(st, store.save, updated):
+            if not can_mutate(ctx, "can_manage_runs"):
+                st.warning("Checkpoint not saved: current access and writable state must still permit this action.")
+            elif _save_record(st, store.save, updated):
                 checkpoint_id = str(updated.get("last_checkpoint_id", ""))
                 config.audit.log("checkpoint_create", detail=checkpoint_id, role=ctx.role, source="ui")
                 st.toast(f"Saved checkpoint: {checkpoint_id}")

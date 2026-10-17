@@ -32,8 +32,13 @@ Discover them with `python -m role_aware_dashboard_toolkit guide start`.
 
 ## Build and deploy an application
 
+- [Upgrade from 0.1 to 0.2](migration_0_2.md) — candidate compatibility changes, host updates and upgrade verification
+- [Run your first dashboard](first_dashboard.md) — install, generate, open, stop and restart the starter on Windows, macOS or Linux
 - [Installed guidance](../role_aware_dashboard_toolkit/resources/guides/start.md) — capability discovery and starter commands
 - [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze, and private provisioning
+- [Host integration example](../examples/host_integration/README.md) — protect host reads and deferred writes with current identity, role and freeze checks
+- [Landscaping dashboard demo](../examples/landscaping/README.md) — run a complete fictional business app with password sign-in, shared work and protected admin tools
+- [Protected record workflows](record_workflows.md) — implement edits, date changes and status transitions with transactional history and consumer acceptance checks
 - [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS setup and deployment acceptance
 
 ## API and extension points

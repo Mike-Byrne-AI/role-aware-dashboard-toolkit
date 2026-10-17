@@ -1,7 +1,48 @@
 # Role-Aware Dashboard Toolkit examples
 
-The examples are intentionally small and use only the retained generic library
-surface.
+The examples use the retained library surface. Start with a small recipe or
+explore a complete fictional application to see how the pieces fit together.
+
+## Run a complete business dashboard
+
+[Cedar & Stone Landscaping](landscaping/README.md) combines real local password
+sign-in with a shared five-person crew schedule and message board. Admins manage
+accounts, jobs, assignments, rescheduling, completion/cancellation and history,
+with separate customer, audit/telemetry and business-metrics pages.
+
+This source example uses the toolkit's access policy and protected-change
+recipe. Its FastAPI server, password sessions, SQLite database and browser UI
+belong to the demo. The guide covers setup, fresh fictional accounts, restart
+and the Windows WSL path. Runtime data stays in a private folder outside the
+checkout; no account passwords or saved databases are included.
+
+## Start with an editable dashboard
+
+[Run your first dashboard](../docs/first_dashboard.md) walks through generating
+Project Pulse with the installed `init` command, opening it in a browser, and
+restarting it later. The starter includes a light theme, overview and progress
+views, grouped controls, profiles and an audit history. Use it to build a small
+dashboard without copying an entire application.
+
+## Connect protected host operations
+
+[Host integration](host_integration/README.md) is a dependency-free example of
+connecting a host-verified identity to private records and deferred writes.
+It demonstrates actor-scoped data, live grants, shared freeze, and rejecting an
+old action after an account change. Its synthetic identity setup is explicitly
+a local demonstration; the host supplies real authentication and persistence.
+
+## Edit records and verify protected changes
+
+[Record workflows](record_workflows/README.md) demonstrates a host-owned SQLite
+transaction connecting live permissions, record revisions, validated changes and
+durable history. Its reusable action helper supports rescheduling and status
+changes; its acceptance runner checks actual effects and expected denials. The
+[implementation recipes](../docs/record_workflows.md) explain date editing,
+assignment selection, confirmations, stale edits and browser acceptance.
+
+The example uses synthetic identities. Copy and adapt its helpers from the
+matching source distribution; they are not new stable core APIs or a login service.
 
 ## A/B/C access and admin protection
 

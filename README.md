@@ -35,6 +35,12 @@ be used independently of this dashboard.*
   timeline, link evidence across runs, and preserve findings and handoff summaries.
 - **Review workflows inside existing Python applications:** create, store,
   compare, and export the same records without running a dashboard.
+- **Protected record editing:** adapt the [record workflow example](examples/record_workflows/README.md)
+  to connect rescheduling and status changes to live permissions, stale-edit
+  detection and durable change history in your application's transaction.
+- **A complete business dashboard:** run [Cedar & Stone Landscaping](examples/landscaping/README.md)
+  to try password accounts, a shared crew schedule, job management, customers,
+  business metrics and admin audit pages using fictional data.
 
 ## What is included
 
@@ -95,6 +101,10 @@ The [Operator Review Lab guide](examples/operator_review/README.md) explains the
 workflow, report reader, and persistence boundaries.
 
 ## Build your own application
+
+For a step-by-step browser launch, restart instructions, and common setup fixes,
+follow [Run your first dashboard](docs/first_dashboard.md). It includes native
+Windows PowerShell commands that do not require shell activation.
 
 If you followed the quick start, stop the demo with `Ctrl+C` and activate the
 same environment from the repository root before changing directories. In

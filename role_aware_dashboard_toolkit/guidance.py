@@ -20,6 +20,7 @@ _GUIDE_TITLES = {
     "permissions": "Roles, permissions and frozen controls",
     "authentication": "Verified sign-in, role grants and shared freeze",
     "deployment": "Deploy and verify one shared authenticated dashboard",
+    "workflows": "Build and verify protected record changes",
     "profiles": "Save and load profiles",
     "runs": "Runs, checkpoints and replay",
     "telemetry": "Sample and capture telemetry",
