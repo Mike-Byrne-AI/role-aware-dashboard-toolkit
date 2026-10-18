@@ -3,7 +3,7 @@ name: contributor-ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "integrate/**"]
   workflow_dispatch:
 
 permissions:

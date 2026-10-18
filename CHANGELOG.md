@@ -17,6 +17,9 @@
   storage, private credential handling, company workflows and restoration that
   reconciles post-backup access and business changes. Public-host, browser, load
   and recovery acceptance remain explicit operator work.
+- Maintainer `integrate/**` branches run the existing contributor and dependency
+  checks on push, so normal Git access can start validation before a protected
+  `main` update. Required checks and release permissions remain unchanged.
 
 ### Fixed
 

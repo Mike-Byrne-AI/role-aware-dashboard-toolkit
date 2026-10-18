@@ -82,6 +82,12 @@ for seven days. The workflow has read-only permissions and does not receive
 release credentials. GitHub may require a maintainer to approve the first
 workflow run for a fork contributor.
 
+Pull requests are the recommended review path. Maintainers can also push an
+`integrate/**` branch, such as `integrate/landscaping-hosting`, to run the same
+contributor and dependency checks before updating `main`. This lets a Git push
+start validation when API-driven pull request creation is unavailable. Required
+checks and branch protection still apply to any update of `main`.
+
 To run these browser checks locally, install Playwright in the development
 environment. From the repository root, in PowerShell:
 
@@ -112,7 +118,7 @@ with an isolated wheel installation when checking packaged starter resources.
 `.github/workflows/dependency-audit.yml` audits three freshly resolved runtime
 environments: `api`, `full`, and `landscaping` (the toolkit's `api` extra plus
 the demo requirements, including Argon2). It runs on pull requests, pushes to
-`main`, manual dispatch, and Mondays at 09:17 UTC. Its `dependency-checks`
+`main` or `integrate/**`, manual dispatch, and Mondays at 09:17 UTC. Its `dependency-checks`
 result requires all three audits
 to complete without known vulnerabilities or skipped packages. Scanner and
 network errors fail separately from vulnerability findings. Reports and exact

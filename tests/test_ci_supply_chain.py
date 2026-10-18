@@ -110,7 +110,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert re.findall(r"^  ([A-Za-z_]+):", triggers, flags=re.MULTILINE) == [
         "pull_request", "push", "workflow_dispatch",
     ]
-    assert "branches: [main]" in triggers
+    assert 'branches: [main, "integrate/**"]' in triggers
     assert "paths:" not in triggers and "paths-ignore:" not in triggers
     assert "permissions:\n  contents: read\n" in workflow
     assert "    permissions: {}\n" in workflow
@@ -208,7 +208,7 @@ def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
     assert set(re.findall(r"^  ([A-Za-z_]+):", triggers, flags=re.MULTILINE)) == {
         "pull_request", "push", "workflow_dispatch", "schedule",
     }
-    assert "branches: [main]" in triggers
+    assert 'branches: [main, "integrate/**"]' in triggers
     assert "17 9 * * 1" in triggers
     assert "paths:" not in triggers and "paths-ignore:" not in triggers
     assert "permissions:\n  contents: read\n" in workflow
