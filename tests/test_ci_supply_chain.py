@@ -237,6 +237,96 @@ def test_actual_failure_annotations_escape_commands_without_reporting_private_bo
     assert "private" not in output
 
 
+@pytest.mark.parametrize("kind", ["failure", "error"])
+@pytest.mark.parametrize("style", ["relative", "backslashes", "absolute"])
+def test_actual_failure_annotations_report_only_safe_final_location(tmp_path, monkeypatch, capsys, kind, style):
+    checkout = tmp_path / "checkout"
+    source = checkout / "tools" / "worker.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("# synthetic source\n", encoding="utf-8")
+    monkeypatch.chdir(checkout)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    path = {"relative": "tools/worker.py", "backslashes": r"tools\worker.py", "absolute": str(source)}[style]
+    report = ET.Element("testsuites")
+    case = ET.SubElement(report, "testcase", {"classname": "tests.synthetic", "name": "test_probe"})
+    ET.SubElement(case, kind, {"message": "private exception message"}).text = (
+        "tools/worker.py:7: ValueError\n"
+        "private assertion text and source line\n"
+        f"{path}:142: PermissionError\n"
+    )
+    ET.SubElement(case, "system-out").text = "private captured stdout"
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    exec(_failure_annotation_script(), {})
+    assert capsys.readouterr().out == (
+        "::error::Failed test: tests.synthetic::test_probe; "
+        "failure at tools/worker.py:142 (PermissionError)\n"
+    )
+
+
+@pytest.mark.parametrize("summary", [
+    "private assertion text without a traceback summary",
+    "tools/missing.py:142: PermissionError",
+    "docs/private.py:142: PermissionError",
+    "tools/directory.py:142: PermissionError",
+    "tools/worker.txt:142: PermissionError",
+    "tools/../private.py:142: PermissionError",
+    "tools/worker.py:0: PermissionError",
+    "tools/worker.py:-1: PermissionError",
+    "tools/worker.py:10000000: PermissionError",
+    "tools/worker.py:142: PermissionError: private message",
+    "tools/worker.py:142: ::warning::private message",
+    "tools/worker.py:142: PermissionError%0A::error::private message",
+    "tools/worker.py:142: " + "E" * 81,
+    "tools/" + "a" * 101 + ".py:142: PermissionError",
+    "tools/worker%0A.py:142: PermissionError",
+    "tools/worker.py:142: private_password",
+])
+def test_actual_failure_annotations_omit_untrusted_location_details(tmp_path, monkeypatch, capsys, summary):
+    checkout = tmp_path / "checkout"
+    (checkout / "tools" / "directory.py").mkdir(parents=True)
+    (checkout / "docs").mkdir()
+    for path in ("tools/worker.py", "tools/worker.txt", "docs/private.py", "private.py", "tools/worker%0A.py"):
+        (checkout / path).write_text("# synthetic source\n", encoding="utf-8")
+    monkeypatch.chdir(checkout)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    report = ET.Element("testsuites")
+    case = ET.SubElement(report, "testcase", {"classname": "tests.synthetic", "name": "test_probe"})
+    ET.SubElement(case, "failure").text = summary
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    exec(_failure_annotation_script(), {})
+    assert capsys.readouterr().out == "::error::Failed test: tests.synthetic::test_probe\n"
+
+
+@pytest.mark.parametrize("location", ["outside", "file_symlink", "directory_symlink"])
+def test_actual_failure_annotations_reject_outside_and_linked_sources(tmp_path, monkeypatch, capsys, location):
+    checkout = tmp_path / "checkout"
+    tools = checkout / "tools"
+    tools.mkdir(parents=True)
+    outside = tmp_path / "outside.py"
+    outside.write_text("# synthetic source\n", encoding="utf-8")
+    source = tools / "worker.py"
+    source.write_text("# synthetic source\n", encoding="utf-8")
+    try:
+        if location == "file_symlink":
+            (tools / "linked.py").symlink_to(source)
+            summary_path = "tools/linked.py"
+        elif location == "directory_symlink":
+            (tools / "linked").symlink_to(tools, target_is_directory=True)
+            summary_path = "tools/linked/worker.py"
+        else:
+            summary_path = str(outside)
+    except OSError:
+        pytest.skip("This runner does not permit creating symlinks")
+    monkeypatch.chdir(checkout)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    report = ET.Element("testsuites")
+    case = ET.SubElement(report, "testcase", {"classname": "tests.synthetic", "name": "test_probe"})
+    ET.SubElement(case, "failure").text = f"{summary_path}:142: PermissionError"
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    exec(_failure_annotation_script(), {})
+    assert capsys.readouterr().out == "::error::Failed test: tests.synthetic::test_probe\n"
+
+
 def test_actual_failure_annotations_limit_names_and_total_annotations(tmp_path, monkeypatch, capsys):
     report = ET.Element("testsuite")
     for _ in range(30):

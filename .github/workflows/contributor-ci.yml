@@ -52,11 +52,39 @@ jobs:
         run: |
           import os
           from pathlib import Path
+          import re
           import xml.etree.ElementTree as ET
 
           def annotate(level, message):
               escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
               print(f"::{level}::{escaped}")
+
+          def failure_location(body):
+              # Only a strict final traceback summary may supply public detail.
+              # Never emit assertion text, messages, source lines or captured output.
+              pattern = r"(.{1,1024}):([1-9][0-9]{0,6}): ([A-Z][A-Za-z0-9_]{0,79})"
+              match = next((found for line in reversed(body.splitlines())
+                            if (found := re.fullmatch(pattern, line))), None)
+              if match is None:
+                  return ""
+              try:
+                  checkout = Path.cwd().resolve()
+                  reported = Path(match[1].replace("\\", "/"))
+                  relative = reported.relative_to(checkout) if reported.is_absolute() else reported
+                  if not relative.parts or relative.parts[0] not in {
+                      "tools", "tests", "examples", "role_aware_dashboard_toolkit",
+                  }:
+                      return ""
+                  if (len(relative.as_posix()) > 240 or relative.suffix != ".py"
+                          or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}", part)
+                                 for part in relative.parts)):
+                      return ""
+                  source = checkout / relative
+                  if source.resolve(strict=True) != source or not source.is_file():
+                      return ""
+                  return f"; failure at {relative.as_posix()}:{match[2]} ({match[3]})"
+              except (OSError, ValueError, RuntimeError):
+                  return ""
 
           try:
               directory = os.environ.get("RUNNER_TEMP")
@@ -74,7 +102,9 @@ jobs:
               for case in failures[:25]:
                   classname = (case.get("classname") or "<unknown class>")[:240]
                   name = (case.get("name") or "<unknown test>")[:240]
-                  annotate("error", f"Failed test: {classname}::{name}")
+                  failure = next(item for item in case if item.tag in {"failure", "error"})
+                  location = failure_location(failure.text or "")
+                  annotate("error", f"Failed test: {classname}::{name}{location}")
               if len(failures) > 25:
                   annotate("warning", "Additional failing test names omitted; inspect the job logs.")
           except (OSError, ValueError, ET.ParseError):
