@@ -130,10 +130,12 @@ def test_empty_external_output_is_accepted(tmp_path):
 
 
 def test_subprocess_environment_discards_import_and_live_demo_overrides(monkeypatch):
-    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "LANDSCAPE_DATA_DIR"):
+    names = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "LANDSCAPE_DATA_DIR",
+             "PUBLIC_ORIGIN", "PORT", "TRUSTED_PROXY_CIDRS")
+    for name in names:
         monkeypatch.setenv(name, "must-not-be-inherited")
     environment = smoke.clean_environment()
-    assert all(name not in environment for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "LANDSCAPE_DATA_DIR"))
+    assert all(name not in environment for name in names)
     assert environment["PYTHONDONTWRITEBYTECODE"] == "1"
 
 
@@ -142,6 +144,21 @@ def test_failed_subprocess_output_cannot_leak_configuration(tmp_path):
     with pytest.raises(smoke.SmokeFailure) as failure:
         smoke.run_command([sys.executable, "-c", "print('synthetic-secret'); raise SystemExit(1)"], tmp_path, label="Probe")
     assert "synthetic-secret" not in str(failure.value)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group controller")
+def test_expected_rejection_requires_the_exact_exit_code(tmp_path):
+    result = smoke.run_command(
+        [sys.executable, "-c", "print('refused'); raise SystemExit(2)"], tmp_path,
+        label="Expected rejection", expected_returncode=2,
+    )
+    assert result.strip() == b"refused"
+    for exit_code in (0, 1):
+        with pytest.raises(smoke.SmokeFailure):
+            smoke.run_command(
+                [sys.executable, "-c", f"raise SystemExit({exit_code})"], tmp_path,
+                label="Expected rejection", expected_returncode=2,
+            )
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group controller")
@@ -222,5 +239,8 @@ def test_failure_receipt_is_safe_and_never_claims_a_pass(monkeypatch, capsys):
 def test_release_contract_is_exact_and_contains_the_demo_and_maintained_runner():
     root, expected = smoke.release_contract()
     assert f"{root}/examples/landscaping/run.py" in expected
+    assert f"{root}/examples/landscaping/HOSTING.md" in expected
+    assert f"{root}/examples/landscaping/hosting/pilot.py" in expected
+    assert f"{root}/examples/landscaping/scripts/hosted_acceptance.py" in expected
     assert f"{root}/tools/landscaping_artifact_smoke.py" in expected
     assert not any("TRIAL_ACCOUNTS" in member or member.endswith(".sqlite3") for member in expected)

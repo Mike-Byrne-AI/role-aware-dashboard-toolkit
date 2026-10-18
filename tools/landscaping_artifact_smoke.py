@@ -36,7 +36,8 @@ MAX_EXPANDED_BYTES = 128 * 1024 * 1024
 MAX_MEMBER_BYTES = 32 * 1024 * 1024
 MAX_MEMBERS = 4096
 COVERAGE_BOUNDARY = {
-    "included": ["POSIX", "fresh-sdist-install", "local-HTTP", "synthetic-accounts", "restart"],
+    "included": ["POSIX", "fresh-sdist-install", "local-HTTP", "synthetic-accounts", "restart",
+                 "hosted-startup-preflight", "hosted-checker-cli"],
     "excluded": ["HTTPS", "external-identity-provider", "Windows-WSL-integration", "browser", "production-restore"],
 }
 
@@ -119,7 +120,8 @@ def extract_sdist(sdist: Path, destination: Path, root: str, expected: set[str])
 
 def clean_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "LANDSCAPE_DATA_DIR"):
+    for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "LANDSCAPE_DATA_DIR",
+                 "PUBLIC_ORIGIN", "PORT", "TRUSTED_PROXY_CIDRS"):
         environment.pop(name, None)
     environment.update(PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
     return environment
@@ -143,12 +145,17 @@ def stop_process(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
-def run_command(command: list[str], cwd: Path, *, label: str, timeout: float = 180) -> bytes:
+def run_command(
+    command: list[str], cwd: Path, *, label: str, timeout: float = 180,
+    extra_environment: dict[str, str] | None = None, expected_returncode: int = 0,
+) -> bytes:
     # Keep package-index diagnostics out of public receipts. They can contain
     # host configuration; command output is never copied into error messages.
+    environment = clean_environment()
+    environment.update(extra_environment or {})
     with tempfile.TemporaryFile() as stream:
         process = subprocess.Popen(
-            command, cwd=cwd, env=clean_environment(), start_new_session=True,
+            command, cwd=cwd, env=environment, start_new_session=True,
             stdout=stream, stderr=subprocess.STDOUT,
         )
         try:
@@ -158,7 +165,7 @@ def run_command(command: list[str], cwd: Path, *, label: str, timeout: float = 1
             raise SmokeFailure(f"{label} timed out.") from None
         finally:
             stop_process(process)
-        require(process.returncode == 0, f"{label} failed; command diagnostics were withheld.")
+        require(process.returncode == expected_returncode, f"{label} failed; command diagnostics were withheld.")
         stream.seek(0)
         return stream.read()
 
@@ -284,6 +291,60 @@ def check_runtime(python: Path, source: Path, output: Path, checks: list[str]) -
         checks.append("launcher-logs-contain-no-generated-passwords")
 
 
+def check_hosted_entrypoints(python: Path, source: Path, output: Path, checks: list[str]) -> None:
+    # These are subprocesses running the shipped files and installed toolkit,
+    # not imports from the checkout. No public listener or HTTPS claim is made.
+    demo = source / "examples/landscaping"
+    pilot = [str(python), "-I", str(demo / "hosting/pilot.py")]
+    checker = [str(python), "-I", str(demo / "scripts/hosted_acceptance.py")]
+    with tempfile.TemporaryDirectory(prefix="radt-hosted-artifact-private-") as temporary:
+        fixture = Path(temporary)
+        fixture.chmod(0o700)
+        data = fixture / "data"
+        environment = {"PUBLIC_ORIGIN": "https://landscaping.example.test", "LANDSCAPE_DATA_DIR": str(data)}
+        diagnostics = []
+
+        def operate(command: str, expected_returncode: int = 0) -> None:
+            diagnostics.append(run_command(
+                [*pilot, command], output, label=f"Shipped hosted {command}",
+                extra_environment=environment, expected_returncode=expected_returncode, timeout=30,
+            ))
+
+        operate("preflight", 1)
+        operate("serve", 1)
+        require(not data.exists(), "Hosted startup initialized missing storage.")
+        operate("provision")
+        before = snapshot(data)
+        require(len(before[0]["users"]) == 6, "Hosted provision did not create six fictional accounts.")
+        operate("preflight")
+        operate("provision", 1)
+        require(snapshot(data) == before, "Hosted preflight or repeated provisioning changed saved state.")
+        checks.append("hosted-provision-once-and-read-only-preflight-without-implicit-seeding")
+
+        # A valid-length key from a different backup must fail before serving;
+        # rejection must not replace the key or silently repair the database.
+        (data / "identity.key").write_bytes(os.urandom(32))
+        mismatched = snapshot(data)
+        operate("serve", 1)
+        require(snapshot(data) == mismatched, "Hosted startup changed mismatched identity storage.")
+        checks.append("hosted-startup-refuses-mismatched-database-and-key-without-mutation")
+
+        passwords = re.findall(r"\| `?[a-z]+`? \| `([^`]+)` \|", (data / "TRIAL_ACCOUNTS.md").read_text(encoding="utf-8"))
+        require(len(passwords) == 6, "Hosted fictional account handoff is incomplete.")
+        require(not any(password.encode() in item for password in passwords for item in diagnostics),
+                "Hosted operation diagnostics exposed a generated password.")
+        checks.append("hosted-operation-logs-contain-no-generated-passwords")
+
+        run_command([*checker, "--help"], output, label="Shipped hosted checker help")
+        receipt = fixture / "unexpected-receipt.json"
+        run_command(
+            [*checker, "--base-url", "http://127.0.0.1:1", "--output", str(receipt)],
+            output, label="Shipped hosted checker plaintext rejection", expected_returncode=2,
+        )
+        require(not receipt.exists(), "Hosted checker accepted a plaintext origin.")
+        checks.append("hosted-checker-cli-runs-and-rejects-plaintext-before-creating-evidence")
+
+
 def smoke(sdist: Path, output: Path, checks: list[str]) -> dict:
     root, expected = release_contract()
     require(sdist.is_file() and not sdist.is_symlink(), "Sdist must be a regular file.")
@@ -302,6 +363,7 @@ def smoke(sdist: Path, output: Path, checks: list[str]) -> dict:
     require(imported.is_relative_to(environment), "Toolkit import escaped the fresh environment.")
     checks.append("fresh-sdist-install-dependencies-and-isolated-toolkit-import")
     check_runtime(python, source, output, checks)
+    check_hosted_entrypoints(python, source, output, checks)
     require(source_snapshot(source) == pristine, "Extracted public source changed during installation or execution.")
     require(sha256(sdist) == artifact_hash, "Sdist bytes changed during verification.")
     checks.append("public-source-pristine-and-artifact-bytes-unchanged")

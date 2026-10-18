@@ -9,6 +9,10 @@ This optional source example runs on Linux, macOS or Windows through WSL Ubuntu.
 It is included in the repository and source distribution; the installed toolkit
 wheel does not include this application or its extra dependencies.
 
+For a shared pilot, use [Host the landscaping dashboard](HOSTING.md). It includes
+separate provision/preflight/serve commands, a checker for your chosen HTTPS
+address and the operator steps needed before inviting real staff.
+
 ## Run from this checkout
 
 Use Python 3.10 or later. Open a terminal in the repository root. Create the
@@ -128,6 +132,8 @@ the factory itself does not seed accounts.
 | [landscape/action_workflow.py](landscape/action_workflow.py) | Reusable revision/reason/reauthorization/save/audit recipe |
 | [landscape/static/app.js](landscape/static/app.js) | Shared schedule, admin pages, accessible dialogs and stale-edit handling |
 | [landscape/launcher.py](landscape/launcher.py) | Local startup, persistent private storage and first-run provisioning |
+| [hosting/pilot.py](hosting/pilot.py) | Explicit hosted provisioning, read-only storage checks and service startup behind verified HTTPS ingress |
+| [scripts/hosted_acceptance.py](scripts/hosted_acceptance.py) | Protocol checks against a selected HTTPS service, with optional private pilot accounts |
 
 The action helper is an exact copy of
 [the record workflow example's actions.py](../record_workflows/actions.py), under
@@ -227,8 +233,15 @@ HTTPS/proxy configuration, an actual OIDC provider, Windows/WSL installation or 
 production backup policy. The demo uses its own password sessions; it is not an
 OIDC deployment example.
 
-For a live business deployment, add HTTPS/session policy, recovery and tested
-backups, monitoring, operational ownership and your real business rules. This is
-a single-host SQLite example, not a Cloudflare Workers deployment. Review the
-[deployment guidance](../../role_aware_dashboard_toolkit/resources/guides/deployment.md)
-before adapting it for real staff or customer information.
+For a shared pilot, follow the example's [hosting guide](HOSTING.md). The hosted
+adapter separates one-time provisioning from restart, checks that the database
+matches its identity key, and requires secure sessions behind an isolated HTTPS
+ingress. Its acceptance checker connects to the selected address; it does not
+launch a test fixture or establish browser, load or restore acceptance.
+
+Public ingress and proxy trust, tested backups, monitoring, recovery ownership
+and your real business rules still require host-specific work. This is a
+single-host SQLite example, not a Cloudflare Workers deployment. The separate
+[deployment guide](../../role_aware_dashboard_toolkit/resources/guides/deployment.md)
+covers the toolkit's authenticated Streamlit starter with OIDC; its provider
+configuration does not apply to this password-session example.

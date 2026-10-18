@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added
+
+- The landscaping source example includes an optional hosted adapter with
+  explicit first provisioning, read-only preflight and normal startup that never
+  reseeds accounts. Preflight checks private storage, database integrity and the
+  identity key's match to every saved account before opening a listener.
+- A hosted landscaping acceptance runner checks a selected HTTPS service with
+  normal certificate verification and optional private test accounts. It checks
+  role boundaries, shared schedule visibility, session-cookie attributes,
+  CSRF/origin denials and logged-out session replay, with sanitized receipts.
+- A landscaping hosting guide records the deployment lessons: isolated HTTPS
+  ingress, bounded proxy trust and shared-source login throttling, persistent
+  storage, private credential handling, company workflows and restoration that
+  reconciles post-backup access and business changes. Public-host, browser, load
+  and recovery acceptance remain explicit operator work.
+
+### Fixed
+
+- The landscaping browser check waits for the notification's intended lifetime
+  before capturing the cleared schedule, avoiding a premature timeout.
+
+These are source changes after the 0.2.0rc1 candidate. Earlier candidate artifacts
+and verification receipts do not include or certify these additions; no new
+release or hosted deployment is implied.
+
 ## 0.2.0rc1 (2026-10-17)
 
 Release candidate for 0.2.0; this heading does not establish publication or

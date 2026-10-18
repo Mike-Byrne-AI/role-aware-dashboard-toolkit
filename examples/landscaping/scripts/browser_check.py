@@ -211,7 +211,8 @@ def run_ui_flows(base, accounts, out, checked, passwords, data_dir):
     alex.get_by_label("Message to the crew", exact=True).fill("")
     alex.get_by_label("Order", exact=True).select_option("asc")
     wait_ids(alex, {"sort": "starts_at", "direction": "asc"})
-    expect(alex.locator("#toast")).not_to_be_visible()
+    # Toasts remain visible for 5.5 seconds; allow their intended lifetime.
+    expect(alex.locator("#toast")).not_to_be_visible(timeout=10_000)
     alex.screenshot(path=str(out / "worker-schedule.png"), full_page=True)
     alex.screenshot(path=str(out / "worker-desktop.png"))
 

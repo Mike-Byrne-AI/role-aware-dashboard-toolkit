@@ -55,6 +55,7 @@ PUBLIC_ROOT_DOCS = frozenset(
         "examples/host_integration/README.md",
         "examples/record_workflows/README.md",
         "examples/landscaping/README.md",
+        "examples/landscaping/HOSTING.md",
     }
 )
 

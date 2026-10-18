@@ -38,8 +38,9 @@ Discover them with `python -m role_aware_dashboard_toolkit guide start`.
 - [Authenticated access](../role_aware_dashboard_toolkit/resources/guides/authentication.md) — verified login, assigned roles, shared freeze, and private provisioning
 - [Host integration example](../examples/host_integration/README.md) — protect host reads and deferred writes with current identity, role and freeze checks
 - [Landscaping dashboard demo](../examples/landscaping/README.md) — run a complete fictional business app with password sign-in, shared work and protected admin tools
+- [Host the landscaping dashboard](../examples/landscaping/HOSTING.md) — provision once, check persistent storage, configure verified ingress and rehearse the actual shared service
 - [Protected record workflows](record_workflows.md) — implement edits, date changes and status transitions with transactional history and consumer acceptance checks
-- [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS setup and deployment acceptance
+- [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS and OIDC acceptance for the authenticated Streamlit starter
 
 ## API and extension points
 

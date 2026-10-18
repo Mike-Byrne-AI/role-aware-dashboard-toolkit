@@ -40,7 +40,9 @@ be used independently of this dashboard.*
   detection and durable change history in your application's transaction.
 - **A complete business dashboard:** run [Cedar & Stone Landscaping](examples/landscaping/README.md)
   to try password accounts, a shared crew schedule, job management, customers,
-  business metrics and admin audit pages using fictional data.
+  business metrics and admin audit pages using fictional data. Its
+  [hosting guide](examples/landscaping/HOSTING.md) provides explicit provisioning,
+  startup checks and an HTTPS acceptance runner for a shared pilot.
 
 ## What is included
 

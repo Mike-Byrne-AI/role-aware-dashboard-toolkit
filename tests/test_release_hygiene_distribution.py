@@ -308,7 +308,8 @@ def test_landscaping_source_demo_ships_without_private_runtime_or_vendored_toolk
     members = _logical_members(built_release_artifacts["sdist"])
     prefix = "examples/landscaping/"
     expected = {
-        "README.md", "run.py", "requirements.txt", "requirements-dev.txt", "pyproject.toml",
+        "README.md", "HOSTING.md", "run.py", "requirements.txt", "requirements-dev.txt", "pyproject.toml",
+        "hosting/pilot.py", "scripts/hosted_acceptance.py",
         "landscape/__init__.py", "landscape/app.py", "landscape/db.py",
         "landscape/security.py", "landscape/seed.py", "landscape/action_workflow.py",
         "landscape/paths.py", "landscape/launcher.py",
@@ -346,6 +347,8 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         *(sdist_root / "examples" / "section_access" / name
           for name in ("app.py", "demo.py", "policy.py", "provision.py")),
         sdist_root / "examples" / "landscaping" / "run.py",
+        sdist_root / "examples" / "landscaping" / "hosting" / "pilot.py",
+        sdist_root / "examples" / "landscaping" / "scripts" / "hosted_acceptance.py",
         sdist_root / "examples" / "landscaping" / "scripts" / "operational_check.py",
         *(sdist_root / "examples" / "landscaping" / "landscape" / name
           for name in ("app.py", "db.py", "security.py", "seed.py", "action_workflow.py", "paths.py", "launcher.py")),

@@ -180,6 +180,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/record_workflows/app.py",
         "/examples/record_workflows/acceptance.py",
         "/examples/landscaping/run.py",
+        "/examples/landscaping/hosting/pilot.py",
         "/examples/landscaping/landscape/__init__.py",
         "/examples/landscaping/landscape/action_workflow.py",
         "/examples/landscaping/landscape/app.py",
@@ -190,6 +191,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/landscaping/landscape/launcher.py",
         "/examples/landscaping/scripts/browser_check.py",
         "/examples/landscaping/scripts/operational_check.py",
+        "/examples/landscaping/scripts/hosted_acceptance.py",
     }
     assert not any("semantic" in path.lower() for path in include)
     assert not any("builder" in path.lower() for path in include)
