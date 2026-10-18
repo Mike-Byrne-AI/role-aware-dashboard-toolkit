@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 from http.cookiejar import CookieJar
 import json
@@ -127,21 +128,31 @@ def clean_environment() -> dict[str, str]:
     return environment
 
 
+def _signal_group(pgid: int, signum: int) -> None:
+    # Darwin can report EPERM while an exited group's remaining zombies await
+    # reaping. Retry that transient state, but never hide a persistent denial.
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            os.killpg(pgid, signum)
+            return
+        except ProcessLookupError:
+            return
+        except PermissionError as error:
+            if sys.platform != "darwin" or error.errno != errno.EPERM or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
 def stop_process(process: subprocess.Popen) -> None:
     # Every spawned process owns its group, including build-backend children.
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+    _signal_group(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
         pass
     finally:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _signal_group(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
 
 

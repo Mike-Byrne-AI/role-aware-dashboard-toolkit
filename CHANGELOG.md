@@ -20,11 +20,21 @@
 - Maintainer `integrate/**` branches run the existing contributor and dependency
   checks on push, so normal Git access can start validation before a protected
   `main` update. Required checks and release permissions remain unchanged.
+- Failed contributor test jobs annotate test names and validated source
+  locations without publishing assertion messages or captured output, making
+  cross-platform failures easier to diagnose when detailed logs are unavailable.
 
 ### Fixed
 
 - The landscaping browser check waits for the notification's intended lifetime
   before capturing the cleared schedule, avoiding a premature timeout.
+- The record-workflow browser check opens the visible status selector before
+  choosing an option; focusing the input and pressing ArrowDown could leave the
+  menu closed with current Streamlit versions.
+- Source-package validation tolerates macOS's brief `EPERM` interval while an
+  exited child process group is being reaped. Cleanup retries for at most five
+  seconds and still fails on persistent permission errors; live descendant
+  termination remains independently checked.
 
 These are source changes after the 0.2.0rc1 candidate. Earlier candidate artifacts
 and verification receipts do not include or certify these additions; no new

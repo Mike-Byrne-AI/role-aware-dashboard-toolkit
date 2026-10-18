@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import errno
 import io
 import json
 import os
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -173,6 +176,54 @@ def test_timed_out_process_is_stopped(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group controller")
+@pytest.mark.parametrize("platform,outcomes,raises,retries", [
+    ("darwin", [None], False, False),
+    ("darwin", [errno.ESRCH], False, False),
+    ("darwin", [errno.EPERM, None], False, True),
+    ("darwin", [errno.EPERM, errno.ESRCH], False, True),
+    ("darwin", [errno.EPERM], True, True),
+    ("linux", [errno.EPERM], True, False),
+    ("darwin", [errno.EACCES], True, False),
+    ("darwin", [errno.EINVAL], True, False),
+], ids=["success", "absent", "darwin-retry-success", "darwin-retry-absent",
+        "darwin-persistent-denial", "linux-denial", "darwin-access-denial", "invalid-signal"])
+def test_group_signal_retries_only_transient_darwin_permission_errors(monkeypatch, platform, outcomes, raises, retries):
+    clock = SimpleNamespace(now=0.0)
+    sleeps = []
+    calls = []
+    failures = [OSError(code, "synthetic signal failure") if code is not None else None for code in outcomes]
+
+    def sleep(delay):
+        assert delay == 0.01
+        sleeps.append(delay)
+        clock.now += delay
+
+    def killpg(pgid, signum):
+        calls.append((pgid, signum))
+        failure = failures[min(len(calls) - 1, len(failures) - 1)]
+        if failure is not None:
+            raise failure
+
+    monkeypatch.setattr(smoke, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(smoke, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    monkeypatch.setattr(smoke.os, "killpg", killpg)
+    if raises:
+        with pytest.raises(OSError) as caught:
+            smoke._signal_group(424242, signal.SIGTERM)
+        assert caught.value is failures[-1]
+    else:
+        smoke._signal_group(424242, signal.SIGTERM)
+    assert all(call == (424242, signal.SIGTERM) for call in calls)
+    assert bool(sleeps) is retries
+    if raises and retries:
+        assert 5 <= clock.now <= 5.02
+        assert 2 < len(calls) <= 503
+    else:
+        assert len(calls) == (2 if retries else 1)
+        assert clock.now == (0.01 if retries else 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group controller")
 @pytest.mark.parametrize("ignore_term", [False, True], ids=["terminate", "escalate-to-kill"])
 def test_cleanup_stops_descendants_after_group_leader_exits(tmp_path, ignore_term):
     # A build backend can leave a child behind after its own successful exit.
@@ -210,10 +261,19 @@ def test_cleanup_stops_descendants_after_group_leader_exits(tmp_path, ignore_ter
         # Independent cleanup prevents leaks even when the implementation under
         # test regresses or the readiness/exit assertion fails.
         if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    break
+                except ProcessLookupError:
+                    break
+                except PermissionError as error:
+                    # Keep this independent of the helper under test while
+                    # allowing Darwin to reap a zombie-only group.
+                    if sys.platform != "darwin" or error.errno != errno.EPERM or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.01)
             process.wait(timeout=5)
         os.close(read_fd)
         if write_fd is not None:
