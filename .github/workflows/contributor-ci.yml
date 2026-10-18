@@ -45,7 +45,40 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m pip check
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest -q --junitxml="${{ runner.temp }}/contributor-tests.xml"
+      - name: Annotate failing test names
+        if: ${{ failure() }}
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          def annotate(level, message):
+              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::{level}::{escaped}")
+
+          try:
+              directory = os.environ.get("RUNNER_TEMP")
+              if not directory:
+                  raise ValueError
+              with (Path(directory) / "contributor-tests.xml").open("rb") as stream:
+                  report = stream.read(16 * 1024 * 1024 + 1)
+              if len(report) > 16 * 1024 * 1024:
+                  raise ValueError
+              root = ET.fromstring(report)
+              failures = [case for case in root.iter("testcase")
+                          if case.find("failure") is not None or case.find("error") is not None]
+              if not failures:
+                  annotate("error", "JUnit report lists no failed test cases; inspect the original job failure.")
+              for case in failures[:25]:
+                  classname = (case.get("classname") or "<unknown class>")[:240]
+                  name = (case.get("name") or "<unknown test>")[:240]
+                  annotate("error", f"Failed test: {classname}::{name}")
+              if len(failures) > 25:
+                  annotate("warning", "Additional failing test names omitted; inspect the job logs.")
+          except (OSError, ValueError, ET.ParseError):
+              annotate("error", "JUnit report unavailable, invalid, or too large; inspect the original job failure.")
 
   quality:
     name: contributor-quality

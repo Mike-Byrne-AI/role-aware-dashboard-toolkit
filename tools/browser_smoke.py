@@ -454,12 +454,15 @@ def exercise_record_workflows(
                     finished()
                     control = page.get_by_role("combobox", name=label, exact=True)
                     control.scroll_into_view_if_needed()
+                    dropdown = page.get_by_test_id("stSelectbox").filter(has=control).get_by_role(
+                        "button", name="Open", exact=True,
+                    )
                     if name == "mobile":
-                        page.get_by_test_id("stSelectbox").filter(has=control).get_by_role(
-                            "button", name="Open", exact=True,
-                        ).tap()
+                        dropdown.tap()
                     else:
-                        control.press("ArrowDown")
+                        # Open the visible menu explicitly; focusing the input
+                        # and pressing ArrowDown can leave this menu collapsed.
+                        dropdown.click()
                     page.get_by_role("option", name=value, exact=True).click()
 
                 def passed(description: str) -> None:

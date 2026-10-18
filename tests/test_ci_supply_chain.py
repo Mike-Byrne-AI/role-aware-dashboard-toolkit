@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import textwrap
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
@@ -190,7 +191,7 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
         tests,
     )
     assert "      fail-fast: false\n" in tests
-    assert "        run: python -m pytest -q\n" in tests
+    assert '        run: python -m pytest -q --junitxml="${{ runner.temp }}/contributor-tests.xml"\n' in tests
 
     browser = workflow.split("  browser:\n", 1)[1].split("  required:\n", 1)[0]
     assert "    runs-on: ubuntu-latest\n" in browser
@@ -200,6 +201,93 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]
     assert "retention-days: 7" in upload
     assert "if: ${{ always() }}" in browser or "if: ${{ !cancelled() }}" in browser
+
+
+def _failure_annotation_script():
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    tests = workflow.split("  tests:\n", 1)[1].split("  quality:\n", 1)[0]
+    step = tests.split("      - name: Annotate failing test names\n", 1)[1]
+    assert "        if: ${{ failure() }}\n" in step
+    assert "        shell: python\n" in step
+    assert "continue-on-error" not in tests
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    return compile(script, "workflow-failing-test-annotations", "exec")
+
+
+@pytest.mark.parametrize("kind", ["failure", "error"])
+def test_actual_failure_annotations_escape_commands_without_reporting_private_bodies(tmp_path, monkeypatch, capsys, kind):
+    report = ET.Element("testsuites")
+    suite = ET.SubElement(report, "testsuite")
+    case = ET.SubElement(suite, "testcase", {
+        "classname": "tests.synthetic%\r\n::error::injected",
+        "name": "test_probe%0A\r\n::warning::injected",
+    })
+    ET.SubElement(case, kind, {"message": "synthetic-private-password"}).text = "private response body"
+    ET.SubElement(case, "system-out").text = "private captured stdout"
+    ET.SubElement(case, "system-err").text = "private captured stderr"
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    exec(_failure_annotation_script(), {})
+    output = capsys.readouterr().out
+    assert output == (
+        "::error::Failed test: tests.synthetic%25%0D%0A::error::injected::"
+        "test_probe%250A%0D%0A::warning::injected\n"
+    )
+    assert len(output.splitlines()) == 1
+    assert "private" not in output
+
+
+def test_actual_failure_annotations_limit_names_and_total_annotations(tmp_path, monkeypatch, capsys):
+    report = ET.Element("testsuite")
+    for _ in range(30):
+        case = ET.SubElement(report, "testcase", {"classname": "%" * 500, "name": "\r" * 500})
+        ET.SubElement(case, "failure").text = "synthetic-private-password"
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    exec(_failure_annotation_script(), {})
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 26
+    assert lines[:25] == ["::error::Failed test: " + "%25" * 240 + "::" + "%0D" * 240] * 25
+    assert lines[-1] == "::warning::Additional failing test names omitted; inspect the job logs."
+    assert all(len(line) < 1600 for line in lines)
+    assert not any("synthetic-private-password" in line for line in lines)
+
+
+def test_actual_failure_annotations_name_unknown_collection_errors_and_ignore_passes(tmp_path, monkeypatch, capsys):
+    report = ET.Element("testsuite")
+    failed = ET.SubElement(report, "testcase")
+    ET.SubElement(failed, "error", {"message": "private collection error"})
+    ET.SubElement(report, "testcase", {"name": "passing_test"})
+    skipped = ET.SubElement(report, "testcase", {"name": "skipped_test"})
+    ET.SubElement(skipped, "skipped")
+    (tmp_path / "contributor-tests.xml").write_bytes(ET.tostring(report))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    exec(_failure_annotation_script(), {})
+    assert capsys.readouterr().out == "::error::Failed test: <unknown class>::<unknown test>\n"
+
+
+@pytest.mark.parametrize("problem", ["missing", "unreadable", "malformed", "too-large", "missing-runner-temp", "no-failed-cases"])
+def test_actual_failure_annotations_explain_unavailable_diagnostics_safely(tmp_path, monkeypatch, capsys, problem):
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    report = tmp_path / "contributor-tests.xml"
+    if problem == "unreadable":
+        report.mkdir()
+    elif problem == "malformed":
+        report.write_text("private malformed report <", encoding="utf-8")
+    elif problem == "too-large":
+        report.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+    elif problem == "missing-runner-temp":
+        monkeypatch.delenv("RUNNER_TEMP")
+    elif problem == "no-failed-cases":
+        report.write_text('<testsuite><testcase name="passed" /></testsuite>', encoding="utf-8")
+    exec(_failure_annotation_script(), {})
+    output = capsys.readouterr().out
+    if problem == "no-failed-cases":
+        assert output == "::error::JUnit report lists no failed test cases; inspect the original job failure.\n"
+    else:
+        assert output == "::error::JUnit report unavailable, invalid, or too large; inspect the original job failure.\n"
+    assert str(tmp_path) not in output
+    assert "private" not in output
 
 
 def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
