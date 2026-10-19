@@ -35,6 +35,7 @@ LIVE_DOCS = frozenset(
         "docs/replay.md",
         "docs/run_model.md",
         "docs/shared_store_patterns.md",
+        "docs/security_lessons.md",
         "docs/team_ops.md",
         "docs/telemetry_contract.md",
     }
@@ -55,6 +56,8 @@ PUBLIC_ROOT_DOCS = frozenset(
         "examples/host_integration/README.md",
         "examples/record_workflows/README.md",
         "examples/landscaping/README.md",
+        "examples/business_dashboard/README.md",
+        "examples/business_dashboard/HOSTING.md",
         "examples/landscaping/HOSTING.md",
     }
 )

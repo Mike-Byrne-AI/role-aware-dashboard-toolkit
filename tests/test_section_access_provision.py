@@ -150,6 +150,8 @@ def test_private_exception_details_are_suppressed(configured, monkeypatch, capsy
 
 
 def test_repository_storage_is_rejected_before_prompt(tmp_path, monkeypatch):
+    # Keep this boundary test valid with an external --basetemp too.
+    (tmp_path / ".git").mkdir()
     directory = tmp_path / "protected"
     directory.mkdir(mode=0o700)
     monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(directory))
@@ -168,6 +170,7 @@ def test_a_refused_protected_directory_names_its_cause(tmp_path, monkeypatch, ca
     # issuer or key; the example passes them on as access_cli does.
     monkeypatch.setenv("RADT_OIDC_ISSUER", ISSUER)
     monkeypatch.setattr(getpass, "getpass", lambda prompt: pytest.fail("must fail before prompting"))
+    (tmp_path / ".git").mkdir()
     inside_repository = tmp_path / "protected"
     inside_repository.mkdir(mode=0o700)
     monkeypatch.setenv("RADT_ACCESS_DIRECTORY", str(inside_repository))

@@ -5,6 +5,11 @@ explore a complete fictional application to see how the pieces fit together.
 
 ## Run a complete business dashboard
 
+[Westbridge business dashboard](business_dashboard/README.md) is a reusable
+business workspace with a password-free public board, private employee schedule
+and messages, and admin analytics, outreach, publishing and access controls.
+It runs locally on Windows, Linux and macOS with separate private runtime data.
+
 [Cedar & Stone Landscaping](landscaping/README.md) combines real local password
 sign-in with a shared five-person crew schedule and message board. Admins manage
 accounts, jobs, assignments, rescheduling, completion/cancellation and history,

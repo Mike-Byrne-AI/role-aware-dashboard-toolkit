@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        extra: [api, full, landscaping]
+        extra: [api, full, landscaping, business]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -54,6 +54,10 @@ jobs:
             landscaping)
               "$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheels[0]}[api]" \
                 -r examples/landscaping/requirements.txt
+              ;;
+            business)
+              "$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheels[0]}[api]" \
+                -r examples/business_dashboard/requirements.txt
               ;;
             *)
               echo "Unsupported dependency audit environment." >&2

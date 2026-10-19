@@ -255,6 +255,29 @@ Custom identity hosts own their provider logout and new-session recovery. An
 unrelated Streamlit signed-out status cannot release a custom host's pending
 denial.
 
+## Host containment and public submissions
+
+Keep normal shared-freeze enforcement in place. If the host needs emergency
+takedown or access revocation while paused, model those as narrow operations
+requiring current administrator authority, CSRF protection where applicable,
+revision checks and transactional audit. Do not exempt a general edit endpoint
+from freeze. Test that unpublishing remains possible while text changes,
+approval and republishing remain blocked. This is host policy, not a general
+freeze bypass supplied by the toolkit.
+
+Anonymous submissions need a private pending queue and an explicit authorized
+publication transition. Escape submitted text in the moderator's view too.
+Posting rules and bot verification do not judge content acceptability; a human
+reviewer still decides. CSRF checks are not bot protection. Verify external
+challenge tokens on the server and bind them to the expected host and action;
+bound network calls and retain atomic submission limits after verification.
+
+When the host adds MFA, invalidate older administrator sessions and prevent
+employee sessions from gaining administrator access without fresh stronger
+authentication. Test replay, resets and restoration of old backups. Keep
+provider integrations and their secrets in the host application; the toolkit
+does not provide a universal enrollment or recovery workflow.
+
 ## Data handling and acceptance checks
 
 The database stores keyed opaque principal IDs, role names, and current freeze

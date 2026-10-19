@@ -1,0 +1,12 @@
+# Install this source checkout first with: python -m pip install -e ".[api]"
+# API host plus example-owned administrator MFA and bot verification.
+fastapi>=0.133.0
+pydantic>=2.7.0
+pydantic>=2.8.1; python_version >= '3.13'
+pydantic>=2.12.0; python_version >= '3.14'
+uvicorn>=0.29.0
+starlette>=1.3.1
+anyio>=4.14.2
+h11>=0.16.0
+pyotp>=2.9.0,<3
+httpx>=0.27.0

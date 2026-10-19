@@ -124,7 +124,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert Counter(refs) == Counter({
         f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 4,
         f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 4,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 3,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 4,
     })
     assert workflow.count("persist-credentials: false") == 4
     assert workflow.count("timeout-minutes:") == 5
@@ -196,7 +196,10 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     browser = workflow.split("  browser:\n", 1)[1].split("  required:\n", 1)[0]
     assert "    runs-on: ubuntu-latest\n" in browser
     assert "python -m playwright install --with-deps chromium" in browser
+    assert 'python -m pip install ".[workbench,api]" "playwright==1.63.0" -r examples/business_dashboard/requirements.txt' in browser
     assert "python tools/browser_smoke.py" in browser
+    assert "python tools/business_dashboard_browser.py" in browser
+    assert "path: ${{ runner.temp }}/business-browser" in browser
     assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]
     assert "retention-days: 7" in upload
@@ -403,7 +406,10 @@ def test_dependency_audit_is_scheduled_and_unprivileged_on_every_pull_request():
     })
     assert workflow.count("persist-credentials: false") == 1
     assert workflow.count("timeout-minutes:") == 2
-    assert re.search(r"extra: \[[\"']?api[\"']?, [\"']?full[\"']?, [\"']?landscaping[\"']?\]", workflow)
+    assert re.search(r"extra: \[[\"']?api[\"']?, [\"']?full[\"']?, [\"']?landscaping[\"']?, [\"']?business[\"']?\]", workflow)
+    business_lane = workflow.split("            business)\n", 1)[1].split("              ;;", 1)[0]
+    assert '"$RUNNER_TEMP/audit-runtime/bin/python" -m pip install "${wheels[0]}[api]"' in business_lane
+    assert "-r examples/business_dashboard/requirements.txt" in business_lane
     assert "pip-audit==2.10.1" in workflow
     assert "--python" in workflow
     assert "--audit-python" in workflow

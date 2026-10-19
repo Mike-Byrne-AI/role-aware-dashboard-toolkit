@@ -50,6 +50,8 @@ repository's lint policy.
   application-specific integrations in the host application. The optional access
   layer supplies verification adapters, role grants and shared freeze enforcement.
 - Update documentation and generated references when their contracts change.
+- Carry reusable security findings into [host security lessons](docs/security_lessons.md)
+  and regression tests. Keep example-specific providers out of the core API.
 
 ## Before submission
 
@@ -66,6 +68,10 @@ The browser smoke checks profile restoration, role changes, and frozen
 controls using synthetic local state. It also generates the Project Pulse
 starter and exercises desktop and mobile layouts, navigation and keyboard
 editing. It does not test an external login provider.
+The same browser job exercises the Westbridge business example with disposable
+guest, administrator and employee workflows. Its API regressions run with the
+main test suite. See the [business example guide](examples/business_dashboard/README.md)
+for its local startup and verification commands.
 The dedicated Linux landscaping job also installs the demo's optional
 dependencies and runs its API/security suite against the checkout, plus Chromium
 flows against the installed toolkit. The job also runs the disposable local
@@ -115,11 +121,12 @@ owns and stops its servers and uses temporary sample data. CI adds
 `--installed-package` to exercise its non-editable installation; use that option
 with an isolated wheel installation when checking packaged starter resources.
 
-`.github/workflows/dependency-audit.yml` audits three freshly resolved runtime
-environments: `api`, `full`, and `landscaping` (the toolkit's `api` extra plus
-the demo requirements, including Argon2). It runs on pull requests, pushes to
+`.github/workflows/dependency-audit.yml` audits four freshly resolved runtime
+environments: `api`, `full`, `landscaping` (the toolkit's `api` extra plus
+its demo requirements, including Argon2), and `business` (the `api` extra plus
+the business requirements, including PyOTP and HTTPX). It runs on pull requests, pushes to
 `main` or `integrate/**`, manual dispatch, and Mondays at 09:17 UTC. Its `dependency-checks`
-result requires all three audits
+result requires all four audits
 to complete without known vulnerabilities or skipped packages. Scanner and
 network errors fail separately from vulnerability findings. Reports and exact
 resolved versions are retained for seven days. The local toolkit and environment

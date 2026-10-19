@@ -85,18 +85,20 @@ def _run_installation(tmp_path, lane, *, wheel_count=1, fail=""):
     return result, logged, runner, wheels
 
 
-@pytest.mark.parametrize("lane", ["api", "full", "landscaping"])
+@pytest.mark.parametrize("lane", ["api", "full", "landscaping", "business"])
 def test_actual_dependency_lane_installs_only_its_runtime_and_separate_scanner(tmp_path, lane):
     workflow = WORKFLOW.read_text(encoding="utf-8")
     matrix = re.search(r"^        extra: \[([^\]]+)\]$", workflow, flags=re.MULTILINE)
     assert matrix is not None
-    assert [value.strip() for value in matrix.group(1).split(",")] == ["api", "full", "landscaping"]
+    assert [value.strip() for value in matrix.group(1).split(",")] == ["api", "full", "landscaping", "business"]
     result, commands, runner, wheels = _run_installation(tmp_path, lane)
     assert result.returncode == 0, result.stderr
-    selected_extra = "api" if lane == "landscaping" else lane
+    selected_extra = "api" if lane in {"landscaping", "business"} else lane
     runtime_install = ["-m", "pip", "install", f"{wheels[0]}[{selected_extra}]"]
     if lane == "landscaping":
         runtime_install.extend(["-r", "examples/landscaping/requirements.txt"])
+    elif lane == "business":
+        runtime_install.extend(["-r", "examples/business_dashboard/requirements.txt"])
     assert commands[0]["arguments"] == ["-m", "venv", str(runner / "audit-runtime")]
     assert commands[1]["arguments"] == ["-m", "venv", str(runner / "audit-tool")]
     assert commands[2:] == [
@@ -107,7 +109,9 @@ def test_actual_dependency_lane_installs_only_its_runtime_and_separate_scanner(t
     ]
 
 
-@pytest.mark.parametrize("lane,wheel_count", [("unknown", 1), ("landscaping", 0), ("landscaping", 2)])
+@pytest.mark.parametrize("lane,wheel_count", [
+    ("unknown", 1), ("landscaping", 0), ("landscaping", 2), ("business", 0), ("business", 2),
+])
 def test_actual_dependency_lane_refuses_unknown_scope_or_ambiguous_artifact(tmp_path, lane, wheel_count):
     result, commands, _runner, _wheels = _run_installation(tmp_path, lane, wheel_count=wheel_count)
     assert result.returncode != 0
@@ -118,7 +122,8 @@ def test_actual_dependency_lane_refuses_unknown_scope_or_ambiguous_artifact(tmp_
     "failure,expected_commands",
     [("audit-runtime:install", 3), ("audit-runtime:check", 4), ("audit-tool:install", 5), ("audit-tool:check", 6)],
 )
-def test_actual_dependency_lane_stops_on_installation_or_consistency_failure(tmp_path, failure, expected_commands):
-    result, commands, _runner, _wheels = _run_installation(tmp_path, "landscaping", fail=failure)
+@pytest.mark.parametrize("lane", ["landscaping", "business"])
+def test_actual_dependency_lane_stops_on_installation_or_consistency_failure(tmp_path, failure, expected_commands, lane):
+    result, commands, _runner, _wheels = _run_installation(tmp_path, lane, fail=failure)
     assert result.returncode == 7
     assert len(commands) == expected_commands

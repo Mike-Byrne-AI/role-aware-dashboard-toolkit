@@ -324,6 +324,22 @@ def test_landscaping_source_demo_ships_without_private_runtime_or_vendored_toolk
             assert not name.startswith(prefix + "vendor/")
 
 
+def test_business_source_example_contains_only_code_assets_and_guidance(built_release_artifacts):
+    prefix = "examples/business_dashboard/"
+    members = _logical_members(built_release_artifacts["sdist"])
+    assert {name[len(prefix):] for name in members if name.startswith(prefix)} == {
+        "README.md", "HOSTING.md", "requirements.txt", "run.py", "hosting/pilot.py", "business/__init__.py",
+        "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
+        "business/models.py", "business/request_security.py", "business/mfa.py", "business/abuse.py",
+        "business/static/index.html", "business/static/app.js", "business/static/styles.css",
+    }
+    assert not any(name.startswith(prefix) for name in _logical_members(built_release_artifacts["wheel"]))
+    for artifact in (built_release_artifacts["wheel"], built_release_artifacts["sdist"]):
+        for name in _logical_members(artifact):
+            assert Path(name).name not in {"ACCOUNTS.md", "business.sqlite3", "identity.key"}
+            assert not Path(name).name.startswith("ADMIN_MFA_SETUP")
+
+
 def test_sdist_shipped_examples_compile_from_extracted_artifact(
     tmp_path,
     built_release_artifacts,
@@ -341,6 +357,11 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
     assert len(roots) == 1
     sdist_root = roots[0]
     scripts = [
+        sdist_root / "examples" / "business_dashboard" / "run.py",
+        sdist_root / "examples" / "business_dashboard" / "hosting" / "pilot.py",
+        *(sdist_root / "examples" / "business_dashboard" / "business" / name
+          for name in ("__init__.py", "app.py", "db.py", "security.py", "seed.py",
+                       "models.py", "request_security.py", "mfa.py", "abuse.py")),
         sdist_root / "examples" / "dashboard_admin_controls_app.py",
         sdist_root / "examples" / "plugin_template.py",
         sdist_root / "examples" / "studio_dispatch" / "app.py",
