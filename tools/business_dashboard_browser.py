@@ -21,6 +21,87 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "business_dashboard"
 
 
+def check_guest_resizing(page, output, checks):
+    """Resize the same guest page across desktop, tablet and phone layouts."""
+    for width in (1440, 1100, 900, 768, 600, 390, 1440):
+        page.set_viewport_size({"width": width, "height": 1050})
+        layout = page.evaluate("""() => {
+          const main = document.querySelector('.guest-workspace .workspace-main').getBoundingClientRect();
+          const cards = [...document.querySelectorAll('.post-card')];
+          return {
+            viewport: innerWidth, document: document.documentElement.scrollWidth,
+            mainLeft: main.left, mainRight: main.right,
+            readable: cards.length > 0 && cards.every(card =>
+              card.getBoundingClientRect().width >= Math.min(240, innerWidth * .7)
+              && card.scrollWidth <= card.clientWidth + 1),
+          };
+        }""")
+        assert layout["document"] <= width + 1, f"Guest page overflows at {width}px"
+        assert abs(layout["mainLeft"]) <= 1 and abs(layout["mainRight"] - width) <= 1, (
+            f"Guest workspace is squeezed into a partial-width column at {width}px"
+        )
+        assert layout["readable"], f"Public notices become compressed or clipped at {width}px"
+        if width == 900:
+            page.screenshot(path=str(output / "14-tablet-public-board.png"), full_page=True)
+    checks.append("guest page and notice cards retain usable width while resizing desktop, tablet and phone windows")
+
+
+def check_dialog_resizing(page, output, checks, *, name, drafts):
+    """Keep one populated dialog open through width and height changes."""
+    from playwright.sync_api import expect
+
+    dialog = page.get_by_role("dialog")
+    sizes = ((1440, 1050), (1100, 850), (900, 850), (768, 850), (600, 850),
+             (390, 844), (390, 400), (768, 400), (1100, 400), (1440, 1050))
+    for width, height in sizes:
+        page.set_viewport_size({"width": width, "height": height})
+        expect(dialog).to_be_visible()
+        for label, value in drafts.items():
+            expect(dialog.get_by_label(label, exact=True)).to_have_value(value)
+        layout = dialog.evaluate("""element => {
+          const box = element.getBoundingClientRect();
+          const footer = element.querySelector('.dialog-footer').getBoundingClientRect();
+          const body = element.querySelector('.dialog-body');
+          return {
+            inside: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+            centered: Math.abs(box.left + box.width / 2 - innerWidth / 2) <= 2,
+            footerInside: footer.left >= box.left && footer.right <= box.right
+              && footer.top >= box.top && footer.bottom <= box.bottom,
+            bodyUsable: body.clientHeight > 0 && body.scrollWidth <= body.clientWidth + 1,
+          };
+        }""")
+        assert all(layout.values()), f"{name} dialog clips or moves off-center at {width}x{height}: {layout}"
+        expect(dialog.locator('.dialog-footer button[type="submit"]')).to_be_in_viewport(ratio=1)
+        if (width, height) == (390, 400):
+            page.screenshot(path=str(output / f"15-{name}-short-window.png"), full_page=False)
+    checks.append(f"{name} dialog stays centered with visible actions and preserves its draft while resizing")
+
+
+def check_staff_resizing(page, output, checks):
+    """Cross the mobile breakpoint with both closed and open navigation."""
+    from playwright.sync_api import expect
+
+    for width in (1100, 900, 768, 701, 700, 600, 390):
+        page.set_viewport_size({"width": width, "height": 1050})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Staff page overflows at {width}px"
+        assert page.locator(".workspace-main").evaluate("""element => {
+          const box = element.getBoundingClientRect();
+          return box.left >= 0 && Math.abs(box.right - innerWidth) <= 1 && box.width >= innerWidth / 2;
+        }"""), f"Staff content collapses or extends outside the window at {width}px"
+    page.get_by_role("button", name="Open navigation", exact=True).click()
+    expect(page.locator(".workspace-main")).to_have_attribute("inert", "")
+    page.set_viewport_size({"width": 900, "height": 1050})
+    expect(page.locator(".workspace-main")).not_to_have_attribute("inert", "")
+    expect(page.locator(".mobile-scrim")).to_have_count(0)
+    expect(page.locator(".nav-link.active")).to_be_focused()
+    page.get_by_role("button", name="Refresh workspace", exact=True).click()
+    expect(page.get_by_text("Loading your workspace…", exact=True)).to_have_count(0)
+    expect(page.get_by_role("heading", name="A clear view,", exact=False)).to_be_visible()
+    page.screenshot(path=str(output / "17-navigation-after-window-resize.png"), full_page=False)
+    page.set_viewport_size({"width": 1440, "height": 1050})
+    checks.append("staff layout and controls remain usable when an open mobile navigation is resized to desktop")
+
+
 def exercise_submission_challenge(browser, url, output, checks):
     """Exercise required verification without a provider connection or secrets."""
     from playwright.sync_api import expect
@@ -226,6 +307,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             expect(page.get_by_text("Upcoming partnership announcement", exact=True)).to_have_count(0)
             capture("02-public-board")
             checks.append("guest board and private-data denial")
+            check_guest_resizing(page, output, checks)
 
             dialog = page.get_by_role("dialog")
             approved_title = "Community workshop invitation"
@@ -244,6 +326,10 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
                 expect(dialog.get_by_role("button", name="Send for approval", exact=True)).to_be_enabled()
                 if title == approved_title:
                     capture("10-guest-submission")
+                    check_dialog_resizing(page, output, checks, name="guest-submission", drafts={
+                        "Title": approved_title,
+                        "Message": "Join our community workshop next month. Everyone is welcome.",
+                    })
                 dialog.get_by_role("button", name="Send for approval", exact=True).click()
                 expect(dialog).not_to_be_visible()
                 expect(page.get_by_text(title, exact=True)).to_have_count(0)
@@ -265,6 +351,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             expect(page.get_by_role("heading", name="A clear view,", exact=False)).to_be_visible()
             capture("03-admin-overview")
             checks.append("administrator signs in with password and authenticator code and sees analytics")
+            check_staff_resizing(page, output, checks)
 
             navigate("Public board")
             expect(page.get_by_role("button", name=f"Approve {approved_title}", exact=True)).to_be_visible()
@@ -294,6 +381,9 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             dialog.get_by_label("Ends", exact=True).fill((start + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M"))
             dialog.get_by_label("Location", exact=True).fill("Main office")
             dialog.get_by_label("Alex Morgan", exact=True).check()
+            check_dialog_resizing(page, output, checks, name="schedule-event", drafts={
+                "Event title": "Browser planning session", "Location": "Main office",
+            })
             dialog.get_by_role("button", name="Create event", exact=True).click()
             expect(dialog).not_to_be_visible()
             capture("04-schedule")
@@ -312,6 +402,13 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             expect(page.get_by_text("Mason Studio", exact=True)).to_be_visible()
             capture("05-outreach")
             checks.append("outreach contact saved through UI")
+            for width in (768, 600, 390, 1440):
+                page.set_viewport_size({"width": width, "height": 1050})
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Outreach page overflows at {width}px"
+                if width == 390:
+                    assert page.locator(".table-wrap").evaluate("element => { element.scrollLeft = element.scrollWidth; return element.scrollLeft > 0; }")
+                    capture("16-mobile-outreach")
+            checks.append("mobile outreach table scrolls within its panel without widening the page")
 
             navigate("Public board")
             navigate("New post")

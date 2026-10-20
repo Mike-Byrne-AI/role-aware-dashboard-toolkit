@@ -430,6 +430,12 @@ document.addEventListener("click",async(event)=>{
 });
 
 function closeMenu(){document.querySelector("#sidebar")?.classList.remove("open");document.querySelector(".mobile-scrim")?.remove();const main=document.querySelector(".workspace-main");if(main)main.inert=false;const trigger=document.querySelector('[data-action="menu-open"]');trigger?.setAttribute("aria-expanded","false");trigger?.focus();}
+// Clear the mobile overlay when the sidebar becomes permanent at the CSS breakpoint.
+window.matchMedia("(max-width:700px)").addEventListener("change",event=>{
+  if(event.matches||!document.querySelector(".sidebar.open"))return;
+  closeMenu();
+  document.querySelector(".sidebar .nav-link.active")?.focus();
+});
 document.addEventListener("keydown",event=>{
   const openMenu=document.querySelector(".sidebar.open");
   if(event.key==="Escape"&&!editor.open&&openMenu){event.preventDefault();closeMenu();}

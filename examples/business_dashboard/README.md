@@ -158,6 +158,11 @@ store during the schema upgrade, authenticator replay/reset, mandatory policy
 acceptance and provider failures. The browser runner submits two guest posts,
 approves one, rejects the other and checks what guests can actually see. It also
 signs in with an administrator code and unpublishes a post while paused.
+Resize checks keep the guest board and populated dialogs open across desktop,
+tablet, phone and short windows. They verify usable card widths, accessible
+dialog actions, preserved drafts and contained scrolling on the outreach table.
+The mobile-menu check also widens an open menu to desktop size and verifies
+that the main content becomes interactive again.
 An isolated provider-script fixture also exercises the required-verification
 browser path, including asynchronous loading, retry and token expiration.
 Provider tests use synthetic responses; they do not establish live Cloudflare
