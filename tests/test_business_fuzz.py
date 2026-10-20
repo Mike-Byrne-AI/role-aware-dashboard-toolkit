@@ -35,10 +35,21 @@ def no_external_http(monkeypatch):
     assert not attempts, "The fuzz runner attempted external HTTP"
 
 
-@pytest.mark.parametrize("seed,cases", [(37, 36), (20261019, 45)])
-def test_seeded_campaign_exercises_all_guards_and_required_mocked_provider(seed, cases, capsys):
-    result = fuzz.run_campaign(seed=seed, cases=cases)
-    assert result["passed"], result
+@pytest.mark.parametrize("seed,cases,recursion_limit", [
+    (37, 36, None), (20261019, 45, None),
+    # Python 3.11 can reject deeply nested JSON during parsing; a higher
+    # recursion limit also exercises the schema rejection seen on newer Python.
+    (20261019, 45, 5000),
+])
+def test_seeded_campaign_exercises_all_guards_and_required_mocked_provider(seed, cases, recursion_limit, capsys):
+    original_limit = sys.getrecursionlimit()
+    try:
+        if recursion_limit is not None:
+            sys.setrecursionlimit(recursion_limit)
+        result = fuzz.run_campaign(seed=seed, cases=cases)
+    finally:
+        sys.setrecursionlimit(original_limit)
+    assert result["passed"], json.dumps(result.get("failure", result), sort_keys=True)
     assert result["completed_cases"] == cases
     assert set(result["families"]) == {
         "cookie", "role", "csrf", "origin", "authority", "schema", "body", "login", "challenge",

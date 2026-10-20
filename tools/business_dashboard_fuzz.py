@@ -70,7 +70,8 @@ class Campaign:
             # ensure_ascii deliberately permits raw JSON surrogate mutations.
             kwargs["content"] = json.dumps(payload, ensure_ascii=True, allow_nan=False).encode()
         response = self.clients[actor].request(method, path, **kwargs)
-        self.require(response.status_code == expected, "unexpected_status", method=method,
+        allowed = expected if isinstance(expected, tuple) else (expected,)
+        self.require(response.status_code in allowed, "unexpected_status", method=method,
                      route=path, expected=expected, actual=response.status_code)
         return response
 
@@ -158,7 +159,10 @@ class Campaign:
                 (b'{"body":', 422, {}), (b"\xff" * rng.randrange(1, 20), 400, {}), (b"[]", 422, {}),
                 (b"null", 422, {}), (b"{}", 422, {}),
                 (b"x" * rng.randrange(32769, 34000), 413, {}), (b"body=hello", 415, {"Content-Type": "application/x-www-form-urlencoded"}),
-                (b"[" * 1500 + b"0" + b"]" * 1500, 400, {}),
+                # A parser recursion limit can reject this JSON with 400;
+                # parsers that decode it reach the object schema's 422.
+                # Both reject this one payload, with no persisted mutation.
+                (b"[" * 1500 + b"0" + b"]" * 1500, (400, 422), {}),
             ))
             self.denied("employee", "POST", "/api/messages", status, content=body, headers=headers)
         elif family == "login":

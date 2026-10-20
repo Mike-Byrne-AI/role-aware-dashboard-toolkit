@@ -195,6 +195,13 @@ with a success stub. Keep randomized tests separate from real-provider acceptanc
 browser rendering, concurrent abuse and host configuration checks. More generated
 cases do not establish those other boundaries or repair known defects.
 
+The same invalid input can be rejected by different layers across supported
+Python versions. A deeply nested JSON array may fail parsing with 400 or reach
+schema validation and fail with 422. Accept only those documented alternatives
+for that probe, while requiring unchanged protected state and successful
+legitimate requests afterward. Keep authentication and authorization expectations
+exact; accepting any error response could hide a broken guard behind a rate limit.
+
 ## Verify persistence and the actual host separately
 
 Apply schema upgrades transactionally and preserve existing records and identity
