@@ -21,7 +21,159 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "business_dashboard"
 
 
-def exercise(url, output, credentials, channel, checks, data_dir):
+def exercise_submission_challenge(browser, url, output, checks):
+    """Exercise required verification without a provider connection or secrets."""
+    from playwright.sync_api import expect
+
+    context = browser.new_context(viewport={"width": 1440, "height": 1050})
+    context.set_default_timeout(10000)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(type(error).__name__))
+    provider_requests = []
+    provider_script = """(() => {
+  const script = document.currentScript;
+  const asynchronous = script.async || script.defer;
+  const onload = new URL(script.src).searchParams.get("onload");
+  const widgets = [];
+  window.businessChallengeProbe = {
+    widgets,
+    emit(index, event) {
+      const options = widgets[index].options;
+      if (event === "success") options.callback("disposable-fixture-token-" + index);
+      else options[event + "-callback"]();
+    },
+  };
+  window.turnstile = {
+    ready(callback) {
+      if (asynchronous) throw new Error("Remove async/defer before using turnstile.ready()");
+      callback();
+    },
+    render(container, options) {
+      const id = "fixture-" + widgets.length;
+      widgets.push({id, options, container, removed: false});
+      container.dataset.fixtureWidget = id;
+      container.textContent = "Disposable visitor verification";
+      return id;
+    },
+    remove(id) {
+      const widget = widgets.find(item => item.id === id);
+      if (widget) { widget.removed = true; widget.container.replaceChildren(); }
+    },
+    reset() {},
+  };
+  if (onload) {
+    if (typeof window[onload] !== "function") throw new Error("Missing verification onload callback");
+    window[onload]();
+  }
+})();
+"""
+
+    def document_with_challenge_policy(route):
+        response = route.fetch()
+        headers = dict(response.headers)
+        policy = headers["content-security-policy"]
+        headers["content-security-policy"] = (
+            policy.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com")
+            .replace("connect-src 'self'", "connect-src 'self' https://challenges.cloudflare.com")
+            + "; frame-src https://challenges.cloudflare.com"
+        )
+        route.fulfill(response=response, headers=headers)
+
+    def public_with_required_challenge(route):
+        response = route.fetch()
+        payload = response.json()
+        payload["submission_challenge"] = {
+            "provider": "turnstile", "required": True, "site_key": "disposable-browser-fixture",
+        }
+        route.fulfill(response=response, json=payload)
+
+    def provider(route):
+        provider_requests.append(route)
+        if len(provider_requests) > 1:
+            route.fulfill(status=200, content_type="application/javascript", body=provider_script)
+        # Hold the first load until the visitor has entered a draft, then fail
+        # it explicitly below. Every provider request stays inside this fixture.
+
+    context.route("https://**/*", lambda route: route.abort())
+    context.route("https://challenges.cloudflare.com/turnstile/v0/api.js*", provider)
+    context.route(url + "/", document_with_challenge_policy)
+    context.route(url + "/api/public/posts", public_with_required_challenge)
+    try:
+        page.goto(url)
+        page.get_by_role("button", name="Continue as guest", exact=True).click()
+        with page.expect_request("https://challenges.cloudflare.com/turnstile/v0/api.js*"):
+            page.get_by_role("button", name="Submit a post", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        send = dialog.get_by_role("button", name="Send for approval", exact=True)
+        agree = dialog.get_by_label("I agree to the posting rules", exact=True)
+        retry = dialog.get_by_role("button", name="Retry verification", exact=True)
+        title = "Draft preserved through visitor verification"
+        body = "A fictional community notice retained when verification needs another attempt."
+        dialog.get_by_label("Title", exact=True).fill(title)
+        dialog.get_by_label("Message", exact=True).fill(body)
+        agree.check()
+        expect(send).to_be_disabled()
+        assert len(provider_requests) == 1
+        provider_requests[0].abort("failed")
+        expect(retry).to_be_visible()
+        expect(send).to_be_disabled()
+        retry.click()
+        expect(page.locator("#submission-verification-widget")).to_have_attribute("data-fixture-widget", "fixture-0")
+        expect(dialog.get_by_label("Title", exact=True)).to_have_value(title)
+        expect(dialog.get_by_label("Message", exact=True)).to_have_value(body)
+        expect(agree).to_be_checked()
+        expect(send).to_be_disabled()
+        agree.uncheck()
+        page.evaluate("businessChallengeProbe.emit(0, 'success')")
+        expect(send).to_be_disabled()
+        agree.check()
+        expect(send).to_be_enabled()
+        agree.uncheck()
+        expect(send).to_be_disabled()
+        agree.check()
+        expect(send).to_be_enabled()
+        assert len(provider_requests) == 2
+        checks.append("required visitor verification loads asynchronously through the provider onload callback")
+        checks.append("verification load failure and retry preserve draft text and require both rules and a token")
+
+        page.evaluate("businessChallengeProbe.emit(0, 'expired')")
+        expect(send).to_be_disabled()
+        expect(retry).to_be_visible()
+        retry.click()
+        expect(page.locator("#submission-verification-widget")).to_have_attribute("data-fixture-widget", "fixture-1")
+        assert page.evaluate("businessChallengeProbe.widgets[0].removed")
+        expect(send).to_be_disabled()
+        page.evaluate("businessChallengeProbe.emit(1, 'success')")
+        expect(send).to_be_enabled()
+        page.evaluate("businessChallengeProbe.emit(1, 'error')")
+        expect(send).to_be_disabled()
+        expect(retry).to_be_visible()
+        dialog.get_by_role("button", name="Cancel", exact=True).click()
+        expect(dialog).not_to_be_visible()
+        page.get_by_role("button", name="Submit a post", exact=True).click()
+        expect(page.locator("#submission-verification-widget")).to_have_attribute("data-fixture-widget", "fixture-2")
+        assert page.evaluate("businessChallengeProbe.widgets[1].removed")
+        agree.check()
+        page.evaluate("businessChallengeProbe.emit(1, 'success')")
+        expect(send).to_be_disabled()
+        page.evaluate("businessChallengeProbe.emit(2, 'success')")
+        expect(send).to_be_enabled()
+        page.evaluate("businessChallengeProbe.emit(1, 'expired')")
+        expect(send).to_be_enabled()
+        page.evaluate("businessChallengeProbe.emit(2, 'timeout')")
+        expect(send).to_be_disabled()
+        assert not errors, f"Verification browser errors: {errors}"
+        page.screenshot(path=str(output / "13-required-guest-verification.png"), full_page=True)
+        checks.append("expired, errored and cancelled verification cannot enable submission through stale callbacks")
+    except Exception:
+        page.screenshot(path=str(output / "challenge-failure.png"), full_page=True)
+        raise
+    finally:
+        context.close()
+
+
+def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_only=False):
     import pyotp
     from playwright.sync_api import expect, sync_playwright
 
@@ -62,6 +214,9 @@ def exercise(url, output, credentials, channel, checks, data_dir):
             expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
 
         try:
+            if challenge_only:
+                exercise_submission_challenge(browser, url, output, checks)
+                return
             page.goto(url)
             expect(page.get_by_role("button", name="Continue as guest", exact=True)).to_be_visible()
             capture("01-sign-in")
@@ -240,6 +395,7 @@ def exercise(url, output, credentials, channel, checks, data_dir):
             checks.append("mobile navigation supports keyboard dismissal and page selection")
             assert not errors, f"Browser errors: {errors}"
             checks.append("no JavaScript or console errors")
+            exercise_submission_challenge(browser, url, output, checks)
         except Exception:
             # No traces or network payloads: they can capture test account secrets.
             page.screenshot(
@@ -257,6 +413,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--browser-channel", default=None)
+    parser.add_argument("--challenge-only", action="store_true", help="Run only the isolated required-verification browser checks.")
     options = parser.parse_args(argv)
     output = options.output_dir.resolve()
     if output == ROOT or ROOT in output.parents:
@@ -309,7 +466,8 @@ def main(argv=None):
                         if time.monotonic() >= deadline:
                             raise TimeoutError("Owned server did not become ready")
                         time.sleep(0.1)
-                    exercise(url, output, credentials, options.browser_channel, checks, data)
+                    exercise(url, output, credentials, options.browser_channel, checks, data,
+                             challenge_only=options.challenge_only)
                 finally:
                     server.should_exit = True
                     worker.join(timeout=15)

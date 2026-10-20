@@ -8,6 +8,7 @@ let navigation = 0;
 let dialogState = null;
 let toastTimer;
 let turnstileScript;
+let turnstileLoadSequence=0;
 let submissionChallenge = null;
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const paths = {
@@ -305,20 +306,33 @@ function setChallengeStatus(challenge,message,retry=false) {
 
 function loadTurnstile() {
   if(turnstileScript)return turnstileScript;
-  turnstileScript=new Promise((resolve,reject)=>{
+  const callbackName=`westbridgeTurnstileLoaded${++turnstileLoadSequence}`;
+  const loading=new Promise((resolve,reject)=>{
     const script=document.createElement("script");
-    const fail=()=>{clearTimeout(timeout);script.remove();turnstileScript=null;reject(new Error("Verification could not load. Please try again."));};
+    let settled=false;
+    const cleanup=()=>{clearTimeout(timeout);script.removeEventListener("error",fail);delete window[callbackName];};
+    const fail=()=>{
+      if(settled)return;
+      settled=true;cleanup();script.remove();
+      reject(new Error("Verification could not load. Please try again."));
+    };
     const timeout=setTimeout(fail,15000);
-    script.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-    script.async=true;
-    script.addEventListener("error",fail,{once:true});
-    script.addEventListener("load",()=>{
-      if(!window.turnstile?.ready){fail();return;}
-      window.turnstile.ready(()=>{clearTimeout(timeout);resolve(window.turnstile);});
-    },{once:true});
-    document.head.append(script);
+    // Async scripts use the provider's onload callback, not turnstile.ready().
+    window[callbackName]=()=>{
+      if(settled)return;
+      if(typeof window.turnstile?.render!=="function"){fail();return;}
+      settled=true;cleanup();resolve(window.turnstile);
+    };
+    try {
+      script.src=`https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=${callbackName}`;
+      script.async=true;
+      script.addEventListener("error",fail,{once:true});
+      document.head.append(script);
+    } catch(_) {fail();}
   });
-  return turnstileScript;
+  turnstileScript=loading;
+  loading.catch(()=>{if(turnstileScript===loading)turnstileScript=null;});
+  return loading;
 }
 
 async function startSubmissionChallenge(challenge) {

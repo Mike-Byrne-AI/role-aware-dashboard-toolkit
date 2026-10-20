@@ -53,6 +53,14 @@ failed responses. Bound the provider timeout and response size. Reject test
 credentials on public hosts. A rendered widget or a mocked response is not
 proof that the real provider configuration works.
 
+Exercise the required-challenge browser path separately from a loopback demo
+that disables challenges. Loading the provider script successfully does not
+prove that its initialization API was used correctly. For asynchronous
+Turnstile loading, use its documented `onload` callback; `turnstile.ready()`
+rejects an asynchronous script. Test load failure and retry, retained form text,
+expiration and late callbacks after a dialog closes. Keep submission disabled
+until both rules agreement and a current verification token are present.
+
 ## Make stronger login affect existing sessions
 
 Requiring an authenticator code only on a login form leaves old administrator

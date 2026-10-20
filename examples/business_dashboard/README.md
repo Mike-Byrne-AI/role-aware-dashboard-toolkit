@@ -158,6 +158,8 @@ store during the schema upgrade, authenticator replay/reset, mandatory policy
 acceptance and provider failures. The browser runner submits two guest posts,
 approves one, rejects the other and checks what guests can actually see. It also
 signs in with an administrator code and unpublishes a post while paused.
+An isolated provider-script fixture also exercises the required-verification
+browser path, including asynchronous loading, retry and token expiration.
 Provider tests use synthetic responses; they do not establish live Cloudflare
 or Render configuration. Reusable findings are in
 [host security lessons](../../docs/security_lessons.md).
