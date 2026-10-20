@@ -2,13 +2,10 @@
 
 from contextlib import contextmanager
 from datetime import datetime
-import hashlib
-import hmac
 import logging
 from pathlib import Path
 import secrets
 import sqlite3
-import time
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -21,10 +18,11 @@ from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeCo
 
 from .db import Database, record_activity, utc_now
 from .abuse import PUBLIC_RULES, SubmissionGuard
-from .mfa import verify_admin_code
-from .models import Contact, ContactUpdate, Empty, Freeze, Login, Message, PasswordChange, Post, PostUpdate, RevisionRequest, Schedule, ScheduleUpdate, Submission, SubmissionReview, UserUpdate
+from .auth_routes import install_auth_routes
+from .submission_routes import install_submission_routes
+from .models import Contact, ContactUpdate, Empty, Freeze, Message, Post, PostUpdate, RevisionRequest, Schedule, ScheduleUpdate, SubmissionReview, UserUpdate
 from .request_security import RequestSecurityMiddleware, validate_origin
-from .security import COOKIE_NAME, ROLES, SESSION_SECONDS, TransactionAccessStore, authenticate, dummy_password_check, hash_password, token_hash, verify_password
+from .security import COOKIE_NAME, ROLES, TransactionAccessStore, authenticate, token_hash
 
 LOGGER = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -72,16 +70,6 @@ def _validate_schedule(connection, payload, identifier):
             raise HTTPException(409, "An employee already has an assignment during that time.")
 
 
-def _check_submission_admission(connection, address, now):
-    if TransactionAccessStore(connection).read_freeze().frozen:
-        raise HTTPException(503, "Public submissions are temporarily paused. Please try again later.")
-    address_count = connection.execute("SELECT COUNT(*) FROM submission_limits WHERE key_hash=? AND submitted_at>?", (address, now - 600)).fetchone()[0]
-    global_count = connection.execute("SELECT COUNT(*) FROM submission_limits WHERE submitted_at>?", (now - 3600,)).fetchone()[0]
-    pending = connection.execute("SELECT COUNT(*) FROM submissions WHERE status='pending'").fetchone()[0]
-    if address_count >= 3 or global_count >= 30 or pending >= 100:
-        raise HTTPException(429, "Submissions are temporarily limited. Please try again later.", headers={"Retry-After": "600"})
-
-
 def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     origin = validate_origin(public_origin)
     submission_guard = SubmissionGuard.from_origin(public_origin)
@@ -119,6 +107,9 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
             auth.authorize(permission, write=write)
             yield connection, auth
 
+    install_auth_routes(app, database, authorized, origin)
+    install_submission_routes(app, database, submission_guard)
+
     @app.get("/api/session")
     def session(request: Request):
         with database.transaction() as connection:
@@ -131,66 +122,10 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
                 raise
             return auth.session_payload()
 
-    @app.post("/api/login")
-    def login(payload: Login, request: Request, response: Response):
-        username = payload.username.casefold()
-        now = time.time()
-        remote = request.client.host if request.client else "unknown"
-        keys = [("account:" + username, 8), ("address:" + remote, 30)]
-        with database.transaction() as connection:
-            connection.execute("DELETE FROM login_limits WHERE window_start<?", (now - 300,))
-            keyed = []
-            for value, limit in keys:
-                key = hmac.new(database.identity_key, value.encode(), hashlib.sha256).hexdigest()
-                keyed.append(key)
-                row = connection.execute("SELECT attempts FROM login_limits WHERE key_hash=?", (key,)).fetchone()
-                if row and row[0] >= limit:
-                    return JSONResponse({"detail": "Too many sign-in attempts. Please wait five minutes."}, status_code=429, headers={"Retry-After": "300"})
-            user = connection.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-            valid = verify_password(user["password_hash"], payload.password) if user else False
-            if not user:
-                dummy_password_check(payload.password)
-            generation = None
-            eligible = valid and user["active"] == 1 and user["role"] in ROLES
-            if eligible and user["role"] == "admin":
-                generation = verify_admin_code(connection, user["id"], payload.otp)
-                eligible = generation is not None
-            if not eligible:
-                for key in keyed:
-                    connection.execute("INSERT INTO login_limits VALUES(?,?,1) ON CONFLICT(key_hash) DO UPDATE SET attempts=attempts+1", (key, now))
-                return JSONResponse({"detail": "The sign-in details are incorrect."}, status_code=401)
-            connection.execute("DELETE FROM login_limits WHERE key_hash=?", (keyed[0],))
-            connection.execute("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", (now, now - 1800))
-            old = request.cookies.get(COOKIE_NAME)
-            if old:
-                connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
-            connection.execute("DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions WHERE user_id=? ORDER BY created_at DESC LIMIT -1 OFFSET 7)", (user["id"],))
-            token = secrets.token_urlsafe(32)
-            connection.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (token_hash(token), user["id"], now, now, now + SESSION_SECONDS))
-            if generation:
-                connection.execute("INSERT INTO session_mfa VALUES(?,?)", (token_hash(token), generation))
-            auth = authenticate(connection, token, database.identity_key)
-            auth.authorize("can_view_team")
-            record_activity(connection, user["name"], "Signed in", "Workspace")
-            result = auth.session_payload()
-        response.set_cookie(COOKIE_NAME, token, max_age=SESSION_SECONDS, httponly=True, secure=origin.scheme == "https", samesite="strict", path="/")
-        return result
-
     @app.post("/api/logout")
     def logout(payload: Empty, request: Request, response: Response):
         with authorized(request, csrf=True) as (connection, auth):
             connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(request.cookies[COOKIE_NAME]),))
-        response.delete_cookie(COOKIE_NAME, path="/", secure=origin.scheme == "https", httponly=True, samesite="strict")
-        return {"ok": True}
-
-    @app.post("/api/password")
-    def password(payload: PasswordChange, request: Request, response: Response):
-        with authorized(request, csrf=True) as (connection, auth):
-            if not verify_password(auth.user["password_hash"], payload.current_password):
-                raise HTTPException(403, "The current password is incorrect.")
-            connection.execute("UPDATE users SET password_hash=?,revision=revision+1 WHERE id=?", (hash_password(payload.new_password), auth.user["id"]))
-            connection.execute("DELETE FROM sessions WHERE user_id=?", (auth.user["id"],))
-            record_activity(connection, auth.user["name"], "Changed password", "Own account")
         response.delete_cookie(COOKIE_NAME, path="/", secure=origin.scheme == "https", httponly=True, samesite="strict")
         return {"ok": True}
 
@@ -201,27 +136,6 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
             return {"posts": [_post(row, public=True) for row in connection.execute("SELECT * FROM posts WHERE published=1 ORDER BY published_at DESC,id")],
                     "accepting_submissions": not freeze.frozen,
                     "posting_rules": PUBLIC_RULES, "submission_challenge": submission_guard.public_config()}
-
-    @app.post("/api/public/submissions", status_code=202)
-    def add_submission(payload: Submission, request: Request):
-        # Guests never supply identity or publication state. A shared write
-        # transaction makes the pause, queue cap and rolling limits atomic.
-        remote = request.client.host if request.client else "unknown"
-        submission_guard.validate_policy(payload.rules_version, payload.accept_rules)
-        address = hmac.new(database.identity_key, b"guest-submission\0" + remote.encode(), hashlib.sha256).hexdigest()
-        # Reject already-paused/full queues before spending an external check.
-        # Never hold the SQLite lock across that network request, and recheck
-        # every admission condition transactionally after verification.
-        with database.transaction() as connection:
-            _check_submission_admission(connection, address, time.time())
-        submission_guard.verify(payload.turnstile_token, remote)
-        with database.transaction() as connection:
-            now = time.time()
-            _check_submission_admission(connection, address, now)
-            connection.execute("DELETE FROM submission_limits WHERE submitted_at<=?", (now - 3600,))
-            connection.execute("INSERT INTO submissions VALUES(?,?,?,'pending',?,0,NULL)", (_identifier(), payload.title, payload.body, utc_now()))
-            connection.execute("INSERT INTO submission_limits(key_hash,submitted_at) VALUES(?,?)", (address, now))
-        return {"submitted": True}
 
     @app.get("/api/schedule")
     def schedule(request: Request):
@@ -408,6 +322,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/")
+    @app.get("/board")
     def index():
         return FileResponse(STATIC / "index.html")
 

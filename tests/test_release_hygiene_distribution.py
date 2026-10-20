@@ -330,6 +330,7 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
     assert {name[len(prefix):] for name in members if name.startswith(prefix)} == {
         "README.md", "HOSTING.md", "requirements.txt", "run.py", "hosting/pilot.py", "business/__init__.py",
         "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
+        "business/auth_routes.py", "business/submission_routes.py", "business/work_limits.py",
         "business/models.py", "business/request_security.py", "business/mfa.py", "business/abuse.py",
         "business/static/index.html", "business/static/app.js", "business/static/styles.css",
     }

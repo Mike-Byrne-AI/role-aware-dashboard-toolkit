@@ -279,6 +279,9 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "examples/business_dashboard/business/models.py",
         "examples/business_dashboard/business/request_security.py",
         "examples/business_dashboard/business/app.py",
+        "examples/business_dashboard/business/auth_routes.py",
+        "examples/business_dashboard/business/submission_routes.py",
+        "examples/business_dashboard/business/work_limits.py",
         "examples/business_dashboard/business/static/index.html",
         "examples/business_dashboard/business/static/app.js",
         "examples/business_dashboard/business/static/styles.css",
@@ -319,6 +322,7 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "tools/audit_dependencies.py",
         "tools/browser_smoke.py",
         "tools/business_dashboard_browser.py",
+        "tools/business_dashboard_fuzz.py",
         "tools/landscaping_artifact_smoke.py",
     }
 )

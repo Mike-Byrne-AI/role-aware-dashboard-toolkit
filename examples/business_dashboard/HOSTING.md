@@ -152,12 +152,55 @@ Render uses a verified custom domain as the health-check Host, so configure
 only the intended domain for this service. Resolve hostname mismatches in the
 deployment settings, not by accepting arbitrary hosts in application code.
 
-The application uses socket-peer rate buckets and ignores forwarded-address
-headers. Multiple visitors behind Render's proxy may share a bucket. Do not set
-wildcard forwarding trust to fix that symptom: first verify the actual ingress
-and header replacement rules. Render's Python environment can supply
+Login and password-change budgets are scoped to known accounts, independent of
+socket-peer failure history. Each permits eight failed or in-flight attempts in
+a five-minute window; successful work removes only its own reservation. Prior
+failures remain charged until the window expires. The budgets persist across
+restarts and sessions.
+Unknown usernames do not create persistent limiter rows.
+Their generic 401 response can nevertheless be distinguished from a known
+account's 429 cooldown after repeated probes. These fictional account names are
+public; the example does not promise to conceal account existence.
+
+Public submissions still use socket-peer buckets and ignore forwarded-address
+headers. They reserve an attempt before external verification: ten attempts per
+peer and thirty globally per sixty-second window. Failed tokens and provider
+errors retain their charge. Accepted submissions have separate limits of three
+per peer per ten minutes, thirty globally per hour, and one hundred pending.
+Multiple visitors behind Render's proxy may share a public-submission bucket.
+Do not set wildcard forwarding trust to fix that symptom: first verify the actual
+ingress and header replacement rules. Render's Python environment can supply
 `FORWARDED_ALLOW_IPS=*`; the adapter explicitly disables proxy-header handling
 so that ambient setting does not enable trust.
+
+Blocking authentication and public verification use separate worker admission,
+with at most two authentication jobs and four verification jobs per application
+instance. Excess jobs receive 429 with `Retry-After: 1`, without waiting for a
+worker. A cancelled request whose callback is running continues occupying its
+slot until that callback exits. Password hashing and provider calls hold no
+database write lock, and the application rechecks relevant authority and state
+before committing their result.
+
+The hosting adapter's single worker and single instance are part of this
+capacity policy. Increasing either does not create a distributed limiter.
+Attempt budgets reuse the existing schema-three `login_limits` table with
+separate namespaces; this update requires no migration or reprovisioning.
+Keep the existing database and identity key together.
+
+Targeted attempts can still exhaust an account's budget, and continuing traffic
+can still occupy worker capacity or the public global budget. Fixed budget-event
+messages contain no submitted credentials or tokens, but they are not a complete
+security audit trail. Check log retention and operator visibility. These controls
+are not a promise of availability under sustained load.
+
+The direct guest link is `PUBLIC_ORIGIN` followed by `/board`, for example
+`https://business.example.com/board`. **Share board** displays the same URL.
+It is publicly accessible, not invitation-only. Submitted guest messages are
+saved pending administrator approval. Visible guest tabs refresh the public
+feed every ten seconds, pause while hidden or offline, and retry failed updates
+with backoff while preserving an open draft. Administrators refresh manually,
+so background polling does not renew authenticated idle sessions. No additional
+service or database migration is required for this board.
 
 ## Accept the actual hosted service
 
@@ -173,13 +216,29 @@ Use disposable fictional records and private evidence for these checks:
 4. Submit through the real widget. Missing/invalid/reused tokens, another
    hostname/action and provider failure must not create a pending post.
 5. Confirm a pending post is private, approval publishes exactly once, rejection
-   stays private, and the moderator sees the same rules as the guest.
+   stays private, and the moderator sees the same rules as the guest. Use a
+   separate guest browser opened directly at `/board` and an administrator
+   browser. Without reloading the guest page, approve a test post and confirm it
+   appears on the next successful refresh; unpublish it and confirm it disappears.
+   Keep a guest draft open during an update, then check hidden-tab/offline
+   recovery and confirm the draft remains intact. Check this on the deployed
+   commit; local browser results do not establish live update behavior.
 6. Pause work, then unpublish a notice and revoke an employee. Confirm ordinary
    editing, approvals and guest submissions remain blocked while paused.
-7. Test the real proxy's rate buckets and direct-origin behavior. Rehearse queue
-   saturation and the submission pause without filling a real customer's queue.
-8. Restart/redeploy and verify persistence. Restore an application-consistent
-   backup in isolation and reconcile revocations, MFA and sessions before reopening.
+7. On an isolated deployment of the exact reviewed commit, verify that rejected
+   login/password-change attempts remain charged across sessions and restarts.
+   Unknown-user failures from the same proxy must not impose a stored cooldown
+   on another account's valid sign-in. Confirm targeted-account expiry behavior.
+8. Use bounded, coordinated checks on that isolated deployment to verify failed
+   verification attempts eventually stop before provider calls, excess work is
+   rejected promptly, and health and authenticated reads progress during slow
+   verification. Check capacity recovery after errors and cancellation. Do not
+   use a public client demo as a saturation or denial-of-service target.
+9. Test the real proxy's public-submission buckets and direct-origin behavior.
+   Rehearse queue saturation and the submission pause without filling a real
+   customer's queue. Keep shared-peer effects distinct from login account limits.
+10. Restart/redeploy and verify persistence. Restore an application-consistent
+    backup in isolation and reconcile revocations, MFA and sessions before reopening.
 
 Do not treat a raw disk snapshot as a tested database backup. Back up SQLite
 consistently with its original identity key, keep credentials private and
@@ -189,4 +248,6 @@ operator reset; no password-only web reset endpoint exists.
 Local tests cover startup and request boundaries with disposable data. They do
 not replace hosted checks or establish public HTTPS/proxy configuration. Keep
 automatic deployments off until a reviewed branch and operational acceptance
-process are in place.
+process are in place. Record the source revision and scope with each result:
+local remediation of an earlier assessment finding is not evidence that the fix
+is deployed. A prior live report does not establish the behavior of a new commit.

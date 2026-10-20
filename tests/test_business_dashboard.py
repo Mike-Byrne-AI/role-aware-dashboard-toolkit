@@ -184,6 +184,28 @@ def test_public_board_projects_published_posts_without_private_records(business,
     assert COOKIE_NAME not in guest.cookies
 
 
+def test_public_board_link_serves_shell_without_private_data_or_staff_access(business, business_admin):
+    saved(business_admin.request("POST", "/api/admin/posts", json=post_body(
+        title="LINK_PRIVATE_DRAFT", body="LINK_PRIVATE_BODY", published=False)), "post")
+    saved(business_admin.request("POST", "/api/messages", json={"body": "LINK_PRIVATE_MESSAGE"}), "message")
+    guest = business.client()
+    response = guest.get("/board")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="app"' in response.text and 'src="/static/app.js"' in response.text
+    assert not any(value in response.text for value in (
+        "LINK_PRIVATE_DRAFT", "LINK_PRIVATE_BODY", "LINK_PRIVATE_MESSAGE",
+        *business.credentials.values(),
+    ))
+    assert COOKIE_NAME not in guest.cookies
+    assert guest.get("/api/session").json()["user"] is None
+    assert guest.get("/api/admin/submissions").status_code == 401
+    assert guest.get("/board", headers={
+        "Host": "other.example.invalid", "X-Forwarded-Host": "127.0.0.1",
+    }).status_code == 400
+
+
 def test_guest_is_not_a_passwordless_staff_account(business):
     client = business.client()
     for username in ("guest", "admin", "alex"):
@@ -421,7 +443,12 @@ def test_published_notice_can_be_withdrawn_without_stale_republication(business,
     path = f"/api/admin/posts/{post['id']}"
     saved(business_admin.request("PUT", path, json={**body, "published": False, "revision": post["revision"]}), "post")
     assert business_admin.request("PUT", path, json={**body, "revision": post["revision"]}).status_code == 409
-    assert post["id"] not in {row["id"] for row in business.client().get("/api/public/posts").json()["posts"]}
+    public = business.client().get("/api/public/posts")
+    assert public.status_code == 200
+    assert public.headers["cache-control"] == "no-store"
+    posts = public.json()["posts"]
+    assert post["id"] not in {row["id"] for row in posts}
+    assert all(set(row) == {"id", "title", "body", "category", "published_at"} for row in posts)
 
 
 def test_restart_preserves_saved_records_credentials_and_identity(business, business_admin):
@@ -528,6 +555,7 @@ def test_guest_submission_stays_private_until_admin_approval(business, business_
     assert COOKIE_NAME not in guest.cookies
     public = guest.get("/api/public/posts")
     assert public.json()["accepting_submissions"] is True
+    assert public.headers["cache-control"] == "no-store"
     assert "PENDING_TITLE_CANARY" not in public.text
     assert "PENDING_BODY_CANARY" not in public.text
     pending = pending_submissions(business_admin)
@@ -542,6 +570,7 @@ def test_guest_submission_stays_private_until_admin_approval(business, business_
     assert len(published) == 1
     assert published[0]["body"] == "PENDING_BODY_CANARY"
     assert published[0]["category"] == "Community"
+    assert set(published[0]) == {"id", "title", "body", "category", "published_at"}
     for decision in ("approve", "reject"):
         assert review_submission(business_admin, submission, decision).status_code == 409
     assert len([post for post in guest.get("/api/public/posts").json()["posts"]
@@ -582,10 +611,16 @@ def test_submission_review_requires_current_admin_and_bound_csrf(business, busin
 
 def test_freeze_stops_guest_submission_and_review_until_resume(business, business_admin):
     guest = business.client()
+    public_before = guest.get("/api/public/posts").json()["posts"]
     assert submit_guest(guest).status_code == 202
     submission = pending_submissions(business_admin)[0]
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
-    assert guest.get("/api/public/posts").json()["accepting_submissions"] is False
+    paused = guest.get("/api/public/posts")
+    assert paused.headers["cache-control"] == "no-store"
+    assert paused.json()["accepting_submissions"] is False
+    assert paused.json()["posts"] == public_before
+    assert all(set(row) == {"id", "title", "body", "category", "published_at"}
+               for row in paused.json()["posts"])
     assert submit_guest(guest, title="Paused submission").status_code == 503
     for decision in ("approve", "reject"):
         assert review_submission(business_admin, submission, decision).status_code == 403

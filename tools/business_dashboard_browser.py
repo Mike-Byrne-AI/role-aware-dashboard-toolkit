@@ -15,10 +15,232 @@ import tempfile
 import threading
 import time
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "business_dashboard"
+
+
+class PublicBoardObserver:
+    """Watch real administrator changes from a separately signed-out browser."""
+
+    DRAFT_TITLE = "Unsent notice retained during board updates"
+    DRAFT_BODY = "This draft must remain in the form while published notices change."
+
+    def __init__(self, browser, url, output, checks):
+        from playwright.sync_api import expect
+
+        self.url, self.output, self.checks = url, output, checks
+        self.context = browser.new_context(viewport={"width": 1440, "height": 1050})
+        self.context.set_default_timeout(10000)
+        self.page = self.context.new_page()
+        self.requests, self.errors = [], []
+        self.page.on("request", lambda request: self.requests.append((request.method, urlsplit(request.url).path)))
+        self.page.on("pageerror", lambda error: self.errors.append(type(error).__name__))
+        self.page.clock.install(time=time.time() - 1)
+        self.page.goto(url + "/board")
+        expect(self.page.get_by_role("heading", name="The public board.", exact=True)).to_be_visible()
+        expect(self.page.locator("#public-board-content")).to_be_visible()
+        self.page.clock.pause_at(self.page.evaluate("Date.now() / 1000") + 1)
+        self.request_start = len(self.requests)
+        assert not any(cookie["name"] == "westbridge_session" for cookie in self.context.cookies())
+        checks.append("a shared /board link opens the public board in a separate unsigned-in browser")
+
+    def poll(self):
+        """Advance one normal interval and wait for the real public response."""
+        with self.page.expect_response(self.url + "/api/public/posts") as received:
+            self.page.clock.run_for(10000)
+        assert received.value.status == 200
+        assert isinstance(received.value.json().get("posts"), list)
+        assert all(
+            method == "GET" and path == "/api/public/posts"
+            for method, path in self.requests[self.request_start:]
+            if path.startswith("/api/")
+        ), "Public observation unexpectedly called a private or mutating API"
+        assert not self.errors, f"Public observer browser errors: {self.errors}"
+
+    def start_draft(self):
+        from playwright.sync_api import expect
+
+        self.page.get_by_role("button", name="Submit a post", exact=True).click()
+        dialog = self.page.get_by_role("dialog")
+        dialog.get_by_label("Title", exact=True).fill(self.DRAFT_TITLE)
+        dialog.get_by_label("Message", exact=True).fill(self.DRAFT_BODY)
+        dialog.get_by_label("I agree to the posting rules", exact=True).check()
+        expect(dialog.get_by_role("button", name="Send for approval", exact=True)).to_be_enabled()
+        self.page.evaluate("window.boardDraftNode = document.querySelector('dialog form')")
+        self.assert_draft()
+
+    def assert_draft(self, *, accepting=True):
+        from playwright.sync_api import expect
+
+        dialog = self.page.get_by_role("dialog")
+        expect(dialog).to_be_visible()
+        expect(dialog.get_by_label("Title", exact=True)).to_have_value(self.DRAFT_TITLE)
+        expect(dialog.get_by_label("Message", exact=True)).to_have_value(self.DRAFT_BODY)
+        expect(dialog.get_by_label("I agree to the posting rules", exact=True)).to_be_checked()
+        assert self.page.evaluate("Boolean(window.boardDraftNode) && window.boardDraftNode === document.querySelector('dialog form')")
+        send = dialog.get_by_role("button", name="Send for approval", exact=True)
+        if accepting:
+            expect(send).to_be_enabled()
+        else:
+            expect(send).to_be_disabled()
+
+    def assert_post(self, title, *, visible=True):
+        from playwright.sync_api import expect
+
+        heading = self.page.locator("#public-board-content").get_by_text(title, exact=True)
+        # A native modal can cover the feed, so check rendered content rather
+        # than requiring the background announcement to be interactable.
+        expect(heading).to_have_count(1 if visible else 0)
+
+    def finish(self):
+        from playwright.sync_api import expect
+
+        self.assert_draft()
+        self.page.keyboard.press("Escape")
+        self.page.set_viewport_size({"width": 390, "height": 844})
+        self.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        self.page.get_by_role("button", name="Share board", exact=True).click()
+        dialog = self.page.get_by_role("dialog")
+        link = dialog.get_by_label("Board link", exact=True)
+        expect(link).to_have_value(self.url + "/board")
+        expect(link).to_have_attribute("readonly", "")
+        dialog.get_by_role("button", name="Copy link", exact=True).click()
+        assert self.page.evaluate("navigator.clipboard.readText()") == self.url + "/board"
+        assert self.page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert dialog.evaluate("""element => {
+          const box = element.getBoundingClientRect();
+          return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight;
+        }""")
+        self.page.screenshot(path=str(self.output / "18-mobile-shared-board.png"), full_page=False)
+        self.page.keyboard.press("Escape")
+        expect(dialog).not_to_be_visible()
+        self.checks.append("public board updates preserve an unsent dialog and use only read-only public requests")
+        self.checks.append("mobile public board shares a copyable direct link without a staff session")
+
+    def close(self):
+        self.context.close()
+
+
+def check_public_board_recovery(browser, url, output, checks):
+    """Exercise timing/failure boundaries with intercepted public reads only."""
+    from playwright.sync_api import expect
+
+    observer = PublicBoardObserver(browser, url, output, [])
+    page = observer.page
+    mode, calls, held = {"value": "hold"}, [], []
+    public_url = url + "/api/public/posts"
+    baseline = observer.context.request.get(public_url).json()
+
+    def public_read(route):
+        calls.append(route.request.method)
+        if mode["value"] == "hold":
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route(public_url, public_read)
+    try:
+        content = page.locator("#public-board-content").inner_text()
+        with page.expect_request(public_url):
+            page.get_by_role("button", name="Refresh board", exact=True).click()
+        assert len(held) == 1
+        page.clock.run_for(10000)
+        page.get_by_role("button", name="Refresh board", exact=True).click()
+        assert len(calls) == 1, "A slow poll allowed overlapping automatic/manual requests"
+        page.clock.run_for(2001)
+        expect(page.locator("#board-status")).to_have_attribute("data-state", "retrying")
+        assert page.locator("#public-board-content").inner_text() == content
+        held.pop().abort()
+        mode["value"] = "pass"
+        page.clock.run_for(19000)
+        assert len(calls) == 1, "A failed poll retried before its backoff interval"
+        with page.expect_response(public_url) as recovered:
+            page.clock.run_for(1001)
+        assert recovered.value.status == 200
+        expect(page.locator("#board-status")).to_have_attribute("data-state", "live")
+        checks.append("a stalled public read times out without overlapping polls, retains posts, and recovers after backoff")
+
+        observer.context.set_offline(True)
+        expect(page.locator("#board-status")).to_have_attribute("data-state", "offline")
+        before = len(calls)
+        page.clock.run_for(60000)
+        assert len(calls) == before
+        observer.context.set_offline(False)
+        with page.expect_response(public_url):
+            page.clock.run_for(1)
+        expect(page.locator("#board-status")).to_have_attribute("data-state", "live")
+
+        # Headless tabs do not reliably change visibility when another page is
+        # focused. Dispatch browser visibility events with the corresponding
+        # read-only document properties emulated; never call app internals.
+        page.evaluate("""() => {
+          Object.defineProperty(document, "hidden", {configurable:true, value:true});
+          Object.defineProperty(document, "visibilityState", {configurable:true, value:"hidden"});
+          document.dispatchEvent(new Event("visibilitychange"));
+        }""")
+        before = len(calls)
+        page.clock.run_for(60000)
+        assert len(calls) == before
+        page.evaluate("""() => {
+          delete document.hidden; delete document.visibilityState;
+          document.dispatchEvent(new Event("visibilitychange"));
+        }""")
+        with page.expect_response(public_url):
+            page.clock.run_for(1)
+        expect(page.locator("#board-status")).to_have_attribute("data-state", "live")
+        checks.append("offline and simulated hidden-tab events pause public polling and resume it when available")
+
+        mode["value"] = "hold"
+        with page.expect_request(public_url):
+            page.get_by_role("button", name="Refresh board", exact=True).click()
+        assert len(held) == 1
+        page.get_by_role("button", name="Team sign in", exact=True).click()
+        expect(page.get_by_label("Username", exact=True)).to_be_visible()
+        stale = {**baseline, "posts": [{
+            "id": "stale-browser-response", "title": "Stale response must not return",
+            "body": "This intercepted response arrived after navigation.",
+            "category": "Company", "published_at": None,
+        }]}
+        held.pop().fulfill(status=200, content_type="application/json", body=json.dumps(stale))
+        before = len(calls)
+        page.clock.run_for(60000)
+        assert len(calls) == before, "Polling continued after leaving the public board"
+        expect(page.get_by_label("Username", exact=True)).to_be_visible()
+        expect(page.get_by_text("Stale response must not return", exact=True)).to_have_count(0)
+        mode["value"] = "pass"
+        page.get_by_role("button", name="Continue as guest", exact=True).click()
+        expect(page.locator("#public-board-content")).to_be_visible()
+        observer.poll()
+        page.screenshot(path=str(output / "19-public-board-recovery.png"), full_page=True)
+        checks.append("late public responses cannot replace sign-in navigation and returning to the board restores polling")
+        assert not observer.errors, f"Board recovery browser errors: {observer.errors}"
+    except Exception:
+        page.screenshot(path=str(output / "public-recovery-failure.png"), full_page=True)
+        raise
+    finally:
+        observer.close()
+
+
+def check_admin_board_is_manual(page, checks):
+    """An idle admin board must not keep its authenticated session alive."""
+    requests = []
+
+    def record(request):
+        if urlsplit(request.url).path.startswith("/api/"):
+            requests.append(request.method)
+
+    page.clock.pause_at(page.evaluate("Date.now() / 1000") + 1)
+    page.on("request", record)
+    try:
+        page.clock.run_for(30000)
+        assert not requests, "The administrator board performed background authenticated requests"
+    finally:
+        page.remove_listener("request", record)
+        page.clock.resume()
+    checks.append("an idle administrator board does not poll authenticated endpoints or extend its session")
 
 
 def check_guest_resizing(page, output, checks):
@@ -263,9 +485,11 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
         context = browser.new_context(viewport={"width": 1440, "height": 1050})
         context.set_default_timeout(10000)
         page = context.new_page()
+        page.clock.install(time=time.time() - 1)
         errors = []
         page.on("pageerror", lambda error: errors.append(type(error).__name__))
         page.on("console", lambda message: errors.append("browser console error") if message.type == "error" else None)
+        observer = None
 
         def capture(name):
             expect(page.get_by_text("Loading your workspace…", exact=True)).to_have_count(0)
@@ -347,6 +571,11 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             page.set_viewport_size({"width": 1440, "height": 1050})
             checks.append("guest submission dialog fits mobile and supports keyboard dismissal")
 
+            observer = PublicBoardObserver(browser, url, output, checks)
+            observer.assert_post(approved_title, visible=False)
+            observer.assert_post(rejected_title, visible=False)
+            observer.start_draft()
+
             login("admin")
             expect(page.get_by_role("heading", name="A clear view,", exact=False)).to_be_visible()
             capture("03-admin-overview")
@@ -355,6 +584,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
 
             navigate("Public board")
             expect(page.get_by_role("button", name=f"Approve {approved_title}", exact=True)).to_be_visible()
+            check_admin_board_is_manual(page, checks)
             expect(page.get_by_text(untrusted_body, exact=True)).to_be_visible()
             expect(page.locator('img[src="x"]')).to_have_count(0)
             assert page.evaluate("window.guestMarkupExecuted !== true")
@@ -364,6 +594,10 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             dialog.get_by_role("button", name="Approve post", exact=True).click()
             expect(dialog).not_to_be_visible()
             expect(page.get_by_role("button", name=f"Approve {approved_title}", exact=True)).to_have_count(0)
+            observer.poll()
+            observer.assert_post(approved_title)
+            observer.assert_post(rejected_title, visible=False)
+            observer.assert_draft()
             navigate(f"Reject {rejected_title}")
             dialog.get_by_role("button", name="Reject post", exact=True).click()
             expect(dialog).not_to_be_visible()
@@ -372,6 +606,10 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             assert sum(post["title"] == approved_title for post in public) == 1
             assert not any(post["title"] == rejected_title for post in public)
             checks.append("administrator approves one guest post and rejects another")
+            observer.poll()
+            observer.assert_post(rejected_title, visible=False)
+            observer.assert_draft()
+            checks.append("a second guest automatically sees approved posts while pending and rejected submissions remain private")
 
             navigate("Schedule")
             navigate("Add event")
@@ -420,11 +658,16 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             public = context.request.get(url + "/api/public/posts").json()["posts"]
             assert any(post["title"] == "October office hours" for post in public)
             checks.append("administrator publishes a guest-visible notice")
+            observer.poll()
+            observer.assert_post("October office hours")
+            observer.assert_draft()
 
             navigate("Overview")
             page.get_by_role("switch", name="Pause workspace changes", exact=True).click()
             dialog.get_by_role("button", name="Pause changes", exact=True).click()
             expect(dialog).not_to_be_visible()
+            observer.poll()
+            observer.assert_draft(accepting=False)
             navigate("Schedule")
             expect(page.get_by_role("button", name="Add event", exact=True)).to_be_disabled()
             navigate("Public board")
@@ -452,10 +695,17 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             assert not any(post["id"] == published_post["id"] for post in public)
             capture("12-paused-emergency-unpublish")
             checks.append("paused administrator unpublishes a notice while editing and publishing remain denied")
+            observer.poll()
+            observer.assert_post("October office hours", visible=False)
+            observer.assert_draft(accepting=False)
             navigate("Overview")
             page.get_by_role("switch", name="Pause workspace changes", exact=True).click()
             dialog.get_by_role("button", name="Resume changes", exact=True).click()
             expect(dialog).not_to_be_visible()
+            observer.poll()
+            observer.assert_draft()
+            observer.finish()
+            checks.append("public polling removes unpublished notices and applies pause/resume without losing a guest draft")
             navigate("Schedule")
             expect(page.get_by_role("button", name="Add event", exact=True)).to_be_enabled()
             checks.append("shared pause disables editing and administrator can resume")
@@ -492,6 +742,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             checks.append("mobile navigation supports keyboard dismissal and page selection")
             assert not errors, f"Browser errors: {errors}"
             checks.append("no JavaScript or console errors")
+            check_public_board_recovery(browser, url, output, checks)
             exercise_submission_challenge(browser, url, output, checks)
         except Exception:
             # No traces or network payloads: they can capture test account secrets.
@@ -500,8 +751,12 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
                 mask=[page.locator('input[type="password"]:not(:placeholder-shown), input[name="otp"]:not(:placeholder-shown)')],
                 mask_color="#dce3df",
             )
+            if observer is not None:
+                observer.page.screenshot(path=str(output / "public-observer-failure.png"), full_page=True)
             raise
         finally:
+            if observer is not None:
+                observer.close()
             context.close()
             browser.close()
 

@@ -10,6 +10,11 @@ let toastTimer;
 let turnstileScript;
 let turnstileLoadSequence=0;
 let submissionChallenge = null;
+const BOARD_POLL_MS = 10000;
+let boardTimer;
+let boardRequest = null;
+let boardGeneration = 0;
+let boardRetryDelay = BOARD_POLL_MS;
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const paths = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -53,21 +58,99 @@ const disabled = () => state.frozen ? " disabled" : "";
 const roleName = () => isAdmin() ? "Administrator" : "Employee";
 const empty = (title, body, name = "calendar") => `<div class="empty">${icon(name)}<strong>${e(title)}</strong><p>${e(body)}</p></div>`;
 
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, options = {}) {
   const headers = { "Accept": "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (method !== "GET" && state.csrf) headers["X-CSRF-Token"] = state.csrf;
   let response;
   try {
-    response = await fetch(path, {method, headers, credentials:"same-origin", cache:"no-store", ...(body === undefined ? {} : {body:JSON.stringify(body)})});
-  } catch (_) { throw new Error("Unable to reach the workspace. Check your connection and try again."); }
-  const data = await response.json().catch(() => ({}));
+    response = await fetch(path, {method, headers, credentials:"same-origin", cache:"no-store", signal:options.signal, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  } catch (error) {
+    if(error.name === "AbortError")throw error;
+    throw new Error("Unable to reach the workspace. Check your connection and try again.");
+  }
+  const data = await response.json().catch(error => {if(error.name === "AbortError")throw error;return {};});
   if (!response.ok) {
     const detail = typeof data.detail === "string" ? data.detail : "This request could not be completed. Check your entries and try again.";
-    const error = new Error(detail); error.status = response.status; throw error;
+    const error = new Error(detail); error.status = response.status;
+    error.retryAfter = Number(response.headers.get("Retry-After")) || 0;
+    throw error;
   }
   return data;
 }
+
+function publicBoardActive() {
+  return state.page === "public" && !isAdmin() && Boolean(document.querySelector("#public-board-content"));
+}
+
+function boardStatus(message, status = "live") {
+  const element = document.querySelector("#board-status");
+  if(element) {element.textContent = message; element.dataset.state = status;}
+}
+
+function stopBoardUpdates() {
+  boardGeneration++;
+  clearTimeout(boardTimer);
+  const request = boardRequest;
+  boardRequest = null;
+  request?.abort();
+}
+
+function scheduleBoardUpdate(delay = BOARD_POLL_MS) {
+  clearTimeout(boardTimer);
+  if(publicBoardActive() && !document.hidden && navigator.onLine) {
+    boardTimer = setTimeout(refreshPublicBoard, delay);
+  }
+}
+
+function startBoardUpdates(immediate = false) {
+  stopBoardUpdates();
+  boardRetryDelay = BOARD_POLL_MS;
+  if(!publicBoardActive())return;
+  if(!navigator.onLine) {boardStatus("Offline. Showing previously loaded posts.", "offline");return;}
+  if(document.hidden)return;
+  scheduleBoardUpdate(immediate ? 0 : BOARD_POLL_MS);
+}
+
+async function refreshPublicBoard() {
+  clearTimeout(boardTimer);
+  if(!publicBoardActive() || document.hidden || !navigator.onLine || boardRequest)return;
+  const generation = boardGeneration;
+  const request = new AbortController();
+  boardRequest = request;
+  const timeout = setTimeout(() => request.abort(), 12000);
+  try {
+    // Public reads never authenticate or extend a staff session's idle timeout.
+    const data = await api("/api/public/posts", "GET", undefined, {signal:request.signal});
+    if(generation !== boardGeneration || !publicBoardActive())return;
+    if(!Array.isArray(data.posts) || typeof data.accepting_submissions !== "boolean")throw new Error("The board response was incomplete.");
+    if(JSON.stringify(data) !== JSON.stringify(state.data)) {
+      const region = document.querySelector("#public-board-content");
+      const content = renderPublicContent(data);
+      region.innerHTML = content;
+      state.data = data;
+      const submit = document.querySelector('[data-action="submission-new"]');
+      if(submit)submit.disabled = data.accepting_submissions !== true;
+      updateSubmissionButton();
+    }
+    boardRetryDelay = BOARD_POLL_MS;
+    boardStatus("Updates automatically every 10 seconds.");
+  } catch(error) {
+    if(generation !== boardGeneration || !publicBoardActive())return;
+    boardRetryDelay = Math.max(Math.min(boardRetryDelay * 2, 60000), Math.min(error.retryAfter * 1000 || 0, 300000));
+    boardStatus("Updates delayed. Showing previously loaded posts; retrying automatically.", "retrying");
+  } finally {
+    clearTimeout(timeout);
+    if(boardRequest === request)boardRequest = null;
+    if(generation === boardGeneration)scheduleBoardUpdate(boardRetryDelay);
+  }
+}
+
+document.addEventListener("visibilitychange", () => startBoardUpdates(true));
+window.addEventListener("online", () => startBoardUpdates(true));
+window.addEventListener("offline", () => startBoardUpdates());
+window.addEventListener("pagehide", stopBoardUpdates);
+window.addEventListener("pageshow", event => {if(event.persisted)startBoardUpdates(true);});
 
 function setSession(session) {
   state.user = session.user || null;
@@ -96,6 +179,8 @@ function errorAt(error, target) {
 }
 
 function renderLogin() {
+  stopBoardUpdates();
+  if(location.pathname === "/board" || location.hash === "#board")history.replaceState(null, "", "/");
   navigation++;
   state.page = "";
   state.submissionReceipt = false;
@@ -128,6 +213,7 @@ function heading(eyebrow, title, description, action = "") {
 }
 
 async function navigate(page, options = {}) {
+  stopBoardUpdates();
   const ticket = ++navigation;
   if (!state.user && page !== "public") {renderLogin(); return;}
   if (state.user && !isAdmin() && ["overview","outreach"].includes(page)) page = "schedule";
@@ -150,6 +236,8 @@ async function navigate(page, options = {}) {
     if (data.frozen !== undefined) {state.frozen=Boolean(data.frozen);state.freeze_revision=data.freeze_revision;}
     const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic};
     shell(render[page](data));
+    history.replaceState(null, "", page === "public" ? "/board" : "/");
+    if(page === "public")startBoardUpdates();
     const pageTitle = document.querySelector("#main h1");
     pageTitle?.setAttribute("tabindex", "-1");
     pageTitle?.focus({preventScroll:true});
@@ -206,14 +294,22 @@ function renderMessages(data) {
 }
 
 function renderPublic(data) {
+  const admin = isAdmin();
+  const guest = !state.user;
+  const action = admin ? `<button class="button primary" data-action="post-new"${disabled()}>${icon("plus")}New post</button>` : guest ? `<button class="button primary" data-action="submission-new"${data.accepting_submissions === true ? "" : " disabled"}>${icon("plus")}Submit a post</button>` : '<span class="badge green">Open to everyone</span>';
+  const status = admin ? "Refresh to check for new submissions." : "Updates automatically every 10 seconds.";
+  const toolbar = `<div class="board-live-bar"><p id="board-status" role="status" data-state="live">${status}</p><div class="board-live-actions"><button class="button small" data-action="${admin ? "refresh" : "board-refresh"}">${icon("refresh")}Refresh board</button><button class="button small" data-action="board-share">Share board ${icon("arrow")}</button></div></div>`;
+  return heading("News & community", "The public board.", admin ? "Publish updates and review messages from your guests." : "Messages, notices, and opportunities from our community.", action) + toolbar + `<div id="public-board-content">${renderPublicContent(data)}</div>`;
+}
+
+function renderPublicContent(data) {
   const admin=isAdmin();
   const guest=!state.user;
   const posts=data.posts||[];
   const accepting=data.accepting_submissions===true;
-  const action=admin?`<button class="button primary" data-action="post-new"${disabled()}>${icon("plus")}New post</button>`:guest?`<button class="button primary" data-action="submission-new"${accepting?"":" disabled"}>${icon("plus")}Submit a post</button>`:`<span class="badge green">Open to everyone</span>`;
   const receipt=guest&&state.submissionReceipt?'<p class="notice submission-notice" role="status">Submitted for review. Your post will appear here if approved.</p>':"";
   const paused=guest&&!accepting?'<p class="notice submission-notice" role="status">Guest submissions are currently paused. You can still read the public board.</p>':"";
-  return heading("News & community","The public board.",admin?"Publish company updates for the wider community.":"The latest news, notices, and opportunities from Westbridge.",action)+receipt+paused+`<section class="public-intro"><div><div class="eyebrow">A word from Westbridge</div><h2>Good work reaches beyond the office.</h2><p>Stay connected with our business, find out what’s coming up, and discover new ways to work together.</p></div>${icon("board","intro-icon")}</section>${admin?renderSubmissions(data.submissions||[],data.posting_rules):""}<section class="posting-grid" aria-label="Public announcements">${posts.length?posts.map(post=>`<article class="panel post-card"><div class="post-top"><span class="badge ${post.category?.toLowerCase().includes("opportun")?"amber":"green"}">${e(post.category||"Company news")}</span><time${post.published_at?` datetime="${e(post.published_at)}"`:""}>${e(post.published_at?date(post.published_at,{month:"short",day:"numeric",year:"numeric"}):"Draft")}</time></div><h2>${e(post.title)}</h2><p class="post-body">${e(post.body)}</p><div class="post-bottom"><span>${admin?`<span class="badge ${post.published?"green":"gray"}">${post.published?"Published":"Draft"}</span>`:post.category==="Community"?"Community contribution":"Westbridge Business Group"}</span>${admin?`<div class="post-actions">${post.published?`<button class="button small danger" data-action="post-unpublish" data-id="${e(post.id)}" aria-label="Unpublish ${e(post.title)}">Unpublish</button>`:""}<button class="button small subtle" data-action="post-edit" data-id="${e(post.id)}" aria-label="Edit ${e(post.title)}"${disabled()}>Edit post ${icon("arrow")}</button></div>`:""}</div></article>`).join(""):`<div class="panel span-2">${empty("More to share, soon",admin?"Create a post to welcome your community.":"Company announcements will appear here.","board")}</div>`}</section>`;
+  return receipt+paused+`<section class="public-intro"><div><div class="eyebrow">A word from Westbridge</div><h2>Good work reaches beyond the office.</h2><p>Stay connected with our business, find out what’s coming up, and discover new ways to work together.</p></div>${icon("board","intro-icon")}</section>${admin?renderSubmissions(data.submissions||[],data.posting_rules):""}<section class="posting-grid" aria-label="Public announcements">${posts.length?posts.map(post=>`<article class="panel post-card"><div class="post-top"><span class="badge ${post.category?.toLowerCase().includes("opportun")?"amber":"green"}">${e(post.category||"Company news")}</span><time${post.published_at?` datetime="${e(post.published_at)}"`:""}>${e(post.published_at?date(post.published_at,{month:"short",day:"numeric",year:"numeric"}):"Draft")}</time></div><h2>${e(post.title)}</h2><p class="post-body">${e(post.body)}</p><div class="post-bottom"><span>${admin?`<span class="badge ${post.published?"green":"gray"}">${post.published?"Published":"Draft"}</span>`:post.category==="Community"?"Community contribution":"Westbridge Business Group"}</span>${admin?`<div class="post-actions">${post.published?`<button class="button small danger" data-action="post-unpublish" data-id="${e(post.id)}" aria-label="Unpublish ${e(post.title)}">Unpublish</button>`:""}<button class="button small subtle" data-action="post-edit" data-id="${e(post.id)}" aria-label="Edit ${e(post.title)}"${disabled()}>Edit post ${icon("arrow")}</button></div>`:""}</div></article>`).join(""):`<div class="panel span-2">${empty("More to share, soon",admin?"Create a post to welcome your community.":"Company announcements will appear here.","board")}</div>`}</section>`;
 }
 
 function renderSubmissions(submissions,rules) {
@@ -246,6 +342,14 @@ function openDialog(type,title,subtitle,body,footer,record=null) {
   editor.innerHTML=`<div class="dialog-header"><div><h2 id="dialog-title">${e(title)}</h2><p>${e(subtitle)}</p></div><button class="icon-button" data-action="dialog-close" aria-label="Close dialog">${icon("close")}</button></div><form id="dialog-form"><div class="dialog-body"><div id="dialog-error" class="error" role="alert" tabindex="-1" hidden></div>${body}</div><div class="dialog-footer">${footer}</div></form>`;
   editor.showModal();
   (editor.querySelector("input:not([type=hidden]), textarea, select") || editor.querySelector('[data-action="dialog-close"]'))?.focus();
+}
+
+function shareBoardDialog() {
+  const link = new URL("/board", location.origin).href;
+  openDialog("board-share", "Share the public board", "Anyone with this link can read approved posts and submit a post for review.",
+    `<label class="field"><span>Board link</span><input type="url" id="board-link" value="${e(link)}" readonly></label><p class="field-hint">Guests do not need an account. The team workspace stays private.</p>`,
+    '<button type="button" class="button" data-action="dialog-close">Done</button><button type="button" class="button primary" data-action="board-copy">Copy link</button>');
+  document.querySelector("#board-link").select();
 }
 const cancelButton=()=>'<button type="button" class="button" data-action="dialog-close">Cancel</button>';
 const saveButton=(label="Save changes")=>`<button type="submit" class="button primary">${e(label)}</button>`;
@@ -280,7 +384,7 @@ function submissionDialog() {
     toast("Posting rules are unavailable. Refresh the board before trying again.");return;
   }
   const challenge=state.data.submission_challenge || {required:false};
-  const fields=`<p class="notice">Your post will be public only after administrator approval.</p><section class="posting-rules" aria-labelledby="posting-rules-heading"><h3 id="posting-rules-heading">Posting rules</h3><ul>${rules.rules.map(rule=>`<li>${e(rule)}</li>`).join("")}</ul></section><div class="form-grid">${inputField("Title","title","",{full:true,max:120})}${textareaField("Message","body","",{full:true,required:true})}<label class="checkbox-line span-2 rules-agreement"><input type="checkbox" name="accept_rules" required>I agree to the posting rules</label></div>${challenge.required?'<section class="submission-verification" aria-label="Visitor verification"><div id="submission-verification-widget"></div><p id="verification-status" class="field-hint" role="status">Preparing verification…</p><button type="button" class="button small" data-action="verification-retry" hidden>Retry verification</button></section>':""}`;
+  const fields=`<p class="notice">Your post will be public only after administrator approval.</p><p id="submission-pause" class="notice" role="status" hidden>Guest submissions are paused. Your draft is kept here.</p><section class="posting-rules" aria-labelledby="posting-rules-heading"><h3 id="posting-rules-heading">Posting rules</h3><ul>${rules.rules.map(rule=>`<li>${e(rule)}</li>`).join("")}</ul></section><div class="form-grid">${inputField("Title","title","",{full:true,max:120})}${textareaField("Message","body","",{full:true,required:true})}<label class="checkbox-line span-2 rules-agreement"><input type="checkbox" name="accept_rules" required>I agree to the posting rules</label></div>${challenge.required?'<section class="submission-verification" aria-label="Visitor verification"><div id="submission-verification-widget"></div><p id="verification-status" class="field-hint" role="status">Preparing verification…</p><button type="button" class="button small" data-action="verification-retry" hidden>Retry verification</button></section>':""}`;
   openDialog("submission","Submit a post","Share a notice with the Westbridge community.",fields,cancelButton()+saveButton("Send for approval"),{rules_version:rules.version});
   submissionChallenge={dialog:dialogState,required:challenge.required===true,provider:challenge.provider,siteKey:challenge.site_key,token:"",widget:null,saving:false};
   updateSubmissionButton();
@@ -292,7 +396,10 @@ function updateSubmissionButton() {
   if(!challenge || challenge.dialog!==dialogState || !editor.open)return;
   const agreed=editor.querySelector('[name="accept_rules"]')?.checked;
   const submit=editor.querySelector('[type="submit"]');
-  if(submit)submit.disabled=challenge.saving || !agreed || (challenge.required && !challenge.token);
+  const paused=state.data.accepting_submissions!==true;
+  const notice=editor.querySelector("#submission-pause");
+  if(notice)notice.hidden=!paused;
+  if(submit)submit.disabled=paused || challenge.saving || !agreed || (challenge.required && !challenge.token);
 }
 
 function setChallengeStatus(challenge,message,retry=false) {
@@ -391,6 +498,15 @@ document.addEventListener("click",async(event)=>{
   if(!action)return;
   if(action==="toggle-password") {const field=document.querySelector("#password");const show=field.type==="password";field.type=show?"text":"password";button.setAttribute("aria-label",show?"Hide password":"Show password");button.setAttribute("aria-pressed",String(show));return;}
   if(action==="guest"){state.guest=true;await navigate("public");return;}
+  if(action==="board-refresh"){await refreshPublicBoard();return;}
+  if(action==="board-share"){shareBoardDialog();return;}
+  if(action==="board-copy"){
+    const field=editor.querySelector("#board-link");
+    if(!field)return;
+    try {await navigator.clipboard.writeText(field.value);toast("Board link copied.");}
+    catch(_) {field.focus();field.select();toast("Select and copy the board link shown above.");}
+    return;
+  }
   if(action==="signin"){state.guest=false;renderLogin();document.querySelector("#username").focus();return;}
   if(action==="dialog-close"){editor.close();return;}
   if(action==="menu-open"){document.querySelector("#sidebar").classList.add("open");button.setAttribute("aria-expanded","true");document.querySelector(".workspace-main").inert=true;const scrim=document.createElement("div");scrim.className="mobile-scrim";scrim.addEventListener("click",closeMenu);app.append(scrim);document.querySelector(".mobile-close").focus();return;}
@@ -452,6 +568,7 @@ document.addEventListener("submit",async(event)=>{
   const form=event.target;
   if(!["login-form","message-form","dialog-form"].includes(form.id))return;
   event.preventDefault();
+  if(form.id==="dialog-form" && dialogState?.type==="board-share")return;
   if(form.dataset.submitting==="true")return;
   form.dataset.submitting="true";
   const values=new FormData(form);
@@ -522,7 +639,8 @@ document.addEventListener("submit",async(event)=>{
 });
 
 async function start() {
-  try {const session=await api("/api/session");setSession(session);if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
+  const boardLanding=location.pathname==="/board" || location.hash==="#board";
+  try {const session=await api("/api/session");setSession(session);if(boardLanding){state.guest=!state.user;await navigate("public");}else if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
   catch(error){renderLogin();errorAt(error,document.querySelector("#login-error"));}
 }
 start();
