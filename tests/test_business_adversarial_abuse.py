@@ -91,14 +91,23 @@ def test_duplicate_content_lengths_rejected_before_consuming_body():
     assert responses[0]["status"] == 400
 
 
-def test_provider_excessive_nesting_returns_recoverable_failure_without_queue_mutation(business, monkeypatch):
+@pytest.mark.parametrize("provider_body", ["nested_array", "invalid_json"])
+def test_provider_invalid_response_is_rejected_without_queue_mutation(business, monkeypatch, provider_body):
     monkeypatch.setenv("BUSINESS_TURNSTILE_SITE_KEY", "synthetic-site-key")
     monkeypatch.setenv("BUSINESS_TURNSTILE_SECRET_KEY", "synthetic-secret-key")
     application = create_app(business.directory, public_origin=ORIGIN)
-    nesting = sys.getrecursionlimit() + 100
-    body = b"[" * nesting + b"0" + b"]" * nesting
+    expected_errors = {503: "Verification is unavailable. Please try again later."}
+    if provider_body == "nested_array":
+        nesting = sys.getrecursionlimit() + 100
+        body = b"[" * nesting + b"0" + b"]" * nesting
+        # Decoder recursion limits vary across Python versions. This valid JSON
+        # must be denied whether decoding fails or yields a non-object response.
+        expected_errors[403] = "Verification failed or expired. Please complete a new challenge."
+    else:
+        # A genuine syntax error deterministically exercises decoder failure.
+        body = b'{"success": true, "hostname":'
     assert len(body) < abuse.MAX_PROVIDER_BYTES
-    # This is a malformed synthetic provider response, not an attacker-controlled
+    # This is an invalid synthetic provider response, not an attacker-controlled
     # Siteverify endpoint or a claim of real-provider compromise.
     real_client = httpx.Client
     calls = []
@@ -119,8 +128,8 @@ def test_provider_excessive_nesting_returns_recoverable_failure_without_queue_mu
     with business.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM submissions").fetchone()[0] == 0
     assert len(calls) == 1
-    assert response.status_code == 503
-    assert response.json() == {"detail": "Verification is unavailable. Please try again later."}
+    assert response.status_code in expected_errors
+    assert response.json() == {"detail": expected_errors[response.status_code]}
     assert "synthetic-token" not in response.text
 
 

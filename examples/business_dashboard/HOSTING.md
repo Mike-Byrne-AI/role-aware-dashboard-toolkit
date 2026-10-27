@@ -261,15 +261,22 @@ In Cloudflare, open **Security rules**, create a **Rate limiting rule**, and
 save it as a draft. For a Free plan's one path-based rule, a candidate is:
 
 ```text
-http.request.uri.path in {"/api/login" "/api/password" "/api/public/submissions"}
+http.request.uri.path in {
+  "/api/login" "/api/password" "/api/security/reauthenticate"
+  "/api/public/submissions"
+  "/api/passkeys/login/options" "/api/passkeys/login/verify"
+  "/api/security/passkeys/register/options" "/api/security/passkeys/register/verify"
+  "/api/security/passkeys/reauth/options" "/api/security/passkeys/reauth/verify"
+}
 ```
 
 Count by Cloudflare's visitor IP, with an initial 10 requests per 10 seconds and
 a 10-second block. Free-plan path matching applies to matching paths on other
 hostnames in the zone too: do not enable this draft where it would interfere
 with unrelated applications. On Pro, consider separate hostname-scoped rules:
-20 requests per minute for login/password together and 10 per minute for guest
-submissions, each with a 60-second block. These conservative example values may
+20 requests per minute for login, password change, fresh verification and passkey
+ceremonies together, and 10 per minute for guest submissions, each with a 60-second
+block. These conservative example values may
 need raising for a shared office; do not present them as demonstrated safe load.
 Check the current [plan limits](https://developers.cloudflare.com/waf/rate-limiting-rules/)
 and [dashboard procedure](https://developers.cloudflare.com/waf/rate-limiting-rules/create-zone-dashboard/)

@@ -4,6 +4,8 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 
 import pytest
 
@@ -51,6 +53,42 @@ def test_bundled_common_password_corpus_is_the_documented_unmodified_snapshot():
         "b846415d1b514e9c1dff14a22deb906d794bc546ca6129f950a18cd091e2a669"
     )
     assert "Django 5.2.7" in (folder / "SOURCE.txt").read_text(encoding="utf-8")
+
+
+def test_vendored_license_survives_fresh_autocrlf_checkout():
+    root = Path(__file__).resolve().parents[1]
+    relative = Path("examples/business_dashboard/business/password_data/DJANGO_LICENSE.txt")
+    upstream = (root / relative).read_bytes()
+    expected = "b846415d1b514e9c1dff14a22deb906d794bc546ca6129f950a18cd091e2a669"
+    with tempfile.TemporaryDirectory(prefix="radt-license-checkout-") as temporary:
+        checkout = Path(temporary)
+
+        def git(*arguments):
+            return subprocess.run(["git", "-c", "core.excludesfile=", "-C", str(checkout), *arguments],
+                                  check=True, capture_output=True, text=True)
+
+        git("init", "--quiet")
+        git("config", "core.autocrlf", "true")
+        git("config", "core.safecrlf", "false")
+        license_file = checkout / relative
+        license_file.parent.mkdir(parents=True)
+        license_file.write_bytes(upstream)
+        git("add", "--", relative.as_posix())
+        license_file.unlink()
+        git("checkout-index", "--all")
+        assert b"\r\n" in license_file.read_bytes()
+        assert hashlib.sha256(license_file.read_bytes()).hexdigest() != expected
+
+        attributes = checkout / ".gitattributes"
+        attributes.write_bytes((root / ".gitattributes").read_bytes())
+        git("add", "--", ".gitattributes")
+        license_file.unlink()
+        attributes.unlink()
+        # Both files are recreated from the index, as in a fresh checkout.
+        # No application data, existing checkout metadata or commit is changed.
+        git("checkout-index", "--all")
+        assert hashlib.sha256(license_file.read_bytes()).hexdigest() == expected
+        assert b"\r\n" not in license_file.read_bytes()
 
 
 @pytest.mark.parametrize("password", [
