@@ -1,12 +1,14 @@
 """Explicit, once-only fictional provisioning; secrets never enter source/logs."""
 
 from datetime import datetime, timedelta, timezone
+import os
 import secrets
 import sqlite3
 
 from .db import SCHEMA, create_private_file, validate_data_dir, utc_now
 from .security import hash_password, principal_for_user
 from .mfa import enroll_in_transaction
+from .secret_store import SecretStore, create_key_file
 
 ACCOUNTS = (
     ("admin", "Morgan Reed", "admin"),
@@ -18,12 +20,17 @@ ACCOUNTS = (
 )
 
 
-def provision(data_dir) -> dict[str, str]:
+def provision(data_dir, *, mfa_key_file=None) -> dict[str, str]:
     """Create only in an empty private directory; return credentials to caller."""
     directory = validate_data_dir(data_dir, create=True)
     if any(directory.iterdir()):
         raise ValueError("Provisioning requires an empty directory. Existing state was preserved.")
     key = secrets.token_bytes(32)
+    # Only brand-new local provisioning creates a separate default key. Explicit
+    # and hosted paths must be provisioned deliberately before creating data.
+    if mfa_key_file is None and not os.environ.get("BUSINESS_MFA_KEY_FILE"):
+        create_key_file(directory)
+    secret_store = SecretStore(directory, key, mfa_key_file)
     create_private_file(directory / "identity.key", key)
     database_path = directory / "business.sqlite3"
     create_private_file(database_path, b"")
@@ -34,6 +41,7 @@ def provision(data_dir) -> dict[str, str]:
         connection.execute("PRAGMA foreign_keys=ON")
         # BEGIN is included so schema and seeded rows commit together.
         connection.executescript("BEGIN IMMEDIATE;\n" + SCHEMA)
+        connection.execute("INSERT INTO mfa_key_binding VALUES(1,?)", (secret_store.create_binding(),))
         for username, name, role in ACCOUNTS:
             connection.execute("INSERT INTO users VALUES(?,?,?,?,?,1,?,0)",
                                (username, username, name, hash_password(credentials[username]), role, principal_for_user(username, key)))
@@ -81,7 +89,7 @@ def provision(data_dir) -> dict[str, str]:
             sheet += f"| {username} | {name} | {role} | {credentials[username]} |\n"
         sheet += "\nGuest access needs no password and opens only the published public board.\n"
         create_private_file(directory / "ACCOUNTS.md", sheet.encode())
-        enroll_in_transaction(connection, directory)
+        enroll_in_transaction(connection, directory, secret_store)
         connection.commit()
     except BaseException:
         connection.rollback()

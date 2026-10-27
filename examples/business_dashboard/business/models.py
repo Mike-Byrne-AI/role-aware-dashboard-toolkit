@@ -23,7 +23,13 @@ class Login(RequestModel):
 
 class PasswordChange(RequestModel):
     current_password: Annotated[str, StringConstraints(strict=True, min_length=1, max_length=128)]
-    new_password: Annotated[str, StringConstraints(strict=True, min_length=12, max_length=128)]
+    # Bound input here; user-facing choice policy runs after reauthentication.
+    new_password: Annotated[str, StringConstraints(strict=True, min_length=1, max_length=128)]
+
+
+class Reauthentication(RequestModel):
+    current_password: Annotated[str, StringConstraints(strict=True, min_length=1, max_length=128)]
+    otp: Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9]{6}$")] | None = None
 
 
 class Empty(RequestModel):
@@ -54,8 +60,8 @@ class Schedule(RequestModel):
     @model_validator(mode="after")
     def range_and_assignment(self):
         start, end = datetime.fromisoformat(self.starts_at), datetime.fromisoformat(self.ends_at)
-        if end <= start or end - start > timedelta(days=7) or end <= datetime.now(timezone.utc):
-            raise ValueError("The event must end in the future, after its start, within seven days.")
+        if end <= start or end - start > timedelta(days=7):
+            raise ValueError("The event must end after its start, within seven days.")
         if len(set(self.employee_ids)) != len(self.employee_ids):
             raise ValueError("Choose each employee once.")
         return self

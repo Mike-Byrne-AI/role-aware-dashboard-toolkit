@@ -156,6 +156,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
     assert "/schemas" not in include
     assert "/portable" not in include
     assert "/snapshot_manifests" not in include
+    assert "/examples/business_dashboard/RECOVERY.md" in include
     assert {
         path
         for path in include
@@ -181,6 +182,13 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/record_workflows/acceptance.py",
         "/examples/landscaping/run.py",
         "/examples/business_dashboard/run.py",
+        "/examples/business_dashboard/recovery.py",
+        "/examples/business_dashboard/business/secret_store.py",
+        "/examples/business_dashboard/business/session_state.py",
+        "/examples/business_dashboard/business/session_routes.py",
+        "/examples/business_dashboard/business/passkeys.py",
+        "/examples/business_dashboard/business/telemetry.py",
+        "/examples/business_dashboard/backup.py",
         "/examples/business_dashboard/hosting/pilot.py",
         "/examples/business_dashboard/business/__init__.py",
         "/examples/business_dashboard/business/db.py",
@@ -192,6 +200,9 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/business_dashboard/business/request_security.py",
         "/examples/business_dashboard/business/app.py",
         "/examples/business_dashboard/business/auth_routes.py",
+        "/examples/business_dashboard/business/idempotency.py",
+        "/examples/business_dashboard/business/message_limits.py",
+        "/examples/business_dashboard/business/password_policy.py",
         "/examples/business_dashboard/business/submission_routes.py",
         "/examples/business_dashboard/business/work_limits.py",
         "/examples/landscaping/hosting/pilot.py",

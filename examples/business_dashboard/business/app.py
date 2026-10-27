@@ -1,13 +1,13 @@
 """Westbridge HTTP application: host operations protected by toolkit policies."""
 
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import secrets
 import sqlite3
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,10 +19,15 @@ from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeCo
 from .db import Database, record_activity, utc_now
 from .abuse import PUBLIC_RULES, SubmissionGuard
 from .auth_routes import install_auth_routes
+from .idempotency import reserve_create
+from .message_limits import enforce_message_limits
 from .submission_routes import install_submission_routes
 from .models import Contact, ContactUpdate, Empty, Freeze, Message, Post, PostUpdate, RevisionRequest, Schedule, ScheduleUpdate, SubmissionReview, UserUpdate
 from .request_security import RequestSecurityMiddleware, validate_origin
 from .security import COOKIE_NAME, ROLES, TransactionAccessStore, authenticate, token_hash
+from .session_routes import install_session_routes
+from .passkeys import install_passkey_routes
+from .session_state import require_recent
 
 LOGGER = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -57,6 +62,10 @@ def _current(connection, table, identifier, revision):
 
 
 def _validate_schedule(connection, payload, identifier):
+    # Check time only for a new write, after an authorized receipt lookup. An
+    # unchanged retry must still retrieve its saved event after that event ends.
+    if datetime.fromisoformat(payload.ends_at) <= datetime.now(timezone.utc):
+        raise HTTPException(422, "The event must end in the future.")
     for employee_id in payload.employee_ids:
         user = connection.execute("SELECT role,active FROM users WHERE id=?", (employee_id,)).fetchone()
         if not user or user["role"] != "employee" or user["active"] != 1:
@@ -70,14 +79,15 @@ def _validate_schedule(connection, payload, identifier):
             raise HTTPException(409, "An employee already has an assignment during that time.")
 
 
-def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
+def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=None) -> FastAPI:
     origin = validate_origin(public_origin)
     submission_guard = SubmissionGuard.from_origin(public_origin)
-    database = Database(data_dir)
+    database = Database(data_dir, mfa_key_file=mfa_key_file)
     app = FastAPI(title="Westbridge", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.database = database
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname], www_redirect=False)
-    app.add_middleware(RequestSecurityMiddleware, public_origin=public_origin, challenge_required=submission_guard.required)
+    app.add_middleware(RequestSecurityMiddleware, public_origin=public_origin, challenge_required=submission_guard.required,
+                       on_event=lambda event: app.state.security_metrics.record(event))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exception):
@@ -105,9 +115,13 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
             if write or csrf:
                 auth.check_csrf(request.headers.get("x-csrf-token"))
             auth.authorize(permission, write=write)
+            if write and permission in ("can_manage_business", "can_manage_freeze"):
+                require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
             yield connection, auth
 
     install_auth_routes(app, database, authorized, origin)
+    install_session_routes(app, database, authorized)
+    install_passkey_routes(app, database, authorized, origin, public_origin)
     install_submission_routes(app, database, submission_guard)
 
     @app.get("/api/session")
@@ -123,19 +137,24 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
             return auth.session_payload()
 
     @app.post("/api/logout")
-    def logout(payload: Empty, request: Request, response: Response):
+    def logout(payload: Empty, request: Request):
         with authorized(request, csrf=True) as (connection, auth):
             connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(request.cookies[COOKIE_NAME]),))
-        response.delete_cookie(COOKIE_NAME, path="/", secure=origin.scheme == "https", httponly=True, samesite="strict")
+        # The token is revoked in storage. Expiring it in a delayed response
+        # could erase a newer login that has already replaced the browser cookie.
         return {"ok": True}
 
     @app.get("/api/public/posts")
     def public_posts():
-        with database.transaction() as connection:
-            freeze = TransactionAccessStore(connection).read_freeze()
-            return {"posts": [_post(row, public=True) for row in connection.execute("SELECT * FROM posts WHERE published=1 ORDER BY published_at DESC,id")],
-                    "accepting_submissions": not freeze.frozen,
-                    "posting_rules": PUBLIC_RULES, "submission_challenge": submission_guard.public_config()}
+        try:
+            with database.readonly_snapshot() as connection:
+                freeze = TransactionAccessStore(connection).read_freeze()
+                return {"posts": [_post(row, public=True) for row in connection.execute("SELECT * FROM posts WHERE published=1 ORDER BY published_at DESC,id")],
+                        "accepting_submissions": not freeze.frozen,
+                        "posting_rules": PUBLIC_RULES, "submission_challenge": submission_guard.public_config()}
+        except (OSError, ValueError):
+            LOGGER.error("Business public storage read failed.")
+            raise HTTPException(503, "Storage is unavailable. Please try again later.") from None
 
     @app.get("/api/schedule")
     def schedule(request: Request):
@@ -148,12 +167,15 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     @app.post("/api/schedule", status_code=201)
     def add_event(payload: Schedule, request: Request):
         with authorized(request, "can_manage_business", write=True) as (connection, auth):
+            receipt = reserve_create(connection, request, auth.user["id"], payload, endpoint="/api/schedule")
+            if receipt.replay is not None:
+                return receipt.replay
             identifier = _identifier()
             _validate_schedule(connection, payload, identifier)
             connection.execute("INSERT INTO events VALUES(?,?,?,?,?,?,0,0)", (identifier, payload.title, payload.starts_at, payload.ends_at, payload.location, payload.notes))
             connection.executemany("INSERT INTO assignments VALUES(?,?)", [(identifier, item) for item in payload.employee_ids])
             record_activity(connection, auth.user["name"], "Scheduled work", payload.title)
-            return {"event": _event(connection, connection.execute("SELECT * FROM events WHERE id=?", (identifier,)).fetchone())}
+            return receipt.remember({"event": _event(connection, connection.execute("SELECT * FROM events WHERE id=?", (identifier,)).fetchone())})
 
     @app.put("/api/schedule/{identifier}")
     def edit_event(identifier: str, payload: ScheduleUpdate, request: Request):
@@ -186,10 +208,14 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     @app.post("/api/messages", status_code=201)
     def add_message(payload: Message, request: Request):
         with authorized(request, "can_post_messages", write=True) as (connection, auth):
+            receipt = reserve_create(connection, request, auth.user["id"], payload, endpoint="/api/messages")
+            if receipt.replay is not None:
+                return receipt.replay
+            enforce_message_limits(connection, database, auth.user["id"], metrics=app.state.security_metrics)
             identifier, created = _identifier(), utc_now()
             connection.execute("INSERT INTO messages VALUES(?,?,?,?)", (identifier, auth.user["id"], payload.body, created))
             record_activity(connection, auth.user["name"], "Posted a team message", "Team board")
-            return {"message": {"id": identifier, "author": auth.user["name"], "body": payload.body, "created_at": created}}
+            return receipt.remember({"message": {"id": identifier, "author": auth.user["name"], "body": payload.body, "created_at": created}})
 
     @app.get("/api/admin/overview")
     def overview(request: Request):
@@ -211,10 +237,13 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     @app.post("/api/admin/contacts", status_code=201)
     def add_contact(payload: Contact, request: Request):
         with authorized(request, "can_manage_business", write=True) as (connection, auth):
+            receipt = reserve_create(connection, request, auth.user["id"], payload, endpoint="/api/admin/contacts")
+            if receipt.replay is not None:
+                return receipt.replay
             identifier = _identifier()
             connection.execute("INSERT INTO contacts VALUES(?,?,?,?,?,?,?,0)", (identifier, payload.name, payload.company, payload.email, payload.stage, payload.value, payload.notes))
             record_activity(connection, auth.user["name"], "Added outreach contact", payload.company)
-            return {"contact": dict(connection.execute("SELECT * FROM contacts WHERE id=?", (identifier,)).fetchone())}
+            return receipt.remember({"contact": dict(connection.execute("SELECT * FROM contacts WHERE id=?", (identifier,)).fetchone())})
 
     @app.put("/api/admin/contacts/{identifier}")
     def edit_contact(identifier: str, payload: ContactUpdate, request: Request):
@@ -252,10 +281,13 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     @app.post("/api/admin/posts", status_code=201)
     def add_post(payload: Post, request: Request):
         with authorized(request, "can_manage_business", write=True) as (connection, auth):
+            receipt = reserve_create(connection, request, auth.user["id"], payload, endpoint="/api/admin/posts")
+            if receipt.replay is not None:
+                return receipt.replay
             identifier = _identifier()
             connection.execute("INSERT INTO posts VALUES(?,?,?,?,?,?,0)", (identifier, payload.title, payload.body, payload.category, int(payload.published), utc_now() if payload.published else None))
             record_activity(connection, auth.user["name"], "Created public-board post", payload.title)
-            return {"post": _post(connection.execute("SELECT * FROM posts WHERE id=?", (identifier,)).fetchone())}
+            return receipt.remember({"post": _post(connection.execute("SELECT * FROM posts WHERE id=?", (identifier,)).fetchone())})
 
     @app.put("/api/admin/posts/{identifier}")
     def edit_post(identifier: str, payload: PostUpdate, request: Request):
@@ -281,12 +313,19 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
     @app.post("/api/admin/freeze")
     def freeze(payload: Freeze, request: Request):
         with authorized(request, "can_manage_freeze", csrf=True) as (connection, auth):
+            if not payload.frozen:
+                require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
             try:
                 state = auth.policy.change_freeze(auth.user["principal"], auth.user["role"], payload.frozen, payload.revision, ROLES)
             except FreezeConflict:
                 raise HTTPException(409, "Editing status changed. Refresh before trying again.") from None
             record_activity(connection, auth.user["name"], "Paused editing" if state.frozen else "Resumed editing", "Workspace")
             return {"frozen": state.frozen, "freeze_revision": state.revision}
+
+    @app.get("/api/admin/security-metrics")
+    def security_metrics(request: Request):
+        with authorized(request, "can_manage_business"):
+            return app.state.security_metrics.snapshot()
 
     @app.get("/api/admin/users")
     def users(request: Request):
@@ -313,8 +352,9 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091") -> FastAPI:
 
     @app.get("/healthz")
     def health():
+        # Read readiness only: this does not prove capacity to commit a write.
         try:
-            with database.transaction() as connection:
+            with database.readonly_snapshot() as connection:
                 TransactionAccessStore(connection).read_freeze()
         except (OSError, ValueError, sqlite3.Error, AccessStoreError) as error:
             LOGGER.error("Business health storage check failed (%s).", type(error).__name__)

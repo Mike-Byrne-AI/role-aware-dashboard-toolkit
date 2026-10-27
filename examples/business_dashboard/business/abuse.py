@@ -99,7 +99,7 @@ class SubmissionGuard:
                         if len(body) > MAX_PROVIDER_BYTES or time.monotonic() - started > PROVIDER_DEADLINE_SECONDS:
                             raise ValueError("Challenge service response exceeds its bounds.")
                     result = json.loads(body)
-        except (httpx.HTTPError, ValueError, UnicodeError):
+        except (httpx.HTTPError, ValueError, UnicodeError, RecursionError):
             # Do not log tokens, secrets, provider response bodies, or exception
             # messages. A provider/network failure must never approve a post.
             raise HTTPException(503, "Verification is unavailable. Please try again later.") from None

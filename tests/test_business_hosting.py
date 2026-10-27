@@ -17,6 +17,7 @@ pyotp = pytest.importorskip("pyotp")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from tests.test_business_dashboard import business_seed as business_seed  # noqa: E402
+from business.secret_store import default_key_path, create_key_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "examples" / "business_dashboard" / "hosting" / "pilot.py"
@@ -35,7 +36,10 @@ def hosted(business_seed, monkeypatch):
     with tempfile.TemporaryDirectory(prefix="radt-business-hosting-") as temporary:
         directory = Path(temporary).resolve() / "private"
         shutil.copytree(business_seed.directory, directory)
-        yield pilot.Configuration(ORIGIN, "business.example.com", directory, 10000)
+        key = default_key_path(directory)
+        key.parent.mkdir(mode=0o700)
+        shutil.copy2(default_key_path(business_seed.directory), key)
+        yield pilot.Configuration(ORIGIN, "business.example.com", directory, 10000, key)
 
 
 @contextmanager
@@ -53,7 +57,9 @@ def snapshot(directory):
 
 
 def settings(directory, **changes):
-    return {"PUBLIC_ORIGIN": ORIGIN, "BUSINESS_DATA_DIR": str(directory), **changes}
+    key_directory = directory if Path(directory).name else Path(tempfile.gettempdir()) / "invalid-data"
+    return {"PUBLIC_ORIGIN": ORIGIN, "BUSINESS_DATA_DIR": str(directory),
+            "BUSINESS_MFA_KEY_FILE": str(default_key_path(key_directory)), **changes}
 
 
 def test_real_platform_guard_requires_posix():
@@ -133,7 +139,7 @@ def test_missing_private_file_is_not_recreated(hosted, filename):
     "UPDATE users SET active=0 WHERE role='admin'",
     "UPDATE users SET principal='wrong' WHERE id='ellis'",
     "DELETE FROM admin_mfa WHERE user_id='admin'",
-    "UPDATE admin_mfa SET secret='INVALID'",
+    "UPDATE admin_mfa SET secret_ciphertext='INVALID'",
     "UPDATE admin_mfa SET generation='invalid'",
     "UPDATE admin_mfa SET last_counter=1.5",
     "INSERT INTO assignments VALUES('missing-event','alex')",
@@ -154,7 +160,7 @@ def test_invalid_storage_is_preserved_and_refused_before_create_app(hosted, monk
 def test_invalid_or_mismatched_identity_key_is_preserved(hosted, key):
     (hosted.data_dir / "identity.key").write_bytes(key)
     before = snapshot(hosted.data_dir)
-    with pytest.raises(ValueError, match="identity key"):
+    with pytest.raises(ValueError, match="identity key|MFA ciphertext or encryption key"):
         pilot.inspect_existing_storage(hosted)
     assert snapshot(hosted.data_dir) == before
 
@@ -190,7 +196,8 @@ def test_provision_is_explicit_and_refuses_existing_files(hosted):
 
 def test_explicit_provision_creates_private_account_and_mfa_sheets(hosted):
     target = hosted.data_dir.parent / "new-installation"
-    configuration = pilot.Configuration(ORIGIN, "business.example.com", target, 10000)
+    key = create_key_file(target)
+    configuration = pilot.Configuration(ORIGIN, "business.example.com", target, 10000, key)
     accounts, authenticator = pilot.provision(configuration)
     assert accounts.is_file() and authenticator.is_file()
     pilot.preflight(configuration)
@@ -208,7 +215,8 @@ def test_hosted_storage_requires_private_modes(hosted, target):
 def test_hosted_app_secure_cookies_host_origin_and_forwarding_boundary(hosted, business_seed):
     application = pilot.create_application(hosted)
     with connection(hosted) as database:
-        secret = database.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+        ciphertext, generation = database.execute("SELECT secret_ciphertext,generation FROM admin_mfa WHERE user_id='admin'").fetchone()
+        secret = application.state.database.mfa_secrets.decrypt(ciphertext, "admin", generation)
     with TestClient(application, base_url=ORIGIN) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
         assert client.get("/healthz", headers={"Host": "alternate.onrender.com"}).status_code == 400
@@ -236,7 +244,7 @@ def test_health_failure_is_bounded_and_preserves_host_checks(hosted, monkeypatch
         raise sqlite3.OperationalError("PRIVATE_DIAGNOSTIC_CANARY")
         yield
 
-    monkeypatch.setattr(application.state.database, "transaction", broken_storage)
+    monkeypatch.setattr(application.state.database, "readonly_snapshot", broken_storage)
     with TestClient(application, base_url=ORIGIN) as client:
         response = client.get("/healthz")
         assert response.status_code == 503

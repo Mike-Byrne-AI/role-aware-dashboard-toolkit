@@ -26,9 +26,14 @@ def raw_login(business, payload, client=None):
     return (client or business.client()).post("/api/login", json=payload, headers={"Origin": ORIGIN})
 
 
-def invalid_code(business):
+def synthetic_secret(business):
     with business.db() as connection:
-        secret = connection.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+        row = connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone()
+    return business.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"])
+
+
+def invalid_code(business):
+    secret = synthetic_secret(business)
     allowed = {pyotp.TOTP(secret).at(business.mfa_time + offset) for offset in (-30, 0, 30)}
     return next(f"{number:06d}" for number in range(10) if f"{number:06d}" not in allowed)
 
@@ -68,8 +73,7 @@ def test_simultaneous_admin_logins_consume_code_once(business):
 @pytest.mark.parametrize("offset,accepted", [(-60, False), (-30, True), (0, True), (30, True), (60, False)])
 def test_authenticator_clock_tolerance_is_bounded(business, offset, accepted):
     payload = business.login_payload("admin")
-    with business.db() as connection:
-        secret = connection.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+    secret = synthetic_secret(business)
     payload["otp"] = pyotp.TOTP(secret).at(business.mfa_time + offset)
     assert raw_login(business, payload).status_code == (200 if accepted else 401)
 
@@ -82,9 +86,11 @@ def test_pyotp_matches_rfc6238_sha1_vectors_at_six_digits(business, timestamp, c
     secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
     business.mfa_time = timestamp
     with business.db() as connection:
-        connection.execute("UPDATE admin_mfa SET secret=?,last_counter=-1 WHERE user_id='admin'", (secret,))
-        assert mfa.verify_admin_code(connection, "admin", code) is not None
-        assert mfa.verify_admin_code(connection, "admin", code) is None
+        store = business.app.state.database.mfa_secrets
+        generation = connection.execute("SELECT generation FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+        connection.execute("UPDATE admin_mfa SET secret_ciphertext=?,last_counter=-1 WHERE user_id='admin'", (store.encrypt(secret, "admin", generation),))
+        assert mfa.verify_admin_code(connection, "admin", code, store) is not None
+        assert mfa.verify_admin_code(connection, "admin", code, store) is None
 
 
 def test_invalid_authenticator_attempts_share_password_login_limits(business):
@@ -126,7 +132,7 @@ def test_mfa_reset_revokes_sessions_preserves_accounts_and_old_setup_sheet(busin
     assert employee.request("GET", "/api/messages").status_code == 200
     with business.db() as connection:
         current = dict(connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone())
-    assert previous["secret"] != current["secret"] and previous["generation"] != current["generation"]
+    assert previous["secret_ciphertext"] != current["secret_ciphertext"] and previous["generation"] != current["generation"]
     assert raw_login(business, payload).status_code == 401
     assert business.login("admin").request("GET", "/api/admin/posts").status_code == 200
 
@@ -147,8 +153,7 @@ def test_failed_setup_sheet_write_rolls_back_reset_and_session_revocation(busine
 
 
 def test_mfa_secret_never_appears_in_api_assets_or_provision_console(business, business_seed, business_admin):
-    with business.db() as connection:
-        secret = connection.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+    secret = synthetic_secret(business)
     assert secret not in business_seed.output
     assert secret in (business.directory / "ADMIN_MFA_SETUP.md").read_text()
     for path in ("/api/session", "/api/admin/users", "/api/admin/overview", "/api/public/posts", "/", "/static/app.js"):
@@ -167,14 +172,19 @@ def test_cli_setup_and_reset_report_paths_not_secrets(business):
     with redirect_stdout(output):
         assert module.main(["--data-dir", str(business.directory), "--setup-admin-mfa"]) == 0
         assert module.main(["--data-dir", str(business.directory), "--reset-admin-mfa"]) == 0
-    with business.db() as connection:
-        secret = connection.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+    secret = synthetic_secret(business)
     assert secret not in output.getvalue() and "otpauth://" not in output.getvalue()
     assert "ADMIN_MFA_SETUP-" in output.getvalue()
 
 
 def downgrade_v2(business):
     with business.db() as connection:
+        connection.execute("DROP TABLE session_passkey")
+        connection.execute("DROP TABLE passkey_challenges")
+        connection.execute("DROP TABLE passkey_credentials")
+        connection.execute("DROP TABLE session_security")
+        connection.execute("DROP TABLE mfa_key_binding")
+        connection.execute("DROP TABLE create_receipts")
         connection.execute("DROP TABLE session_mfa")
         connection.execute("DROP TABLE admin_mfa")
         connection.execute("PRAGMA user_version=2")
@@ -184,10 +194,11 @@ def test_v2_upgrade_preserves_business_and_staff_revokes_admin_requires_local_en
     employee = business.login("alex")
     before = business_rows(business)
     downgrade_v2(business)
+    db.Database(business.directory, migrate=True)
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert connection.execute("SELECT COUNT(*) FROM admin_mfa").fetchone()[0] == 0
     admin = business.client(migrated)
     admin.cookies.set(COOKIE_NAME, business_admin.client.cookies.get(COOKIE_NAME))
@@ -203,14 +214,17 @@ def test_mfa_migration_failure_rolls_back_ddl_and_admin_session_deletion(busines
     with business.db() as connection:
         before = [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")]
     apply = db._apply_mfa_migration
+    completed = []
 
     def fail(connection):
         apply(connection)
+        completed.append(True)
         raise sqlite3.OperationalError("Simulated schema failure")
 
     monkeypatch.setattr(db, "_apply_mfa_migration", fail)
     with pytest.raises(ValueError):
-        create_app(business.directory, public_origin=ORIGIN)
+        db.Database(business.directory, migrate=True)
+    assert completed == [True]
     with business.db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == before

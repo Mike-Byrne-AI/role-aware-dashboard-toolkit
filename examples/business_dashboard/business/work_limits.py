@@ -47,14 +47,17 @@ class BoundedWork:
     callback start releases the slot and makes any late queued callback a no-op.
     """
 
-    def __init__(self, capacity, label="This operation"):
+    def __init__(self, capacity, label="This operation", *, on_event=None):
         if type(capacity) is not int or capacity < 1:
             raise ValueError("capacity must be a positive integer")
         self.slots = BoundedSemaphore(capacity)
         self.label = label
+        self.on_event = on_event
 
     async def run(self, function, *args):
         if not self.slots.acquire(blocking=False):
+            if self.on_event is not None:
+                self.on_event("busy")
             raise HTTPException(
                 429, f"{self.label} is temporarily busy. Please try again shortly.",
                 headers={"Retry-After": "1"},
@@ -65,6 +68,8 @@ class BoundedWork:
             if not ticket.start():
                 return None
             try:
+                if self.on_event is not None:
+                    self.on_event("started")
                 return function(*args)
             finally:
                 ticket.finish()

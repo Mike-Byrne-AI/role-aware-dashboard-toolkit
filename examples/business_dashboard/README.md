@@ -30,12 +30,17 @@ different randomly generated password. Guest access needs no account.
 Administrators also need a six-digit code from an authenticator app. Open the
 private `ADMIN_MFA_SETUP.md` file created beside `ACCOUNTS.md` and add its manual
 setup key to your authenticator. Never paste the key or setup URI into chat, a
-ticket, a screenshot or an online QR generator. Keep a protected offline recovery
-copy and remove the setup sheet from the host when enrollment is complete.
+ticket, a screenshot or an online QR generator. Follow the
+[recovery-sheet guide](RECOVERY.md) to create and verify an encrypted copy.
+Keep its passphrase separately; remove the host's setup sheet only after
+successful enrollment and recovery verification.
 Employees leave the authenticator field empty. Each administrator code can be
 used only once; wait for the next code if signing in again immediately.
 
 The default storage directory on Windows is `%LOCALAPPDATA%/radt-business-demo`.
+Fresh provisioning also creates an independent encryption key at
+`%LOCALAPPDATA%/radt-business-demo.secrets/mfa.key`. Preserve that key separately
+from database backups; it is required to decrypt administrator MFA enrollment.
 Keep that directory private to your Windows account using its directory ACL;
 POSIX file modes do not establish Windows access protection. This Windows entry
 point is for a loopback demonstration, not public Windows hosting.
@@ -62,6 +67,24 @@ original identity key and account sheet belong outside the entire source tree.
 Use `--data-dir` for an alternate private directory and `--port` for a different
 loopback port. Preserve the full `examples/business_dashboard` layout.
 
+## Try passkeys locally
+
+Start your existing workspace with the `localhost` hostname for browser passkeys:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --hostname localhost
+```
+
+Open **http://localhost:8091**, sign in, and choose **Manage your passkeys** from your
+profile. On Linux or macOS, use `.venv/bin/python` with the same arguments.
+Keep any existing `--data-dir`, `--mfa-key-file` and `--port` arguments. The
+listener still binds only to `127.0.0.1`; the launcher accepts only `localhost`
+or `127.0.0.1` as its canonical hostname. The default remains `127.0.0.1`.
+
+Use the selected hostname consistently. A passkey registered for `localhost`
+does not work on `127.0.0.1` or your deployed hostname. Local browser checks use
+a virtual authenticator; they do not prove physical-device or hosted behavior.
+
 ## Explore the workflows
 
 | Account | Available work |
@@ -69,6 +92,18 @@ loopback port. Preserve the full `examples/business_dashboard` layout.
 | Guest | Read published notices and submit a post for administrator approval without an account |
 | Employee | View the team schedule and assignments; read and post staff messages; change own password |
 | Admin | Create, edit and archive schedule entries; manage assignments, public notices and outreach contacts; approve or reject guest submissions; review sample financials and audit activity; pause business writes and disable employee access |
+
+The administrator **Overview** includes quick actions for common workspace tasks.
+Choose **Explore recent activity** to search the latest 50 returned entries in
+the **Recent workspace activity** dialog. This bounded feed is an operational
+view, not a complete audit-history search or export.
+
+Open **Security & recovery** for current-session information, password changes,
+workspace editing controls, and a guide to the local recovery-file tool. The
+page rechecks the signed-in session when opened. Recovery commands run in your
+private terminal: the dashboard does not accept recovery files or passphrases,
+launch the tool, or report that a backup exists or has been verified. Follow
+[the complete recovery procedure](RECOVERY.md) before removing any original.
 
 The public board and employee message board are separate stores and endpoints.
 Draft notices, staff messages, employee schedules, contacts and administration
@@ -123,8 +158,11 @@ shared across that account's sessions. Each operation reserves its attempt befor
 password hashing; a success removes only its own reservation, leaving prior failures charged until
 the window expires. Unknown usernames do not create persistent limiter rows, and
 failed logins from a shared socket peer do not impose a cooldown on another
-account. At most two authentication jobs run concurrently, with the same
-nonwaiting 429 response when capacity is full.
+account. Known-account login and password changes share two authentication slots.
+Unknown usernames have one separate dummy-hash slot, with two bounded lookup
+slots before classification. Excess work receives a nonwaiting 429. Identity
+reverification has one separate slot. These pools protect specific work stages;
+sustained traffic can still occupy lookup or known-account capacity.
 
 Generic invalid-credential responses do not provide full username-enumeration
 resistance: repeated probes can distinguish a known account's 429 cooldown from
@@ -140,11 +178,36 @@ can still temporarily lock out an account; ongoing traffic can still consume
 available capacity. These bounds do not guarantee availability under sustained
 load.
 
-Existing version-one and version-two stores upgrade transactionally to schema
-three. Accounts, passwords, employee sessions and business records are preserved.
-Old administrator sessions are revoked because they did not establish MFA.
-The attempt-budget changes reuse schema three and require no new migration or
-reprovisioning. Existing account login budgets retain their original namespace.
+New passwords require 15 to 128 characters and pass an offline common-password
+check. The bundled Django list and its narrow repeated-word extension reject
+known common choices such as `passwordpassword`. Existing passwords still work
+at sign-in. No password or password hash is sent to a screening service. This
+is a pinned common-password snapshot, not a comprehensive or current breach
+lookup; see its [source and update procedure](business/password_data/SOURCE.txt).
+Use a password manager or a unique phrase of unrelated words. Correctable
+policy rejections keep the current session and do not charge a failed guess
+when the current password was correct.
+
+Schema four added private receipts for safe create retries. Schema five adds
+independently keyed MFA encryption and session verification state. Version-three
+upgrades preserve accounts, passwords, sessions, MFA, quotas and business records.
+Version-one and version-two upgrades also revoke old administrator sessions
+because those sessions did not establish MFA. All upgrade steps share one
+transaction; unexpected schema objects cause refusal rather than repair.
+Keep an application-consistent backup and the matching identity key, stop
+writes, and rehearse on a protected copy before upgrading existing hosted data:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --data-dir 'C:\Private\Westbridge' --migrate-storage
+```
+
+Replace the example path with the existing private directory. This command
+validates and upgrades existing storage, prints no credentials, and opens no
+listener. Create the independent MFA encryption key first with
+`--create-mfa-key`; use the same data and key paths for migration. Local startup
+and hosted preflight require schema five and never migrate automatically.
+Do not reprovision.
+Existing account login budgets retain their original namespace.
 Enroll missing administrator authenticators once, using the same private store:
 
 ```powershell
@@ -165,6 +228,54 @@ Pausing writes preserves reads, and the administrator can resume writes.
 Disabling an employee invalidates their sessions. Password changes also sign out
 existing sessions. The account sheet records initial passwords, not later changes.
 
+Form fields are temporarily disabled while a save is in progress. You can close
+an editor, but closing it does not cancel the submitted save; refresh the page
+to see its result. A delayed business-record save cannot close a newer editor or
+replace a page you have since opened. Validation errors restore the current form
+for correction.
+
+For new staff messages, schedule entries, contacts and administrator notices,
+an unchanged retry in the same browser tab reuses a random save key. The key
+survives a refresh; refill the same details because drafts themselves are not
+stored. The browser stores only keys, timestamps and request fingerprints in
+session storage. Successful acknowledged saves clear their key so a deliberate
+later creation can use identical details. No create is retried automatically.
+Changed details start a separate save. Closing the tab, clearing its storage or
+switching browsers ends this protection: check saved records before resubmitting.
+After 23 hours an unconfirmed browser save requires an explicit check-and-start-
+separate-save action rather than silently replacing its key.
+
+The server keeps successful receipts for a 24-hour replay window, scoped to the
+account and route, in the same transaction as the write and audit. Current
+permissions, session, CSRF and workspace pause are checked before replay. Reusing
+a key for different details returns 409. Receipts contain the original response,
+which may differ from a record edited later. They are limited to 512 per account
+and 4,096 in total, with a 32 KiB response ceiling; new keyed writes return 503
+when full rather than evicting an unexpired receipt. Expired bytes are pruned on
+the next successful keyed transaction, not erased by a background timer.
+API clients may send `Idempotency-Key` (16-128 ASCII letters, digits, `_` or `-`);
+use a cryptographically random value and retain it for the unchanged operation.
+Clients omitting the header retain ordinary create behavior. This contract
+does not cover public guest submissions, password changes, or later edits;
+check saved records before retrying those uncertain operations.
+
+Team messages have durable per-account fixed-window limits of 10 accepted posts
+per minute and 100 per hour, including administrators. Rejections return 429
+with a retry interval and preserve the draft; a replayed saved message does not
+spend another quota. At 10,000 stored messages, new posts return 507 and require
+operator review. Existing history is not automatically deleted. These defaults
+bound posting and message rows, not total database size or all audit activity.
+
+Password changes are different: a confirmed change clears the old account's
+session and password fields even if its editor was dismissed. If the connection
+or reply fails, the dashboard cannot know whether the change committed. It
+returns to sign-in with instructions to try the new password first, then the
+previous password if necessary; it never automatically resubmits the change.
+This uncertain outcome does not claim that the server session was revoked.
+Delayed replies cannot clear a newer login. Session revocation is enforced in
+the database; a revoked cookie can remain in the browser until the next login
+replaces it or it expires.
+
 All initial records are fictional. The financial series is seeded sample data;
 pipeline values and scheduled hours reflect the saved demo records. Outreach
 tracks contacts, stages and notes locally. It sends no email, SMS, invoices or
@@ -184,6 +295,9 @@ fresh grants, shared freeze, revisions, saved work and audit stay consistent.
 These host modules demonstrate toolkit integration; they are not new stable
 library APIs or a replacement for an organization's identity system.
 
+See the [security lab](SECURITY_LAB.md) for fresh verification, session
+revocation, independent MFA key custody, recovery and abuse-control exercises.
+
 ## Verify the example
 
 With the repository's development dependencies installed:
@@ -202,7 +316,24 @@ fictional accounts, data and a loopback server; it does not open your saved demo
 workspace. Its output includes screenshots and a secret-free result summary.
 The API regressions use isolated storage and exercise permission denials, CSRF,
 session invalidation, freeze, stale edits, overlaps and persistence.
-They also cover guest moderation, submission limits and preserving an existing
+The browser runner also checks delayed saves, dismissal and newer-draft protection,
+validation recovery, and navigation during a pending save. Use `--save-only` with
+the same browser command to run just these checks against intercepted fictional
+API responses and the current static assets.
+Use `--admin-tools-only` to focus on recovery guidance, command copying,
+activity search, responsive admin controls, and session/navigation races with
+fictional API responses. The full run also checks the recovery page against the
+local server after an administrator signs in with MFA.
+Use `--safe-saves-only` for real local lost-reply retries, browser refresh,
+expired or unavailable retry storage, message limits and password-choice errors.
+API regressions in `test_business_idempotency.py`,
+`test_business_storage_upgrade.py`, `test_business_message_limits.py` and
+`test_business_password_policy.py` exercise replay authorization, rollback,
+concurrent writes, migration failure and offline password screening.
+Use `--password-faults-only` for real local-server password changes with dropped
+requests, lost or malformed replies, dialog dismissal, multiple tabs and newer
+sign-ins. These checks inspect server state as well as the browser result.
+The API tests also cover guest moderation, submission limits and preserving an existing
 store during the schema upgrade, authenticator replay/reset, mandatory policy
 acceptance and provider failures. Attempt-budget regressions cover persistent
 account limits, failure charges, shared-peer login behavior, concurrent admission,

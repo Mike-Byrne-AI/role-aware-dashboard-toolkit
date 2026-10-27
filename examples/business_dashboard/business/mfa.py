@@ -19,7 +19,7 @@ def current_time():
     return time.time()
 
 
-def verify_admin_code(connection, user_id, code):
+def verify_admin_code(connection, user_id, code, secret_store):
     """Consume a valid step in the caller's write transaction exactly once."""
     if not connection.in_transaction:
         raise ValueError("MFA verification requires an active transaction.")
@@ -29,7 +29,8 @@ def verify_admin_code(connection, user_id, code):
     if row is None:
         return None
     counter = int(current_time() // INTERVAL)
-    totp = pyotp.TOTP(row["secret"], interval=INTERVAL)
+    secret = secret_store.decrypt(row["secret_ciphertext"], user_id, row["generation"])
+    totp = pyotp.TOTP(secret, interval=INTERVAL)
     for candidate in (counter + 1, counter, counter - 1):
         if candidate > row["last_counter"] and candidate >= 0 and totp.verify(code, for_time=candidate * INTERVAL):
             updated = connection.execute(
@@ -40,7 +41,7 @@ def verify_admin_code(connection, user_id, code):
     return None
 
 
-def enroll_in_transaction(connection, directory: Path, *, reset=False):
+def enroll_in_transaction(connection, directory: Path, secret_store, *, reset=False):
     """Write a private setup sheet before committing; never overwrite a sheet."""
     if not connection.in_transaction:
         raise ValueError("MFA enrollment requires an active transaction.")
@@ -52,9 +53,9 @@ def enroll_in_transaction(connection, directory: Path, *, reset=False):
             continue
         secret, generation = pyotp.random_base32(), secrets.token_hex(16)
         connection.execute(
-            "INSERT INTO admin_mfa(user_id,secret,generation,last_counter) VALUES(?,?,?,-1) "
-            "ON CONFLICT(user_id) DO UPDATE SET secret=excluded.secret,generation=excluded.generation,last_counter=-1",
-            (user["id"], secret, generation),
+            "INSERT INTO admin_mfa(user_id,secret_ciphertext,generation,last_counter) VALUES(?,?,?,-1) "
+            "ON CONFLICT(user_id) DO UPDATE SET secret_ciphertext=excluded.secret_ciphertext,generation=excluded.generation,last_counter=-1",
+            (user["id"], secret_store.encrypt(secret, user["id"], generation), generation),
         )
         connection.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
         enrollments.append((user["username"], secret))
@@ -78,11 +79,11 @@ def enroll_in_transaction(connection, directory: Path, *, reset=False):
     return output
 
 
-def setup_admin_mfa(data_dir, *, reset=False):
+def setup_admin_mfa(data_dir, *, reset=False, mfa_key_file=None):
     """Local recovery is deliberately unavailable through an HTTP endpoint."""
-    database = Database(data_dir)
+    database = Database(data_dir, mfa_key_file=mfa_key_file)
     with database.transaction() as connection:
-        sheet = enroll_in_transaction(connection, database.directory, reset=reset)
+        sheet = enroll_in_transaction(connection, database.directory, database.mfa_secrets, reset=reset)
         if sheet:
             record_activity(connection, "Local operator", "Reset admin authenticator" if reset else "Enrolled admin authenticator", "Administrator access")
     return sheet

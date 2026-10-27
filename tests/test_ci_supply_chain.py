@@ -124,7 +124,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert Counter(refs) == Counter({
         f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 4,
         f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 4,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 4,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 5,
     })
     assert workflow.count("persist-credentials: false") == 4
     assert workflow.count("timeout-minutes:") == 5
@@ -199,6 +199,10 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     assert 'python -m pip install ".[workbench,api]" "playwright==1.63.0" -r examples/business_dashboard/requirements.txt' in browser
     assert "python tools/browser_smoke.py" in browser
     assert "python tools/business_dashboard_browser.py" in browser
+    assert 'python tools/business_dashboard_browser.py --security-only --output-dir "$RUNNER_TEMP/business-security-browser"' in browser
+    assert 'python tools/business_dashboard_browser.py --passkeys-only --output-dir "$RUNNER_TEMP/business-passkey-browser"' in browser
+    assert "${{ runner.temp }}/business-security-browser" in browser
+    assert "${{ runner.temp }}/business-passkey-browser" in browser
     assert "path: ${{ runner.temp }}/business-browser" in browser
     assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]

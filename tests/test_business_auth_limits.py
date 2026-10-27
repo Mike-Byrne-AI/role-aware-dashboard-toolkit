@@ -100,7 +100,9 @@ def test_correct_password_change_after_failures_revokes_all_sessions(business):
     old_cookie = second.client.cookies.get(COOKIE_NAME)
     response = _password(first, business.credentials["alex"])
     assert response.status_code == 200
-    assert "Max-Age=0" in response.headers["set-cookie"]
+    # Server revocation is authoritative; a delayed response must not delete a
+    # cookie belonging to a newer login completed in the meantime.
+    assert "set-cookie" not in response.headers
     # Successful changes release their own reservation, not prior failures.
     assert _limit_rows(business)[0][2] == auth_routes.ATTEMPT_LIMIT - 1
     assert first.request("GET", "/api/messages").status_code == 401
@@ -301,9 +303,10 @@ def test_auth_work_saturation_rejects_without_blocking_health_or_private_reads(b
             arrived.wait(timeout=5)
             assert business.client().get("/healthz").status_code == 200
             assert actor.request("GET", "/api/messages").status_code == 200
-            response = _login(business, "missing")
+            response = _login(business, "casey", business.credentials["casey"])
             assert response.status_code == 429
             assert response.headers["Retry-After"] == "1"
+            assert _login(business, "missing").status_code == 401
             assert _password(actor, business.credentials["casey"]).status_code == 429
         finally:
             release.set()
