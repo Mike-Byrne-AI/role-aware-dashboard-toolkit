@@ -19,9 +19,15 @@ host integration hook; it does not provide the persistent grants in this guide.
 
 ## Configure the host
 
-Use Python 3.10 or later and install the toolkit's `auth` extra, which includes
-the required server and authentication dependency floors. Validate a separate
-environment without system site packages before changing an existing launcher.
+The `auth` extra requires Python 3.11 or later, `streamlit[auth]>=1.66.1` and
+`Pillow>=13.0.0`. Python 3.10 UI installations are unsupported; the dependency-free
+core and the `api` and `pandas` extras retain Python 3.10 support. The
+[Pillow fix](https://github.com/python-pillow/Pillow/security/advisories/GHSA-78g4-xqwv-q3g8)
+requires [Pillow 13 and Python 3.11+](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html).
+[Streamlit 1.66.1](https://pypi.org/pypi/streamlit/1.66.1/json) permits Pillow 13.
+
+The `auth` extra includes the reviewed server and authentication floors below.
+Validate a separate environment without system site packages before changing an existing launcher.
 From a reviewed toolkit source checkout (not the generated app directory), use
 an unused environment directory; choose another name if `.venv-auth` exists:
 
@@ -37,8 +43,9 @@ publication is not assumed. Run the remaining commands with that environment's i
 activate it first. Do not upgrade global Python or an active environment in place.
 Keep the previous environment and launcher configuration until acceptance passes.
 
-The supported Streamlit baseline is `streamlit[auth]>=1.65.0`, using its maintained
-Starlette session implementation. The toolkit also requires these reviewed floors:
+The supported Streamlit baseline is `streamlit[auth]>=1.66.1`, using its
+Starlette session implementation.
+The toolkit also requires these reviewed floors:
 
 | Dependency | Minimum | Primary advisory |
 | --- | --- | --- |
@@ -47,7 +54,8 @@ Starlette session implementation. The toolkit also requires these reviewed floor
 | python-multipart | 0.0.31 | [Content-Length parsing](https://github.com/Kludex/python-multipart/security/advisories/GHSA-v9pg-7xvm-68hf) |
 | h11 | 0.16.0 | [Chunked encoding](https://github.com/python-hyper/h11/security/advisories/GHSA-vqfr-h8mv-ghfj) |
 | urllib3 | 2.8.0 | [Chunked response handling](https://github.com/urllib3/urllib3/security/advisories/GHSA-vxq7-64xx-v4gw) |
-| Authlib | 1.6.11 | [OAuth state binding](https://github.com/authlib/authlib/security/advisories/GHSA-jj8c-mmj3-mmgv) |
+| certifi | 2026.10.19 | [Compromised emSign trust roots](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2) |
+| Authlib | 1.9.1 | [JOSE and OAuth fixes](https://docs.authlib.org/en/stable/upgrades/changelog.html#changelog-1-9-1) |
 | cryptography | 50.0.0 | [PKCS#7 decryption](https://github.com/pyca/cryptography/security/advisories/GHSA-g6cj-pr64-35w5) |
 | joserfc | 1.7.4 | [Empty signature arrays](https://github.com/authlib/joserfc/security/advisories/GHSA-4pp3-559j-c5c2) |
 
@@ -65,7 +73,7 @@ Register an OIDC application with your identity provider and obtain its exact
 issuer, client ID, client secret and discovery URL. Register the exact callback
 URL, such as `http://localhost:8501/oauth2callback` for local testing; use HTTPS
 for a shared deployment. Streamlit and Authlib handle token signature, state and
-nonce verification. Streamlit's [Starlette callback implementation](https://github.com/streamlit/streamlit/blob/1.65.0/lib/streamlit/web/server/starlette/starlette_auth_routes.py)
+nonce verification. Streamlit's [Starlette callback implementation](https://github.com/streamlit/streamlit/blob/1.66.1/lib/streamlit/web/server/starlette/starlette_auth_routes.py)
 uses the initiating browser session for OAuth state. This adapter consumes only
 their verified `st.user` result; it is not a parser or verifier for arbitrary
 tokens or browser-supplied claims.
@@ -295,14 +303,14 @@ established. Freeze alone still permits reads. The current freeze row is not a
 complete administrative audit history.
 
 Streamlit itself retains provider claims in a signed browser identity cookie and
-session memory. Version 1.65.0 also stores returned ID/access tokens in a separate
+session memory. Version 1.66.1 also stores returned ID/access tokens in a separate
 signed browser token cookie, even though this adapter reads only `st.user`.
 Signing prevents undetected modification; it is not encryption. Review provider
 claims and token scopes, request minimal access, and exclude cookies/tokens from
 application displays, exports and logs. The database minimization above does not
 remove the identity provider's or Streamlit's own data handling.
 
-In Streamlit 1.65.0, identity/token cookies are HttpOnly and SameSite=Lax but do
+In Streamlit 1.66.1, identity/token cookies are HttpOnly and SameSite=Lax but do
 not set Secure; its session middleware enables `https_only` from
 `server.sslCertFile`. Do not assume HTTPS at a reverse proxy establishes the
 required cookie policy. Inspect the actual deployment's cookies and resolve

@@ -9,8 +9,6 @@ are not trusted; verify the real host before distributing accounts.
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
@@ -38,6 +36,7 @@ class Configuration:
     hostname: str
     data_dir: Path
     port: int
+    mfa_key_file: Path | None = None
 
 
 def _require_posix() -> None:
@@ -90,16 +89,24 @@ def load_configuration(environ: Mapping[str, str] | None = None) -> Configuratio
     raw_port = values.get("PORT", "10000")
     if not re.fullmatch(r"[0-9]{1,5}", raw_port) or not 1 <= int(raw_port) <= 65535:
         raise ValueError("PORT must be an integer from 1 through 65535.")
-    return Configuration(origin, hostname, directory, int(raw_port))
+    raw_mfa_key = values.get("BUSINESS_MFA_KEY_FILE", "")
+    if raw_mfa_key and not Path(raw_mfa_key).is_absolute():
+        raise ValueError("BUSINESS_MFA_KEY_FILE must be an absolute external private key path.")
+    return Configuration(origin, hostname, directory, int(raw_port), Path(raw_mfa_key) if raw_mfa_key else None)
 
 
 def inspect_existing_storage(configuration: Configuration) -> None:
     """Read-only validation; incomplete/old storage is never initialized."""
     from business.db import _require_schema, check_private_file, validate_data_dir
     from business.security import TransactionAccessStore, principal_for_user
+    from business.secret_store import SecretStore
     from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
     directory = validate_data_dir(configuration.data_dir)
+    if os.path.lexists(directory / "RESTORE_QUARANTINE"):
+        raise ValueError("Restored storage is quarantined; reconcile current security state before hosting.")
+    if configuration.mfa_key_file is None:
+        raise ValueError("Set BUSINESS_MFA_KEY_FILE to an independent key outside runtime storage before hosting.")
     database_path = directory / "business.sqlite3"
     key_path = directory / "identity.key"
     try:
@@ -114,15 +121,17 @@ def inspect_existing_storage(configuration: Configuration) -> None:
         raise ValueError("Pilot storage is missing or incomplete; preserve it and investigate.") from None
     if len(identity_key) != 32:
         raise ValueError("The existing identity key is invalid; preserve the existing state.")
+    secret_store = SecretStore(directory, identity_key, configuration.mfa_key_file)
     try:
         with closing(sqlite3.connect(database_path.as_uri() + "?mode=ro", uri=True)) as connection:
             connection.row_factory = sqlite3.Row
             connection.execute("BEGIN")
             if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
                 raise ValueError("The existing database failed its integrity check.")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != 3:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 5:
                 raise ValueError("The existing schema needs an explicit reviewed migration before hosting.")
-            _require_schema(connection, 3)
+            _require_schema(connection, 5)
+            secret_store.validate_database(connection)
             TransactionAccessStore(connection).read_freeze()
             users = connection.execute("SELECT id,principal FROM users").fetchall()
             if not users:
@@ -141,15 +150,8 @@ def inspect_existing_storage(configuration: Configuration) -> None:
             if any(row["id"] not in enrollments for row in admins):
                 raise ValueError("Enroll every active administrator's authenticator before hosting.")
             for row in enrollments.values():
-                try:
-                    valid_secret = (
-                        isinstance(row["secret"], str) and len(row["secret"]) == 32
-                        and len(base64.b32decode(row["secret"], casefold=False)) == 20
-                    )
-                except (binascii.Error, ValueError):
-                    valid_secret = False
                 if not (
-                    valid_secret and isinstance(row["generation"], str)
+                    isinstance(row["generation"], str)
                     and re.fullmatch(r"[0-9a-f]{32}", row["generation"])
                     and type(row["last_counter"]) is int and row["last_counter"] >= -1
                 ):
@@ -170,17 +172,19 @@ def provision(configuration: Configuration) -> tuple[Path, Path]:
     """Explicit one-time creation; never overwrite an existing installation."""
     from business.seed import provision as seed
 
-    seed(configuration.data_dir)
+    if configuration.mfa_key_file is None:
+        raise ValueError("Set BUSINESS_MFA_KEY_FILE to a precreated external key before hosted provisioning.")
+    seed(configuration.data_dir, mfa_key_file=configuration.mfa_key_file)
     inspect_existing_storage(configuration)
     return configuration.data_dir / "ACCOUNTS.md", configuration.data_dir / "ADMIN_MFA_SETUP.md"
 
 
 def create_application(configuration: Configuration):
-    """Create an application only after verifying existing schema-v3 state."""
+    """Create an application only after verifying existing schema-v5 state."""
     from business.app import create_app
 
     preflight(configuration)
-    return create_app(configuration.data_dir, public_origin=configuration.public_origin)
+    return create_app(configuration.data_dir, public_origin=configuration.public_origin, mfa_key_file=configuration.mfa_key_file)
 
 
 class BootstrapApplication:
@@ -217,6 +221,7 @@ def main(argv: list[str] | None = None) -> None:
         description="Operate the Westbridge pilot behind verified HTTPS-only managed ingress.",
         epilog=(
             "Required: PUBLIC_ORIGIN and BUSINESS_DATA_DIR. PORT defaults to 10000. "
+            "provision/preflight/serve require BUSINESS_MFA_KEY_FILE outside runtime storage. "
             "preflight/serve also require BUSINESS_TURNSTILE_SITE_KEY and "
             "BUSINESS_TURNSTILE_SECRET_KEY. No forwarding-header trust is enabled."
         ),

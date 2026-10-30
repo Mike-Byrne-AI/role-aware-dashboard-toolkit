@@ -83,13 +83,16 @@ verify live rules, including disabled force pushes and deletions. These statuses
 require all contributor test, quality, browser, and dependency audit jobs to succeed, including the
 75% coverage gate. A skipped or cancelled dependency is a failure.
 
-Contributor tests cover Linux Python 3.10–3.14, the full Windows suite on
-Python 3.11, and the full macOS suite on Python 3.12. The required browser job exercises a local Chromium dashboard
+Contributor tests cover non-UI core/API/pandas/business behavior on Linux Python 3.10,
+with UI skips reported, full Linux suites on
+Python 3.11–3.14, the full Windows suite on Python 3.11, and the full macOS suite
+on Python 3.12. UI/full/dev require Python 3.11+; a Python 3.10 non-UI run does
+not qualify the UI. The required browser job exercises a local Chromium dashboard
 with synthetic state. The Linux landscaping job adds its own API/security and
 browser suite, a fresh source-package installation/restart check and a disposable
 TLS/restore drill. The copied landscaping action helper must stay byte-identical
 to the generic workflow helper; source tests guard that boundary.
-Dependency CI audits independently resolved `api`, `full` and `landscaping`
+Dependency CI audits independently resolved `api`, `full`, `landscaping` and `business`
 installations on every pull request and weekly. The landscaping lane includes
 the demo's complete runtime requirements, including Argon2. A failed scanner or
 incomplete audit must not count as a clean result. Review the retained inventory

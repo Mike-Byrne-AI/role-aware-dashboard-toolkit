@@ -212,7 +212,7 @@ Streamlit logout clears the current session's identity/token cookies and
 attempts provider OIDC logout when supported. Register and verify the exact
 post-logout callback with the provider. Other existing dashboard sessions can
 remain signed in. Server grant revocation is therefore the control used to
-remove this dashboard's authority across sessions. Streamlit 1.65.0 stores
+remove this dashboard's authority across sessions. Streamlit 1.66.1 stores
 returned ID/access tokens in a separate signed browser cookie. Follow the
 [authentication guide](../../role_aware_dashboard_toolkit/resources/guides/authentication.md)
 for token handling and actual HTTPS/cookie acceptance before sharing the app.

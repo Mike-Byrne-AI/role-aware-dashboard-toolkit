@@ -39,6 +39,7 @@ Discover them with `python -m role_aware_dashboard_toolkit guide start`.
 - [Host integration example](../examples/host_integration/README.md) — protect host reads and deferred writes with current identity, role and freeze checks
 - [Landscaping dashboard demo](../examples/landscaping/README.md) — run a complete fictional business app with password sign-in, shared work and protected admin tools
 - [Business dashboard boilerplate](../examples/business_dashboard/README.md) — public guest notices, employee schedule and messages, and private admin analytics and outreach
+- [Business security lab](../examples/business_dashboard/SECURITY_LAB.md) — sessions, MFA custody, recovery and abuse exercises
 - [Business hosting preparation](../examples/business_dashboard/HOSTING.md) — administrator enrollment, bot verification and actual-host acceptance requirements
 - [Host the landscaping dashboard](../examples/landscaping/HOSTING.md) — provision once, check persistent storage, configure verified ingress and rehearse the actual shared service
 - [Protected record workflows](record_workflows.md) — implement edits, date changes and status transitions with transactional history and consumer acceptance checks

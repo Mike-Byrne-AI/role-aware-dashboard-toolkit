@@ -101,15 +101,20 @@ def inspect_capabilities() -> dict[str, Any]:
         "diagnostics": list_diagnostics(),
         "control_kinds": list(VALID_KINDS),
         "supported_layouts": ["stacked", "columns"],
+        "python_requirements": {
+            "core": ">=3.10", "api": ">=3.10", "pandas": ">=3.10",
+            "workbench": ">=3.11", "auth": ">=3.11", "full": ">=3.11", "dev": ">=3.11",
+        },
         "appearance_requirements": {
-            "core_workbench": "Streamlit >=1.65.0",
+            "core_workbench": "Streamlit >=1.66.1",
+            "pillow": "Pillow >=13.0.0",
             "group_fills": "Streamlit >=1.39 with st.container(key=...) and st.html()",
             "sidebar_theme": "Streamlit >=1.44",
             "note": "Documented API requirements, not certification of the installed runtime.",
         },
         "section_defaults": asdict(DashboardSections()),
         "authentication_requirements": {
-            "streamlit": "Streamlit >=1.65.0 with the toolkit auth extra (Authlib >=1.6.11)",
+            "streamlit": "Streamlit >=1.66.1 with the toolkit auth extra (Authlib >=1.9.1)",
             "provider": "Host-configured OIDC provider and explicit server-side role provisioning",
             "guide": "python -m role_aware_dashboard_toolkit guide authentication",
         },

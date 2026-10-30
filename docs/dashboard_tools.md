@@ -381,7 +381,7 @@ registered groups are valid override targets. Plugin setup may register groups
 before the names are checked. Card fills use Streamlit's documented keyed
 containers in both stacked and column layouts. With no fill options, default
 rendering is preserved. All workbench layouts use the supported Streamlit
-baseline, 1.65.0 or newer. See the
+baseline, 1.66.1 or newer on Python 3.11+. See the
 [appearance guide](../role_aware_dashboard_toolkit/resources/guides/appearance.md)
 for theme setup and visual checks.
 

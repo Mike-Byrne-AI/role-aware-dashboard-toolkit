@@ -30,6 +30,7 @@ sys.path.insert(0, str(EXAMPLE))
 from business.app import create_app  # noqa: E402 -- source example, not an installed package
 from business.seed import provision  # noqa: E402
 from business.security import COOKIE_NAME  # noqa: E402
+from business.secret_store import default_key_path  # noqa: E402
 from business import mfa  # noqa: E402
 from business.abuse import PUBLIC_RULES  # noqa: E402
 
@@ -73,10 +74,11 @@ class Trial:
             "username": username, "password": password or self.credentials[username],
         }
         with self.db() as connection:
-            enrollment = connection.execute("SELECT secret,last_counter FROM admin_mfa WHERE user_id=?", (username,)).fetchone()
+            enrollment = connection.execute("SELECT * FROM admin_mfa WHERE user_id=?", (username,)).fetchone()
         if enrollment:
             self.mfa_time = max(self.mfa_time, (enrollment["last_counter"] + 1) * mfa.INTERVAL)
-            payload["otp"] = pyotp.TOTP(enrollment["secret"]).at(self.mfa_time)
+            secret = self.app.state.database.mfa_secrets.decrypt(enrollment["secret_ciphertext"], username, enrollment["generation"])
+            payload["otp"] = pyotp.TOTP(secret).at(self.mfa_time)
         return payload
 
     def login(self, username, password=None):
@@ -106,6 +108,7 @@ def business(business_seed, monkeypatch):
     with tempfile.TemporaryDirectory(prefix="radt-business-test-") as temporary:
         directory = Path(temporary).resolve() / "private"
         shutil.copytree(business_seed.directory, directory)
+        shutil.copytree(default_key_path(business_seed.directory).parent, default_key_path(directory).parent)
         with ExitStack() as stack:
             trial = Trial(directory, business_seed.credentials, stack)
             monkeypatch.setattr(mfa, "current_time", lambda: trial.mfa_time)
@@ -720,6 +723,12 @@ def test_concurrent_reviews_publish_one_post(business, business_admin):
 
 def as_legacy_database(business):
     with business.db() as connection:
+        connection.execute("DROP TABLE session_passkey")
+        connection.execute("DROP TABLE passkey_challenges")
+        connection.execute("DROP TABLE passkey_credentials")
+        connection.execute("DROP TABLE session_security")
+        connection.execute("DROP TABLE mfa_key_binding")
+        connection.execute("DROP TABLE create_receipts")
         connection.execute("DROP TABLE session_mfa")
         connection.execute("DROP TABLE admin_mfa")
         connection.execute("DROP TABLE submissions")
@@ -728,6 +737,7 @@ def as_legacy_database(business):
 
 
 def test_submission_schema_migration_preserves_accounts_and_employee_sessions_revokes_old_admin(business, business_admin):
+    from business.db import Database
     saved(business_admin.request("POST", "/api/messages", json={"body": "Preserved legacy message"}), "message")
     employee = business.login("alex")
     as_legacy_database(business)
@@ -737,10 +747,13 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
     with business.db() as connection:
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
         sessions_before = [tuple(row) for row in connection.execute("SELECT * FROM sessions WHERE user_id<>'admin' ORDER BY token_hash")]
+    with pytest.raises(ValueError, match="explicit"):
+        create_app(business.directory, public_origin=ORIGIN)
+    Database(business.directory, migrate=True)
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == sessions_before
     assert (business.directory / "identity.key").read_bytes() == identity
@@ -754,6 +767,7 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
 
 @pytest.mark.parametrize("damage", ["missing-old-table", "new-table-collision"])
 def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl(business, damage):
+    from business.db import Database
     as_legacy_database(business)
     with business.db() as connection:
         if damage == "missing-old-table":
@@ -764,7 +778,7 @@ def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl
         schema_before = [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")]
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
     with pytest.raises(ValueError):
-        create_app(business.directory, public_origin=ORIGIN)
+        Database(business.directory, migrate=True)
     with business.db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
@@ -788,15 +802,15 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
 
     monkeypatch.setattr(db, "_apply_submission_migration", fail_after_ddl)
     with pytest.raises(ValueError):
-        create_app(business.directory, public_origin=ORIGIN)
+        db.Database(business.directory, migrate=True)
     assert business_rows(business) == before
     with business.db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
     monkeypatch.setattr(db, "_apply_submission_migration", apply)
-    create_app(business.directory, public_origin=ORIGIN)
+    db.Database(business.directory, migrate=True)
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 @pytest.mark.parametrize("condition", ["paused", "address-limit", "global-limit", "queue-full"])

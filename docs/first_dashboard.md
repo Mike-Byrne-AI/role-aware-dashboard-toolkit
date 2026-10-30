@@ -4,14 +4,16 @@ The starter is a small dashboard you can edit: an overview, grouped controls,
 saved profiles and an audit history. It runs as a Python process and opens in
 your browser. Opening `app.py` in an editor does not start it.
 
-Use Python 3.10 or later and a downloaded or cloned toolkit source checkout.
+Use Python 3.11 or later and a downloaded or cloned toolkit source checkout.
+The Streamlit UI requires this interpreter baseline; core/API remain usable on Python 3.10.
 Open a terminal in the checkout, in the folder containing `pyproject.toml`.
 Extract a downloaded source ZIP first. These instructions use the same Python
 interpreter for installation and launch, without requiring shell activation.
 
 ## Windows PowerShell
 
-Create the environment once. Skip the first command if `.venv` already exists:
+Create the environment once. Reuse `.venv` only if it already uses Python 3.11+;
+otherwise choose a new environment name and use that path throughout:
 
 ```powershell
 python -m venv .venv

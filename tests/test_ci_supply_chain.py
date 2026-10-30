@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
 import sys
 import textwrap
 import xml.etree.ElementTree as ET
@@ -10,6 +11,8 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
+
+from tests.release_hygiene_helpers import load_pyproject
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -124,7 +127,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert Counter(refs) == Counter({
         f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 4,
         f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 4,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 4,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 5,
     })
     assert workflow.count("persist-credentials: false") == 4
     assert workflow.count("timeout-minutes:") == 5
@@ -132,6 +135,68 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
     assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
     assert "python -m build\n          python -m twine check dist/*" in workflow
+
+
+def _matrix_install_script(path):
+    workflow = path.read_text(encoding="utf-8")
+    block = re.search(
+        r"      - name: Install\n        shell: python\n        run: \|\n(.*?)      - name: Test\n",
+        workflow, flags=re.DOTALL,
+    )
+    assert block is not None, "The matrix install must select its declared Python support scope"
+    return textwrap.dedent(block[1])
+
+
+@pytest.mark.parametrize("workflow", [WORKFLOW_PATH, CONTRIBUTOR_WORKFLOW_PATH], ids=["release", "contributor"])
+@pytest.mark.parametrize("version", [(3, 10), (3, 11), (3, 14)])
+def test_actual_matrix_install_keeps_declared_non_ui_requirements_on_python310(monkeypatch, workflow, version):
+    declared = load_pyproject()["project"]["optional-dependencies"]["dev"]
+    calls = []
+
+    def record(command, *, check):
+        assert check is True
+        calls.append(command)
+
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.setattr(subprocess, "run", record)
+    monkeypatch.setattr(sys, "version_info", (*version, 0))
+    exec(compile(_matrix_install_script(workflow), str(workflow), "exec"), {})
+    prefix = [sys.executable, "-m", "pip"]
+    assert calls[0] == [*prefix, "install", "--upgrade", "pip"]
+    assert calls[-1] == [*prefix, "check"]
+    if version == (3, 10):
+        assert "tomli>=2.0.0; python_version < '3.11'" in declared
+        assert calls[1] == [*prefix, "install", "tomli>=2.0.0"]
+        selected = calls[2]
+        assert selected[:6] == [*prefix, "install", "-e", ".[api,pandas]"]
+        removed = [requirement for requirement in declared
+                   if requirement.lower().startswith(("streamlit>=", "streamlit[", "pillow>="))]
+        assert removed, "UI dependencies must remain declared for Python 3.11+"
+        assert selected[6:] == [requirement for requirement in declared if requirement not in removed]
+        assert len(calls) == 4
+    else:
+        assert calls[1] == [*prefix, "install", "-e", ".[dev]"]
+        assert len(calls) == 3
+
+
+@pytest.mark.parametrize("workflow", [WORKFLOW_PATH, CONTRIBUTOR_WORKFLOW_PATH], ids=["release", "contributor"])
+@pytest.mark.parametrize("version", [(3, 10), (3, 11)])
+@pytest.mark.parametrize("phase", ["install", "check"])
+def test_actual_matrix_install_propagates_dependency_failures(monkeypatch, workflow, version, phase):
+    calls = []
+
+    def fail(command, *, check):
+        assert check is True
+        calls.append(command)
+        if (phase == "install" and "-e" in command) or command[-1] == "check":
+            raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.setattr(subprocess, "run", fail)
+    monkeypatch.setattr(sys, "version_info", (*version, 0))
+    with pytest.raises(subprocess.CalledProcessError):
+        exec(compile(_matrix_install_script(workflow), str(workflow), "exec"), {})
+    assert ("-e" in calls[-1]) if phase == "install" else calls[-1][-1] == "check"
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
@@ -199,6 +264,10 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     assert 'python -m pip install ".[workbench,api]" "playwright==1.63.0" -r examples/business_dashboard/requirements.txt' in browser
     assert "python tools/browser_smoke.py" in browser
     assert "python tools/business_dashboard_browser.py" in browser
+    assert 'python tools/business_dashboard_browser.py --security-only --output-dir "$RUNNER_TEMP/business-security-browser"' in browser
+    assert 'python tools/business_dashboard_browser.py --passkeys-only --output-dir "$RUNNER_TEMP/business-passkey-browser"' in browser
+    assert "${{ runner.temp }}/business-security-browser" in browser
+    assert "${{ runner.temp }}/business-passkey-browser" in browser
     assert "path: ${{ runner.temp }}/business-browser" in browser
     assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]

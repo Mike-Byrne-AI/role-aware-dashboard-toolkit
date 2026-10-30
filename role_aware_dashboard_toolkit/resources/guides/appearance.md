@@ -35,7 +35,7 @@ Use six-digit `#RRGGBB` colors. Per-group entries override the shared fill.
 Names must match registered groups, including groups registered during plugin
 setup; hidden registered groups remain valid targets.
 
-The supported workbench baseline is Streamlit >=1.65.0. Global theme APIs were
+The supported workbench baseline is Python >=3.11 and Streamlit >=1.66.1. Global theme APIs were
 introduced in >=1.30, independent sidebar colors in >=1.44, and the documented
 keyed-container API for group fills in >=1.39; unsupported runtimes fail clearly.
 With no fill options, default rendering is preserved. Current runtime details

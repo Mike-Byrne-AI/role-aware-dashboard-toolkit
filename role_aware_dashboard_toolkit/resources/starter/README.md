@@ -6,8 +6,8 @@ Dashboard Toolkit package and Streamlit's native, responsive widgets.
 
 ## Run
 
-Install the toolkit's `workbench` extra in the environment that will run this
-dashboard. It applies the supported Streamlit and server dependency requirements.
+Install the toolkit's `workbench` extra in a Python 3.11 or later environment
+that will run this dashboard. It applies the supported Streamlit and server dependency requirements.
 From this application directory, replace the example path below with the absolute
 path to your reviewed toolkit source checkout. In PowerShell on Windows:
 

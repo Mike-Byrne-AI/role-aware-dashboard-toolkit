@@ -107,7 +107,7 @@ the backend listener and provider administration interfaces remain restricted.
 
 The cookie rewrite deliberately adds `Secure` to every upstream cookie, including
 the temporary OAuth session cookie and Streamlit identity/token cookies. Streamlit
-1.65.0 does not set that flag on all authentication cookies by itself. Adding it
+1.66.1 does not set that flag on all authentication cookies by itself. Adding it
 at this boundary addresses transport; it does not encrypt a signed cookie, reduce
 token scopes, shorten lifetime or revoke another session. Check actual responses
 after every framework/proxy upgrade. A proxy configuration file alone is not

@@ -11,6 +11,8 @@ _SOURCE_INSTALL_GUIDANCE = (
     'From the checkout, run `python -m pip install ".[api]"`, replacing `api` with the desired extra.',
     "From another directory, pass an absolute source path or reviewed local wheel filename",
     "with the extra appended, such as `[api]`. Omit the extra to install the core alone.",
+    "Core, `api` and `pandas` support Python 3.10+. The `workbench`, `auth`, `full` and `dev` extras require Python 3.11+.",
+    "UI extras require Streamlit 1.66.1+ and Pillow 13.0.0+; Python 3.10 UI installations are unsupported.",
 )
 
 

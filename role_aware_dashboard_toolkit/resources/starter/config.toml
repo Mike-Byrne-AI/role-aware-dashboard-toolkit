@@ -1,5 +1,5 @@
 # Project theme: edit these values to change page, inputs, text and accent.
-# The supported starter baseline is Streamlit >=1.65.0.
+# The supported starter baseline is Python >=3.11 and Streamlit >=1.66.1.
 # This theme uses independent sidebar colors; group fills use keyed containers.
 [theme]
 base = "light"

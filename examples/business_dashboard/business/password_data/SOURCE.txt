@@ -1,0 +1,39 @@
+Offline common-password screening data
+
+Source: Django 5.2.7
+https://github.com/django/django/tree/5.2.7
+
+The file common-passwords.txt.gz is an unmodified copy of:
+https://raw.githubusercontent.com/django/django/5.2.7/django/contrib/auth/common-passwords.txt.gz
+SHA-256: 3c1baed62596de36860824eb3f436d5932d37ca8b06e59df78f5a44ec175afe4
+Size: 80,228 bytes; 19,640 distinct entries after decompression.
+
+Django describes this as its 20,000-common-password list, compiled by
+Royce Williams. The actual bundled file has 19,640 entries.
+https://docs.djangoproject.com/en/5.2/topics/auth/passwords/#django.contrib.auth.password_validation.CommonPasswordValidator
+
+DJANGO_LICENSE.txt is an unmodified copy of the Django 5.2.7 BSD license:
+https://raw.githubusercontent.com/django/django/5.2.7/LICENSE
+SHA-256: b846415d1b514e9c1dff14a22deb906d794bc546ca6129f950a18cd091e2a669
+
+This public wordlist is not application credentials or recovery material.
+The application loads it locally and never sends a prospective password or its
+hash to an external service. It compares whole passwords case-insensitively,
+ignoring surrounding whitespace for screening only; hashing and sign-in retain
+the exact supplied characters. It also rejects exact account/service names.
+
+Predictable-repeat screening is a local extension, not part of the upstream
+corpus: a candidate is rejected when its entire normalized value consists of
+two or more identical repetitions of an entry in the bundled corpus. The
+implementation checks only lengths dividing the candidate's length, from one
+through the shorter of half the candidate length and the longest corpus entry
+(33 characters in this snapshot). Each unit is checked by exact set membership;
+the repeated unit must reconstruct the entire candidate. This adds at most 33
+set lookups per attempt and never rejects an unrelated phrase merely because
+it contains a common word. It imposes no character-class composition rules.
+
+This is a pinned snapshot, not a comprehensive or current breached-password
+database, and passing screening does not establish password strength or
+uniqueness. Maintainers must review upstream data updates explicitly, replace
+the corpus and license together when appropriate, update this provenance and
+its checksum regression, and rerun password and source-distribution checks.

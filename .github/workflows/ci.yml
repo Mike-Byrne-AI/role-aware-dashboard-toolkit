@@ -36,9 +36,34 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
+        shell: python
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          def pip(*arguments):
+              subprocess.run([sys.executable, "-m", "pip", *arguments], check=True)
+
+          pip("install", "--upgrade", "pip")
+          if sys.version_info[:2] == (3, 10):
+              # Bootstrap the parser declared in dev; retain all non-UI tooling.
+              pip("install", "tomli>=2.0.0")
+              try:
+                  import tomllib
+              except ModuleNotFoundError:
+                  import tomli as tomllib
+              project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+              declared = project["project"]["optional-dependencies"]["dev"]
+              requirements = [requirement for requirement in declared
+                              if re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)[0].lower()
+                              not in {"streamlit", "pillow"}]
+              print("Python 3.10: core/API/pandas and business tests; optional Streamlit UI is excluded.")
+              pip("install", "-e", ".[api,pandas]", *requirements)
+          else:
+              pip("install", "-e", ".[dev]")
+          pip("check")
       - name: Test
         run: pytest -q
 

@@ -6,7 +6,7 @@ types, grouped cards, profiles, roles and a session freeze switch.
 ## Run
 
 Install the project using the [development environment setup](../../CONTRIBUTING.md#development-setup).
-This installs the supported Streamlit baseline, 1.65.0 or newer. Then, from the
+Use Python 3.11 or later. This installs the supported Streamlit baseline, 1.66.1 or newer. Then, from the
 repository root:
 
 ```powershell

@@ -134,8 +134,9 @@ approved SHA, and `workflow_dispatch`; push and pull-request events do not
 start this release workflow. Leave the variable unset until the approved run
 is ready. The automatic contributor workflow is independent of this variable.
 
-Require every expected Linux Python 3.10-3.14, coverage, packaging, Windows,
-and release-evidence job and required step to succeed for the same run attempt
+Require the Linux Python 3.10 non-UI core/API/pandas/business lane (with UI skips
+reported), full Linux Python 3.11-3.14 lanes,
+coverage, packaging, Windows, and release-evidence jobs and required steps to succeed for the same run attempt
 and final SHA. A skipped, cancelled, or merely green-looking incomplete run
 is not proof. Review artifact digests, source SHA, branch, run ID, and attempt.
 Hosted artifacts and evidence are kept for 90 days; copy the evidence into

@@ -328,9 +328,22 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
     prefix = "examples/business_dashboard/"
     members = _logical_members(built_release_artifacts["sdist"])
     assert {name[len(prefix):] for name in members if name.startswith(prefix)} == {
-        "README.md", "HOSTING.md", "requirements.txt", "run.py", "hosting/pilot.py", "business/__init__.py",
+        "README.md", "HOSTING.md", "RECOVERY.md", "SECURITY_LAB.md", "requirements.txt", "run.py", "recovery.py",
+        "hosting/pilot.py", "business/__init__.py",
         "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
         "business/auth_routes.py", "business/submission_routes.py", "business/work_limits.py",
+        "business/idempotency.py",
+        "business/message_limits.py",
+        "business/password_policy.py",
+        "business/password_data/common-passwords.txt.gz",
+        "business/password_data/DJANGO_LICENSE.txt",
+        "business/password_data/SOURCE.txt",
+        "business/secret_store.py",
+        "business/session_state.py",
+        "business/session_routes.py",
+        "business/passkeys.py",
+        "business/telemetry.py",
+        "backup.py",
         "business/models.py", "business/request_security.py", "business/mfa.py", "business/abuse.py",
         "business/static/index.html", "business/static/app.js", "business/static/styles.css",
     }

@@ -308,7 +308,8 @@ class Campaign:
             self.csrf, self.cookie_name = {}, COOKIE_NAME
             self.rules_version = abuse.PUBLIC_RULES["version"]
             with self.app.state.database.transaction() as connection:
-                secret = connection.execute("SELECT secret FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
+                enrollment = connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone()
+                secret = self.app.state.database.mfa_secrets.decrypt(enrollment["secret_ciphertext"], "admin", enrollment["generation"])
             moment = mfa.current_time()
             stack.enter_context(patch.object(mfa, "current_time", lambda: moment))
             otp = pyotp.TOTP(secret).at(moment)

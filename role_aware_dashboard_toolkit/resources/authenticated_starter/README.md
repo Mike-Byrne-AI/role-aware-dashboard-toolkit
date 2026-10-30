@@ -18,9 +18,10 @@ python -m role_aware_dashboard_toolkit guide deployment
 ```
 
 Follow its provider registration, protected directory, provisioning and launch
-steps. Install the toolkit's `auth` extra from its reviewed source checkout or a
-local wheel; it requires `streamlit[auth]>=1.65.0` and patched authentication and
-server dependencies. No package-index publication is assumed. First validate a
+steps. Use Python 3.11 or later and install the toolkit's `auth` extra from its
+reviewed source checkout or a local wheel; it requires `streamlit[auth]>=1.66.1`,
+`Pillow>=13.0.0` and patched authentication and server dependencies.
+No package-index publication is assumed. First validate a
 separate environment without system site packages, run `python -m pip check`
 and a dependency audit, and verify callback/session rejection before changing
 an existing launcher. Keep the previous environment for rollback.

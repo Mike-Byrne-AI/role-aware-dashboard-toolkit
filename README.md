@@ -11,7 +11,7 @@ Use the supplied Streamlit dashboard, integrate the optional FastAPI routes, or
 use the dependency-free Python core in your own application. Your application
 supplies the data, measurements, model calls, and business actions.
 
-**Early beta · Python 3.10+ · MIT license · Distributed as GitHub source**
+**Early beta · Core/API: Python 3.10+ · Streamlit UI: Python 3.11+ · MIT license · Distributed as GitHub source**
 
 [Quick start](#quick-start) · [Examples](examples/README.md) ·
 [Documentation](docs/README.md) ·
@@ -68,7 +68,7 @@ Try a complete review workflow with synthetic data. No model account, identity
 provider, or external service is needed for this local example.
 
 Clone or download the [source repository](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit)
-and open a terminal in its root directory. With Python 3.10 or later, in
+and open a terminal in its root directory. With Python 3.11 or later, in
 PowerShell on Windows:
 
 ```powershell
@@ -85,7 +85,9 @@ python3 -m venv .venv
 .venv/bin/python -m streamlit run examples/operator_review/app.py --server.address 127.0.0.1
 ```
 
-If `.venv` already exists, reuse it and skip the first command.
+If `.venv` already uses Python 3.11 or later, reuse it and skip the first command.
+For an older interpreter, create a new environment under another name and use
+its path throughout; preserve the previous environment until validation passes.
 
 In the browser:
 
@@ -237,19 +239,21 @@ The core has no required third-party dependencies. From a source checkout or
 unpacked source release, install only the capabilities you need in your chosen
 Python environment:
 
-| Install command | Capability |
-| --- | --- |
-| `python -m pip install .` | Core controls, records, stores, packets, and offline guides |
-| `python -m pip install ".[workbench]"` | Streamlit dashboard and starter |
-| `python -m pip install ".[auth]"` | Streamlit sign-in integration and role-grant support |
-| `python -m pip install ".[api]"` | FastAPI routes |
-| `python -m pip install ".[pandas]"` | Dataframe-backed history views |
-| `python -m pip install ".[full]"` | All supported runtime extras |
+| Install command | Capability | Python |
+| --- | --- | --- |
+| `python -m pip install .` | Core controls, records, stores, packets, and offline guides | 3.10+ |
+| `python -m pip install ".[workbench]"` | Streamlit dashboard and starter | 3.11+ |
+| `python -m pip install ".[auth]"` | Streamlit sign-in integration and role-grant support | 3.11+ |
+| `python -m pip install ".[api]"` | FastAPI routes | 3.10+ |
+| `python -m pip install ".[pandas]"` | Dataframe-backed history views | 3.10+ |
+| `python -m pip install ".[full]"` | All supported runtime extras | 3.11+ |
 
 Distribution name: `role-aware-dashboard-toolkit`. Python import:
 `role_aware_dashboard_toolkit`. This release uses GitHub source; package-index
-publication is a separate release decision. The supported Streamlit baseline
-is 1.65.0. See [distribution details](docs/distribution.md) for package contents.
+publication is a separate release decision. UI extras require Streamlit 1.66.1+
+and Pillow 13.0.0+; Python 3.10 UI installations are unsupported. The development
+extra also requires Python 3.11+. See [distribution details](docs/distribution.md)
+for package contents.
 
 ## Find the right guide
 

@@ -13,8 +13,9 @@ python -m role_aware_dashboard_toolkit guide controls
 python -m role_aware_dashboard_toolkit example starter --format json
 ```
 
-Before launching a dashboard, install the toolkit's `workbench` extra in the
-same environment. It applies the supported Streamlit and server dependency
+Before launching a dashboard, use Python 3.11 or later and install the toolkit's
+`workbench` extra in that environment. Core/API remain usable on Python 3.10.
+The extra applies the supported Streamlit and server dependency
 requirements, including when the core toolkit is already installed. Replace the
 example path with the absolute path to your reviewed toolkit source checkout. In
 PowerShell on Windows:

@@ -1,9 +1,6 @@
 """DashboardConfig defaults that hosts see without configuring them."""
 from __future__ import annotations
 
-from streamlit.testing.v1 import AppTest
-
-
 def _render_minimal_dashboard():
     import role_aware_dashboard_toolkit as radt
 
@@ -16,6 +13,13 @@ def _render_minimal_dashboard():
 
 
 def test_default_icon_does_not_prefix_the_title():
+    try:
+        from streamlit.testing.v1 import AppTest
+    except ModuleNotFoundError as error:
+        if error.name != "streamlit":
+            raise
+        import pytest
+        pytest.skip("Streamlit UI requires the optional workbench extra on Python 3.11+.")
     import role_aware_dashboard_toolkit as radt
 
     assert radt.DashboardConfig(auth_mode="demo").icon == ""

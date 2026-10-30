@@ -69,7 +69,7 @@ def test_pyproject_declares_only_public_runtime_extras_and_dev_tooling():
         *extras["pandas"],
     }
     rendered = str(extras).lower()
-    for forbidden in ("pillow", "repoos", "builder", "harness", "pack-"):
+    for forbidden in ("repoos", "builder", "harness", "pack-"):
         assert forbidden not in rendered
 
 
@@ -82,10 +82,12 @@ def test_host_extras_require_reviewed_dependency_floors_without_changing_core():
         "python-multipart>=0.0.31",
         "h11>=0.16.0",
         "urllib3>=2.8.0",
+        "certifi>=2026.10.19",
     }
     auth_floors = {
-        "streamlit[auth]>=1.65.0",
-        "Authlib>=1.6.11",
+        "streamlit[auth]>=1.66.1",
+        "Pillow>=13.0.0",
+        "Authlib>=1.9.1",
         "cryptography>=50.0.0",
         "joserfc>=1.7.4",
         *server_floors,
@@ -93,7 +95,9 @@ def test_host_extras_require_reviewed_dependency_floors_without_changing_core():
 
     assert project["dependencies"] == []
     assert project["requires-python"] == ">=3.10"
-    assert {"streamlit>=1.65.0", *server_floors} <= set(extras["workbench"])
+    assert {"streamlit>=1.66.1", "Pillow>=13.0.0", *server_floors} <= set(extras["workbench"])
+    for extra in ("api", "pandas"):
+        assert not any(dep.lower().startswith(("streamlit", "pillow")) for dep in extras[extra]), extra
     api_floors = {
         "fastapi>=0.133.0",
         "starlette>=1.3.1",
@@ -106,11 +110,16 @@ def test_host_extras_require_reviewed_dependency_floors_without_changing_core():
     assert set(extras["workbench"]) <= set(extras["dev"])
     assert set(extras["auth"]) <= set(extras["dev"])
     assert set(extras["api"]) <= set(extras["dev"])
+    business_requirements = set(
+        (REPO_ROOT / "examples/business_dashboard/requirements.txt").read_text(encoding="utf-8").splitlines()
+    )
+    assert "certifi>=2026.10.19" in business_requirements
 
 
 def test_dependency_floors_install_from_wheels_at_the_lowest_resolution():
-    # Checked with `uv pip compile --resolution lowest-direct --only-binary :all:`
-    # for Python 3.10-3.14 on Linux, macOS and Windows, then installed and tested.
+    # These floor contracts are not resolver or cross-platform installation proof.
+    # Qualify core/API/pandas on Python 3.10+ and UI/full/dev on Python 3.11+
+    # separately using lowest-direct, wheel-only resolution and actual installs.
     # pandas < 2.2.2 fails to import against numpy 2; fastapi 0.133 needs
     # pydantic 2.7; older pandas and pydantic-core lack 3.13/3.14 wheels.
     extras = _load_pyproject()["project"]["optional-dependencies"]
@@ -156,6 +165,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
     assert "/schemas" not in include
     assert "/portable" not in include
     assert "/snapshot_manifests" not in include
+    assert "/examples/business_dashboard/RECOVERY.md" in include
     assert {
         path
         for path in include
@@ -181,6 +191,13 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/record_workflows/acceptance.py",
         "/examples/landscaping/run.py",
         "/examples/business_dashboard/run.py",
+        "/examples/business_dashboard/recovery.py",
+        "/examples/business_dashboard/business/secret_store.py",
+        "/examples/business_dashboard/business/session_state.py",
+        "/examples/business_dashboard/business/session_routes.py",
+        "/examples/business_dashboard/business/passkeys.py",
+        "/examples/business_dashboard/business/telemetry.py",
+        "/examples/business_dashboard/backup.py",
         "/examples/business_dashboard/hosting/pilot.py",
         "/examples/business_dashboard/business/__init__.py",
         "/examples/business_dashboard/business/db.py",
@@ -192,6 +209,9 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/business_dashboard/business/request_security.py",
         "/examples/business_dashboard/business/app.py",
         "/examples/business_dashboard/business/auth_routes.py",
+        "/examples/business_dashboard/business/idempotency.py",
+        "/examples/business_dashboard/business/message_limits.py",
+        "/examples/business_dashboard/business/password_policy.py",
         "/examples/business_dashboard/business/submission_routes.py",
         "/examples/business_dashboard/business/work_limits.py",
         "/examples/landscaping/hosting/pilot.py",

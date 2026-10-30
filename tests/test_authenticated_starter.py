@@ -62,15 +62,23 @@ def test_installed_auth_guidance_requires_current_host_and_session_acceptance():
     starter_readme = read_starter(authenticated=True)["README.md"]
     requirements = inspect_capabilities()
 
-    assert "Streamlit >=1.65.0" in requirements["authentication_requirements"]["streamlit"]
-    assert "Authlib >=1.6.11" in requirements["authentication_requirements"]["streamlit"]
-    assert requirements["appearance_requirements"]["core_workbench"] == "Streamlit >=1.65.0"
+    assert "Streamlit >=1.66.1" in requirements["authentication_requirements"]["streamlit"]
+    assert "Authlib >=1.9.1" in requirements["authentication_requirements"]["streamlit"]
+    assert requirements["appearance_requirements"]["core_workbench"] == "Streamlit >=1.66.1"
+    assert requirements["appearance_requirements"]["pillow"] == "Pillow >=13.0.0"
+    assert requirements["python_requirements"] == {
+        "core": ">=3.10", "api": ">=3.10", "pandas": ">=3.10",
+        "workbench": ">=3.11", "auth": ">=3.11", "full": ">=3.11", "dev": ">=3.11",
+    }
     for content in (guide, starter_readme):
-        assert "streamlit[auth]>=1.65.0" in content
+        assert "streamlit[auth]>=1.66.1" in content
+        assert "Python 3.11" in content
         assert "without system site packages" in content
         assert "pip check" in content
         assert "1.52.2" not in content
     assert "pip-audit" in guide
+    assert "| Authlib | 1.9.1 |" in guide
+    assert "| certifi | 2026.10.19 |" in guide
     assert "without the initiating browser session" in guide
     assert "consumed authorization code" in guide
     assert "durable protected history of grants" in guide

@@ -117,12 +117,20 @@ def _live(connection, hashed: str, key: bytes):
             or session["created_at"] > now or session["last_seen"] > now
             or session["last_seen"] < session["created_at"]):
         raise HTTPException(401, "Please sign in again.")
+    passkey = connection.execute(
+        "SELECT p.user_id FROM session_passkey s LEFT JOIN passkey_credentials p "
+        "ON p.credential_id=s.credential_id WHERE s.token_hash=?", (hashed,),
+    ).fetchone()
+    verification = connection.execute("SELECT method FROM session_security WHERE token_hash=?", (hashed,)).fetchone()
+    if ((passkey is not None and passkey["user_id"] != user["id"])
+            or (verification and verification["method"] == "passkey" and passkey is None)):
+        raise HTTPException(401, "Please sign in again.")
     if user["role"] == "admin":
         attestation = connection.execute(
             "SELECT 1 FROM session_mfa s JOIN admin_mfa a ON a.user_id=? AND a.generation=s.generation WHERE s.token_hash=?",
             (user["id"], hashed),
         ).fetchone()
-        if attestation is None:
+        if attestation is None and passkey is None:
             raise HTTPException(401, "Please sign in again.")
     identity = Identity(ISSUER, user["id"], expiry)
     if not hmac.compare_digest(user["principal"], principal_id(identity, key)):

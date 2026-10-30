@@ -1,0 +1,2 @@
+# Preserve the checksum-pinned upstream license on Windows checkouts.
+/examples/business_dashboard/business/password_data/DJANGO_LICENSE.txt text eol=lf

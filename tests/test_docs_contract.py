@@ -58,6 +58,8 @@ PUBLIC_ROOT_DOCS = frozenset(
         "examples/landscaping/README.md",
         "examples/business_dashboard/README.md",
         "examples/business_dashboard/HOSTING.md",
+        "examples/business_dashboard/RECOVERY.md",
+        "examples/business_dashboard/SECURITY_LAB.md",
         "examples/landscaping/HOSTING.md",
     }
 )

@@ -7,7 +7,10 @@ and [architecture scope](ARCHITECTURE_SCOPE.md) for the library's boundaries.
 
 ## Development setup
 
-Use Python 3.10 or later. From the repository root:
+Use Python 3.11 or later for the full development environment and UI tests.
+The dependency-free core and the `api` and `pandas` extras retain Python 3.10
+support; the `workbench`, `auth`, `full` and `dev` extras require Python 3.11+.
+From the repository root:
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE = "1"
@@ -61,8 +64,9 @@ resulting behavior, and the verification performed. Follow
 before sharing sensitive findings.
 
 Pull requests automatically run `.github/workflows/contributor-ci.yml`: full
-tests on Linux with Python 3.10–3.14, Windows with Python 3.11 and macOS with
-Python 3.12, lint, coverage, package build/metadata validation, and a Chromium
+non-UI tests on Linux with Python 3.10 (core, API, pandas and fictional business
+examples, with UI skips reported) and full tests with Python 3.11–3.14,
+Windows with Python 3.11 and macOS with Python 3.12, lint, coverage, package build/metadata validation, and a Chromium
 dashboard smoke.
 The browser smoke checks profile restoration, role changes, and frozen
 controls using synthetic local state. It also generates the Project Pulse

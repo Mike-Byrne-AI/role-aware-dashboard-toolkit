@@ -12,7 +12,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from examples.section_access import app as example
 from examples.section_access.policy import (
     build_roles,
     read_section,
@@ -33,7 +32,14 @@ from role_aware_dashboard_toolkit.streamlit_auth import (
     _SIGN_OUT_PENDING,
 )
 
-AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+try:
+    from streamlit.testing.v1 import AppTest
+except ModuleNotFoundError as error:
+    if error.name != "streamlit":
+        raise
+    pytest.skip("Streamlit UI requires the optional workbench extra on Python 3.11+.", allow_module_level=True)
+
+from examples.section_access import app as example  # noqa: E402
 EXPECTED_SECTIONS = {
     "Admin": ("A", "B", "C"),
     "AOnly": ("A",),
