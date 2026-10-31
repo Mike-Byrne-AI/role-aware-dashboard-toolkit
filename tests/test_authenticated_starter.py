@@ -88,7 +88,16 @@ def test_installed_auth_guidance_requires_current_host_and_session_acceptance():
 
 
 @pytest.fixture
-def starter():
+def streamlit_ui():
+    if importlib.util.find_spec("streamlit") is None:
+        pytest.skip("Streamlit UI requires the optional workbench extra on Python 3.11+.")
+    import streamlit
+
+    return streamlit
+
+
+@pytest.fixture
+def starter(streamlit_ui):
     path = Path(__file__).resolve().parents[1] / "role_aware_dashboard_toolkit/resources/authenticated_starter/app.py"
     spec = importlib.util.spec_from_file_location("synthetic_authenticated_starter", path)
     module = importlib.util.module_from_spec(spec)
@@ -237,8 +246,8 @@ def _live_starter(host):
     starter.main()
 
 
-def test_configuration_failure_on_rerun_discards_private_state_without_reloading_resources():
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+def test_configuration_failure_on_rerun_discards_private_state_without_reloading_resources(streamlit_ui):
+    from streamlit.testing.v1 import AppTest
     identity = Identity("synthetic-starter", "configured-account", time.time() + 3600)
     store = InMemoryAccessStore()
     host = SimpleNamespace(calls=[], configuration_error=None)
@@ -271,11 +280,11 @@ def test_configuration_failure_on_rerun_discards_private_state_without_reloading
     assert host.calls == previous_calls + ["resources", "controls"]
 
 
-def test_authorized_signout_failure_stays_denied_through_configuration_outage(monkeypatch):
-    import streamlit as st
+def test_authorized_signout_failure_stays_denied_through_configuration_outage(monkeypatch, streamlit_ui):
+    from streamlit.testing.v1 import AppTest
     from role_aware_dashboard_toolkit import _access_ui, streamlit_auth
 
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+    st = streamlit_ui
     identity = Identity("synthetic-starter", "logout-account", time.time() + 3600)
     store = InMemoryAccessStore()
     host = SimpleNamespace(calls=[], configuration_error=None)
@@ -320,8 +329,8 @@ def test_authorized_signout_failure_stays_denied_through_configuration_outage(mo
     assert [item.value for item in app.error] == ["Dashboard access could not be confirmed."]
 
 
-def test_starter_retains_session_audit_across_reruns_and_replaces_it_on_account_change():
-    AppTest = pytest.importorskip("streamlit.testing.v1").AppTest
+def test_starter_retains_session_audit_across_reruns_and_replaces_it_on_account_change(streamlit_ui):
+    from streamlit.testing.v1 import AppTest
     host = SimpleNamespace(identity=Identity("synthetic-starter", "first-account", time.time() + 3600))
     store = InMemoryAccessStore()
     host.policy = AccessPolicy(lambda: host.identity, store, b"synthetic-starter-audit-test-key-material")
