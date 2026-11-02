@@ -394,6 +394,17 @@ provide durable alerting, visitor identity or measured capacity. Pair rejection
 tests with legitimate-operation controls and check real proxy behavior before
 treating a socket address as a distinct visitor.
 
+## Validate temporary database files during concurrent use
+
+SQLite can delete a rollback journal while another connection checks its file
+metadata. Keep absent optional journal, WAL and shared-memory files distinct
+from missing required databases or keys. Validate file type, ownership and
+permissions before treating a zero-link regular file as removed; symbolic
+links, extra hard links and unsafe access must still stop the operation. Test
+both normal concurrent activity and those refusals.
+See [SQLite journal deletion](https://www.sqlite.org/atomiccommit.html#_deleting_the_rollback_journal)
+and the [Linux stat concurrency contract](https://man7.org/linux/man-pages/man2/stat.2.html).
+
 ## Verify the artifact without repairing it during inspection
 
 Restore a newly produced backup before opening it through a connection that

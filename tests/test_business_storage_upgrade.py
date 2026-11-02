@@ -3,8 +3,10 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
+import stat
 
 import pytest
 
@@ -72,6 +74,99 @@ def test_connect_does_not_ignore_missing_main_database(business, monkeypatch):
 
     monkeypatch.setattr(db, "check_private_file", missing_database)
     with pytest.raises(FileNotFoundError, match="main database missing"):
+        database._connect()
+
+
+def _replace_stat(info, *, mode=None, nlink=None, uid=None):
+    fields = list(info)
+    for index, value in ((0, mode), (3, nlink), (4, uid)):
+        if value is not None:
+            fields[index] = value
+    return os.stat_result(fields)
+
+
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+@pytest.mark.parametrize("readonly", [False, True])
+def test_connect_tolerates_auxiliary_unlinked_during_lstat(business, monkeypatch, suffix, readonly):
+    database = business.app.state.database
+    auxiliary = Path(str(database.path) + suffix)
+    db.create_private_file(auxiliary, b"")
+    unlinked_info = _replace_stat(auxiliary.lstat(), nlink=0)
+    lstat = Path.lstat
+    observed = []
+
+    def unlinked_after_lookup(path, *args, **kwargs):
+        if path == auxiliary and not observed:
+            # Linux can resolve the inode before unlink, then read its metadata
+            # afterward. Model that result without depending on thread timing.
+            auxiliary.unlink()
+            observed.append(path)
+            return unlinked_info
+        return lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", unlinked_after_lookup)
+    connection = database._connect(readonly=readonly)
+    try:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        connection.close()
+    assert observed == [auxiliary]
+
+
+@pytest.mark.parametrize("damage", [
+    "symlink", "fifo", "directory", "extra-link",
+    pytest.param("public-mode", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX private mode check")),
+    pytest.param("other-owner", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX ownership check")),
+])
+def test_connect_rejects_unsafe_auxiliary_metadata_even_with_zero_links(business, monkeypatch, damage):
+    database = business.app.state.database
+    auxiliary = Path(str(database.path) + "-journal")
+    db.create_private_file(auxiliary, b"")
+    info = auxiliary.lstat()
+    modes = {"symlink": stat.S_IFLNK, "fifo": stat.S_IFIFO, "directory": stat.S_IFDIR}
+    metadata = _replace_stat(
+        info, nlink=2 if damage == "extra-link" else 0,
+        mode=(modes[damage] | 0o600) if damage in modes else
+             (stat.S_IFREG | 0o644) if damage == "public-mode" else None,
+        uid=info.st_uid + 1 if damage == "other-owner" else None,
+    )
+    lstat = Path.lstat
+
+    def unsafe_metadata(path, *args, **kwargs):
+        return metadata if path == auxiliary else lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", unsafe_metadata)
+    with pytest.raises(ValueError, match="Runtime files must"):
+        database._connect()
+
+
+def test_zero_link_required_database_is_refused_before_sqlite_open(business, monkeypatch):
+    database = business.app.state.database
+    metadata = _replace_stat(database.path.lstat(), nlink=0)
+    lstat = Path.lstat
+
+    def unlinked_database(path, *args, **kwargs):
+        return metadata if path == database.path else lstat(path, *args, **kwargs)
+
+    def forbidden_open(*args, **kwargs):
+        pytest.fail("Missing required database reached SQLite")
+
+    monkeypatch.setattr(Path, "lstat", unlinked_database)
+    monkeypatch.setattr(db.sqlite3, "connect", forbidden_open)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        database._connect()
+    # Other mandatory file callers use the same strict helper.
+    with pytest.raises((ValueError, FileNotFoundError)):
+        db.check_private_file(database.path)
+
+
+def test_connect_rejects_a_real_hardlinked_auxiliary(business):
+    database = business.app.state.database
+    target = database.directory / "disposable-sidecar-target"
+    auxiliary = Path(str(database.path) + "-journal")
+    db.create_private_file(target, b"")
+    auxiliary.hardlink_to(target)
+    with pytest.raises(ValueError, match="without links"):
         database._connect()
 
 

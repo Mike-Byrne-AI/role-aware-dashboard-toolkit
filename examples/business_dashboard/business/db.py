@@ -272,10 +272,14 @@ def validate_data_dir(value: str | Path, *, create: bool = False) -> Path:
 
 def check_private_file(path: Path) -> None:
     info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink not in (0, 1):
         raise ValueError("Runtime files must be regular files without links.")
     if os.name == "posix" and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077):
         raise ValueError("Runtime files must be owned by this user with mode 0600.")
+    if info.st_nlink == 0:
+        # Linux may resolve an inode, then observe its metadata after unlink.
+        # Required files still fail; only optional SQLite sidecars catch this.
+        raise FileNotFoundError("Runtime file was removed during validation.")
 
 
 def create_private_file(path: Path, content: bytes) -> None:
