@@ -208,7 +208,10 @@ def run_demo(*, root=None):
     failure = None
     try:
         with tempfile.TemporaryDirectory(prefix="radt-security-demo-") as temporary:
-            directory = Path(temporary)
+            # Canonicalize only this newly created, runner-owned directory.
+            # macOS temp roots can include the system /var -> /private/var alias;
+            # private-storage validators still reject operator-supplied redirects.
+            directory = Path(temporary).resolve(strict=True)
             for scenario in (session_revocation, stale_editor, recovery_authority):
                 trial = directory / scenario.__name__
                 trial.mkdir(mode=0o700)

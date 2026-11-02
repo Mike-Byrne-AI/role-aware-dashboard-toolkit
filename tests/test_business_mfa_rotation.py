@@ -10,11 +10,12 @@ import sys
 
 import pytest
 
+from role_aware_dashboard_toolkit.access_store import AccessStoreError
 from tests.test_business_dashboard import (
     ORIGIN, pyotp, business as business, business_admin as business_admin, business_seed as business_seed,
 )
 from tests.test_business_backup import backup
-from business.db import Database, create_private_file
+from business.db import Database, RuntimeKeyError, create_private_file
 from business.mfa import enroll_in_transaction
 from business.secret_store import SecretStore, default_key_path
 from business.app import create_app
@@ -51,6 +52,19 @@ def _two_enrollments(business):
         enroll_in_transaction(connection, business.directory, business.app.state.database.mfa_secrets)
 
 
+@pytest.mark.parametrize("message", [
+    "MFA encryption key binding is missing; preserve existing state.",
+    "MFA ciphertext or encryption key is invalid; preserve existing state.",
+])
+def test_runtime_key_error_preserves_diagnostic_and_both_catch_contracts(message):
+    for error_type in (ValueError, AccessStoreError):
+        with pytest.raises(error_type) as captured:
+            raise RuntimeKeyError(message)
+        assert type(captured.value) is RuntimeKeyError
+        assert captured.value.args == (message,)
+        assert str(captured.value) == message
+
+
 @pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
 def test_rotation_preserves_identity_authority_replay_state_and_original_key(business, business_admin, journal_mode):
     _two_enrollments(business)
@@ -82,7 +96,7 @@ def test_rotation_preserves_identity_authority_replay_state_and_original_key(bus
     # Existing process objects must also fail on their next protected/read-only
     # transaction; startup-only checks would miss the cached old-key worker.
     for transaction in (business.app.state.database.transaction, business.app.state.database.readonly_snapshot):
-        with pytest.raises(ValueError, match="ciphertext|encryption key"):
+        with pytest.raises(RuntimeKeyError, match="ciphertext|encryption key"):
             with transaction():
                 pytest.fail("A stale-key worker entered a transaction after cutover")
     for method, path, options in (
@@ -91,6 +105,7 @@ def test_rotation_preserves_identity_authority_replay_state_and_original_key(bus
     ):
         response = business_admin.request(method, path, **options)
         assert response.status_code == 503
+        assert response.json() == {"detail": "Access storage is unavailable."}
         assert str(business.directory) not in response.text and "Traceback" not in response.text
     assert all(_rows(business, table) == value for table, value in unchanged.items())
     assert _rows(business, "activity")[-1][2] == "Rotated MFA encryption key"

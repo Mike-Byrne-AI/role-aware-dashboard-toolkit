@@ -1,9 +1,12 @@
 """Security demonstrations execute their negative and positive controls."""
 
+from contextlib import contextmanager
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +38,33 @@ def test_three_real_scenarios_pass_using_only_disposable_data(source, monkeypatc
     assert len(result["checks"]) == 14
     assert all(row["status"] == "passed" for row in result["checks"])
     assert "must-never-read" not in json.dumps(result)
+
+
+def test_owned_temporary_paths_are_canonical_before_private_storage(source, monkeypatch):
+    temporary_directory = demo.tempfile.TemporaryDirectory
+    fixture = demo._fixture
+    checked = []
+
+    @contextmanager
+    def noncanonical_temporary(**kwargs):
+        with temporary_directory(**kwargs) as temporary:
+            marker = Path(temporary).resolve(strict=True) / "normalization-probe"
+            marker.mkdir()
+            yield str(marker / "..")
+
+    def canonical_fixture(directory):
+        # Private-storage checks reject redirected ancestors. The runner must
+        # resolve its own newly created temp root before crossing that boundary.
+        assert directory == directory.resolve()
+        checked.append(directory)
+        return fixture(directory)
+
+    monkeypatch.setattr(demo, "tempfile", SimpleNamespace(TemporaryDirectory=noncanonical_temporary))
+    monkeypatch.setattr(demo, "_fixture", canonical_fixture)
+    result = demo.run_demo(root=source)
+    assert result["status"] == "passed", result["error"]
+    assert len(checked) == 2
+    assert all(row["status"] == "passed" for row in result["checks"])
 
 
 def test_fake_revocation_success_is_detected_and_remaining_scenarios_not_claimed(source, monkeypatch):

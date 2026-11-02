@@ -17,6 +17,11 @@ SOURCE_ROOTS = {Path(__file__).absolute().parents[3], Path(__file__).resolve().p
 class RuntimeKeyError(ValueError, AccessStoreError):
     """A previously opened worker can no longer prove current key custody."""
 
+    def __init__(self, message: str) -> None:
+        # AccessStoreError's initializer takes no message. Initialize the shared
+        # exception base explicitly so both catch contracts work on every Python.
+        Exception.__init__(self, message)
+
 
 SCHEMA_V1 = """
 CREATE TABLE users (

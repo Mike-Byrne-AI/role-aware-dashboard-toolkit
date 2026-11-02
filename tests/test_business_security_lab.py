@@ -17,7 +17,7 @@ from business.secret_store import default_key_path
 @pytest.fixture
 def receipt(monkeypatch):
     with tempfile.TemporaryDirectory(prefix="radt-lab-receipt-") as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve(strict=True)
         (root / "pyproject.toml").write_text("# synthetic receipt validation fixture\n")
         value = evidence.new_receipt("scenarios", evidence.CHECKS, root=root)
         for check in value["checks"]:
@@ -68,6 +68,21 @@ def test_receipt_public_projection_has_exact_safe_schema_and_explicit_scope(busi
     assert "Operator-supplied" in data["evidence"]["message"]
     assert str(path) not in response.text
     assert data["hosted_acceptance"]["status"] == "not_verified_here"
+
+
+@pytest.mark.parametrize("attribute", ["is_symlink", "is_junction"])
+@pytest.mark.parametrize("location", ["file", "parent"])
+def test_configured_redirected_receipts_are_rejected_before_reading(receipt, monkeypatch, attribute, location):
+    path, value = receipt
+    assert security_lab._read_evidence(str(path), value["source"])["status"] == "passed"
+    redirected = path if location == "file" else path.parent
+    original = getattr(type(path), attribute, lambda _path: False)
+    monkeypatch.setattr(type(path), attribute, lambda item: item == redirected or original(item), raising=False)
+    monkeypatch.setattr(security_lab, "load_receipt", lambda _path: pytest.fail("Redirected evidence was opened."))
+    result = security_lab._read_evidence(str(path), value["source"])
+    assert result["status"] == "unavailable"
+    assert result["receipt"] is None
+    assert str(path) not in json.dumps(result)
 
 
 def test_changed_source_marks_even_passing_receipt_stale(business, receipt, monkeypatch):
