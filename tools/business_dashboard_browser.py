@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from contextlib import closing
 from datetime import datetime, timedelta
 import json
+import hashlib
 import logging
+import os
 from pathlib import Path
 import socket
 import sqlite3
@@ -47,6 +50,46 @@ def prepare_fixture(data_dir, public_origin):
     credentials = provision(data_dir, mfa_key_file=key)
     application = create_app(data_dir, public_origin=public_origin, mfa_key_file=key)
     return credentials, application
+
+
+class LabFixture:
+    """Runner-owned app switch; no HTTP endpoint can change its target."""
+
+    def __init__(self, data_dir, public_origin, output):
+        from business.app import create_app
+        from business.secret_store import default_key_path
+        from business.evidence import write_receipt
+        from tools.business_security_demo import run_demo
+
+        self.path = data_dir.parent / "lab-receipt.json"
+        previous = os.environ.pop("BUSINESS_SECURITY_EVIDENCE_FILE", None)
+        try:
+            self.receipt = run_demo()
+            write_receipt(output / "scenario-receipt.json", self.receipt)
+            assert self.receipt["status"] == "passed", "Disposable scenarios did not pass; preserve their receipt"
+            self.credentials, self.application = prepare_fixture(data_dir, public_origin)
+            self.absent = self.application
+            os.environ["BUSINESS_SECURITY_EVIDENCE_FILE"] = str(self.path)
+            self.configured = create_app(data_dir, public_origin=public_origin, mfa_key_file=default_key_path(data_dir))
+        finally:
+            if previous is None:
+                os.environ.pop("BUSINESS_SECURITY_EVIDENCE_FILE", None)
+            else:
+                os.environ["BUSINESS_SECURITY_EVIDENCE_FILE"] = previous
+
+    async def __call__(self, scope, receive, send):
+        await self.application(scope, receive, send)
+
+    def select_evidence(self):
+        from business.evidence import write_receipt
+
+        write_receipt(self.path, self.receipt)
+        self.application = self.configured
+
+    def replace_test_receipt(self, value):
+        # This is a runner-owned temporary input, never the retained original
+        # genuine scenario receipt. Replacement preserves private file mode.
+        self.path.write_text(json.dumps(value), encoding="utf-8")
 
 
 def synthetic_admin_enrollment(data_dir):
@@ -581,7 +624,9 @@ def exercise_pending_saves(browser, output, checks, *, static_dir=None):
     def intercept(route):
         path = urlsplit(route.request.url).path
         assets = {"/": ("index.html", "text/html"), "/static/app.js": ("app.js", "application/javascript"),
-                  "/static/styles.css": ("styles.css", "text/css")}
+                  "/static/styles.css": ("styles.css", "text/css"),
+                  "/static/security-lab.js": ("security-lab.js", "application/javascript"),
+                  "/static/security-lab.css": ("security-lab.css", "text/css")}
         if not route.request.url.startswith(origin + "/"):
             route.abort()
             return
@@ -765,7 +810,9 @@ def exercise_admin_tools(browser, output, checks):
         requests.append((route.request.method, path))
         assets = {"/": ("index.html", "text/html"), "/board": ("index.html", "text/html"),
                   "/static/app.js": ("app.js", "application/javascript"),
-                  "/static/styles.css": ("styles.css", "text/css")}
+                  "/static/styles.css": ("styles.css", "text/css"),
+                  "/static/security-lab.js": ("security-lab.js", "application/javascript"),
+                  "/static/security-lab.css": ("security-lab.css", "text/css")}
         if not route.request.url.startswith(origin + "/"):
             unexpected.append("external request")
             route.abort()
@@ -1906,12 +1953,126 @@ def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
         context.close()
 
 
-def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_only=False, save_only=False, admin_tools_only=False, password_faults_only=False, safe_saves_only=False, security_only=False, passkeys_only=False):
+def exercise_lab(browser, url, output, credentials, checks, data_dir, fixture):
+    """Read-only real UI checks; input corruption is confined to owned fixtures."""
+    import pyotp
+    from playwright.sync_api import expect
+
+    with browser.new_context(viewport={"width": 1440, "height": 1050}) as guest:
+        page = guest.new_page()
+        page.set_default_timeout(10000)
+        observed, errors = [], []
+        page.on("request", lambda request: observed.append((request.method, urlsplit(request.url).path)))
+        page.on("pageerror", lambda error: errors.append(type(error).__name__))
+        page.goto(url)
+        page.get_by_role("link", name="Explore the security lab", exact=True).click()
+        expect(page.get_by_role("heading", name="Security, with the evidence.", exact=True)).to_be_visible()
+        expect(page.locator(".lab-scene")).to_have_count(3)
+        for title in ("Revoke access mid-session", "Let two editors race", "Restore data, preserve revocation"):
+            expect(page.get_by_role("heading", name=title, exact=True)).to_be_visible()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Not run")
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_have_count(0)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        checks.append("the public security lab opens from sign-in, shows three scoped scenarios and claims no result when no evidence is configured")
+
+        fixture.select_evidence()
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Passed locally")
+        expect(page.locator(".lab-checks li")).to_have_count(14)
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Passed locally"}
+        detail = page.locator(".lab-scene details").first
+        detail.locator("summary").focus()
+        page.keyboard.press("Enter")
+        expect(detail).to_have_attribute("open", "")
+        expect(detail.locator("p")).to_be_visible()
+        page.screenshot(path=str(output / "lab-evidence-desktop.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Security lab overflows mobile viewport"
+        page.screenshot(path=str(output / "lab-evidence-mobile.png"), full_page=True)
+        checks.append("a genuine completed disposable scenario receipt renders fourteen checks on desktop and 390-pixel mobile; scenario reasoning opens with the keyboard")
+
+        # A deliberately altered copy tests stale-source presentation only.
+        # The real scenario receipt retained above is never rewritten.
+        stale = deepcopy(fixture.receipt)
+        stale["source"]["sha256"] = "0" * 64
+        stale.pop("sha256")
+        stale["sha256"] = hashlib.sha256(json.dumps(stale, sort_keys=True, separators=(",", ":"),
+                                                   ensure_ascii=True).encode("ascii")).hexdigest()
+        fixture.replace_test_receipt(stale)
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Source changed")
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Source changed"}
+        checks.append("an altered source identity is visibly stale rather than presented as current proof")
+
+        invalidated = deepcopy(fixture.receipt)
+        invalidated.update(status="failed", source_unchanged=False,
+                           error={"type": "SourceChanged", "code": "source_changed"})
+        invalidated.pop("sha256")
+        invalidated["sha256"] = hashlib.sha256(json.dumps(invalidated, sort_keys=True, separators=(",", ":"),
+                                                         ensure_ascii=True).encode("ascii")).hexdigest()
+        fixture.replace_test_receipt(invalidated)
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Source changed")
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Source changed"}
+        checks.append("a run invalidated by source changes keeps all scenario cards stale even when the original source hash returns")
+
+        canary = "synthetic-lab-secret-canary-never-public"
+        fixture.replace_test_receipt({"password": canary})
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Evidence unavailable")
+        assert canary not in page.content()
+        assert canary not in guest.request.get(url + "/api/security-lab").text()
+        assert all(method == "GET" for method, _path in observed), "Public lab issued a mutation"
+        assert not any(path.startswith("/api/admin/") for _method, path in observed), "Public lab requested private administrator data"
+        assert not errors, "Public lab produced browser errors"
+        checks.append("invalid secret-bearing input is withheld; the guest lab only sends reads and never fetches the private security timeline")
+        assert guest.request.get(url + "/api/admin/security/events").status == 401
+        fixture.replace_test_receipt(fixture.receipt)
+
+    with browser.new_context(viewport={"width": 1440, "height": 1050}) as admin_context:
+        page = admin_context.new_page()
+        page.set_default_timeout(10000)
+        page.goto(url)
+        page.get_by_label("Username", exact=True).fill("admin")
+        page.get_by_label("Password", exact=True).fill(credentials["admin"])
+        secret, last_counter = synthetic_admin_enrollment(data_dir)
+        assert last_counter < int(time.time() // 30), "Disposable admin code was already consumed"
+        page.get_by_label("Authenticator code", exact=True).fill(pyotp.TOTP(secret).now())
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Security lab", exact=True).click()
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_be_visible()
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/api/admin/security/events") as response:
+            page.get_by_role("button", name="Load timeline", exact=True).click()
+        assert response.value.status == 200
+        expect(page.locator(".lab-event-list li").first).to_be_visible()
+        assert page.locator(".lab-event-list li").count() > 0
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(path=str(output / "lab-admin-timeline.png"), full_page=True)
+        checks.append("an authenticated administrator explicitly loads persisted security events through the read-only timeline")
+
+    with browser.new_context(viewport={"width": 390, "height": 844}) as employee:
+        response = employee.request.post(url + "/api/login", data={"username": "alex", "password": credentials["alex"]},
+                                         headers={"Origin": url})
+        assert response.status == 200
+        page = employee.new_page()
+        page.goto(url + "/security-lab")
+        expect(page.get_by_role("heading", name="Security, with the evidence.", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_have_count(0)
+        assert employee.request.get(url + "/api/admin/security/events").status == 403
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        checks.append("employees can inspect public evidence but cannot read administrator security events; unauthenticated requests are also rejected")
+
+
+def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_only=False, save_only=False, admin_tools_only=False, password_faults_only=False, safe_saves_only=False, security_only=False, passkeys_only=False, evidence_runtime=None, lab_fixture=None):
     import pyotp
     from playwright.sync_api import expect, sync_playwright
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, channel=channel)
+        if evidence_runtime is not None:
+            name = "chrome" if channel and channel.startswith("chrome") else "msedge" if channel and channel.startswith("msedge") else "chromium"
+            evidence_runtime.update(name=name, version=browser.version)
         context = browser.new_context(viewport={"width": 1440, "height": 1050})
         context.set_default_timeout(10000)
         page = context.new_page()
@@ -1954,6 +2115,9 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
 
         try:
+            if lab_fixture is not None:
+                exercise_lab(browser, url, output, credentials, checks, data_dir, lab_fixture)
+                return
             if passkeys_only:
                 exercise_passkeys(browser, url, output, credentials, checks, data_dir)
                 return
@@ -2244,6 +2408,7 @@ def main(argv=None):
     focused.add_argument("--safe-saves-only", action="store_true", help="Run only real create retry, posting-limit and password-policy browser checks.")
     focused.add_argument("--security-only", action="store_true", help="Run real local session revocation, fresh verification and draft-preservation checks.")
     focused.add_argument("--passkeys-only", action="store_true", help="Run real local WebAuthn with a disposable Chrome virtual authenticator.")
+    focused.add_argument("--lab-only", action="store_true", help="Run disposable scenarios and inspect the public evidence lab and protected timeline in a real browser.")
     options = parser.parse_args(argv)
     output = options.output_dir.resolve()
     if output == ROOT or ROOT in output.parents:
@@ -2255,10 +2420,16 @@ def main(argv=None):
     sys.path.insert(0, str(EXAMPLE))
     import role_aware_dashboard_toolkit as toolkit
     import uvicorn
+    from business.evidence import finish_browser_receipt, new_receipt, write_receipt
 
     assert Path(toolkit.__file__).resolve().parent == ROOT / "role_aware_dashboard_toolkit", "Expected this checkout's toolkit"
     checks = []
     result = {"passed": False, "checks": checks}
+    mode = next((name for name in ("challenge", "save", "admin_tools", "password_faults", "safe_saves", "security", "passkeys", "lab")
+                 if getattr(options, name + "_only")), "browser")
+    receipt = new_receipt(mode, ())
+    evidence_runtime = {}
+    failure = None
     try:
         with tempfile.TemporaryDirectory(prefix="radt-business-browser-") as temporary:
             data = Path(temporary).resolve() / "private"
@@ -2266,7 +2437,11 @@ def main(argv=None):
                 reservation.bind(("127.0.0.1", 0))
                 port = reservation.getsockname()[1]
             url = f"http://{'localhost' if options.passkeys_only else '127.0.0.1'}:{port}"
-            credentials, application = prepare_fixture(data, url)
+            lab_fixture = LabFixture(data, url, output) if options.lab_only else None
+            if lab_fixture is None:
+                credentials, application = prepare_fixture(data, url)
+            else:
+                credentials, application = lab_fixture.credentials, lab_fixture
             log = logging.FileHandler(output / "server.log", encoding="utf-8")
             logger = logging.getLogger("uvicorn")
             logger.addHandler(log)
@@ -2298,7 +2473,7 @@ def main(argv=None):
                              challenge_only=options.challenge_only, save_only=options.save_only,
                              admin_tools_only=options.admin_tools_only, password_faults_only=options.password_faults_only,
                              safe_saves_only=options.safe_saves_only, security_only=options.security_only,
-                             passkeys_only=options.passkeys_only)
+                             passkeys_only=options.passkeys_only, evidence_runtime=evidence_runtime, lab_fixture=lab_fixture)
                 finally:
                     server.should_exit = True
                     worker.join(timeout=15)
@@ -2308,7 +2483,8 @@ def main(argv=None):
                 logger.removeHandler(log)
                 log.close()
             result["passed"] = True
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
+        failure = error
         result["error_type"] = type(error).__name__
         result["error_frames"] = [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
                                   for frame in traceback.extract_tb(error.__traceback__)]
@@ -2320,6 +2496,14 @@ def main(argv=None):
         # Playwright call logs can contain filled passwords; never serialize them.
         print(f"Business browser check failed ({type(error).__name__}); inspect screenshots and server.log.", file=sys.stderr)
     finally:
+        receipt = finish_browser_receipt(receipt, len(checks), completed=result["passed"],
+                                         error=failure, browser=evidence_runtime or None)
+        result["passed"] = receipt["status"] == "passed"
+        if receipt["error"] is not None:
+            result["receipt_error"] = receipt["error"]["code"]
+        # The separate public receipt contains no free-text checks, paths or
+        # exception frames. The existing diagnostic summary stays local.
+        write_receipt(output / "receipt.json", receipt)
         (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"Business browser checks: {len(checks)} passed; evidence: {output}")
     return 0 if result["passed"] else 1

@@ -61,8 +61,11 @@ core APIs: dashboard configuration, controls, security, access policy,
 
 Core modules must not import application integrations. Optional adapters may
 depend on the core, never the reverse. The FastAPI adapter has its own API-key
-and role configuration; it does not automatically use Streamlit login or
-`AccessPolicy`.
+and role configuration. Opt-in `APIAuthentication` binds a host-verified request
+identity to `AccessPolicy`; it does not automatically use Streamlit login.
+The supported tenant boundary is one organization per separately configured app,
+access store/key, profile store, audit log and state backend. Request headers
+cannot switch that boundary. Shared-schema row-level tenancy is not provided.
 
 ## Public API policy
 
@@ -92,6 +95,14 @@ transactions coordinate access updates across processes and reject stale freeze
 revisions. It supports one application on one host with local disk storage.
 These transactions do not extend to other dashboard records or host side effects.
 No built-in store provides distributed locking or multi-region coordination.
+
+`SQLiteStateStore` adds a separate revisioned JSON state backend for public live
+control values. Explicit API `state_store=` configuration reads current values
+per request and requires `If-Match` on control updates and profile activation.
+The same stale revision cannot commit twice. API endpoints serialize operations
+within an app; SQLite CAS coordinates live values across local processes. Shared
+file profiles still require one writer process, and audit persistence remains
+separate. State commits cannot atomically revoke grants or roll back host effects.
 
 ## Protocol boundary
 

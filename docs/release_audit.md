@@ -3,7 +3,7 @@
 - Version: `0.2.0rc1`
 - Distribution strategy: `single-package-optional-extras`
 - Artifacts: `api`, `auth`, `core`, `full`, `pandas`, `workbench`
-- Public API families: `app-shell`, `authenticated-access`, `controls-and-security`, `installed-guidance`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`
+- Public API families: `app-shell`, `authenticated-access`, `controls-and-security`, `installed-guidance`, `live-state`, `operator-records`, `optional-api`, `packets`, `profiles-and-audit`, `release-tooling`, `runbook-and-snapshots`, `runtime-and-observability`, `validation-and-protocol`
 - Root exports: `59` / `60`
 - Stable root exports: `59`
 - Undocumented root exports: `0`

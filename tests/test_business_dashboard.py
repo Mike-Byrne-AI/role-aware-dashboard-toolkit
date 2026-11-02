@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -91,6 +91,22 @@ class Trial:
     def db(self):
         return self.app.state.database.transaction()
 
+    @contextmanager
+    def raw_db(self):
+        # Test-only raw inspection/setup also supports deliberately corrupt or
+        # downgraded fixtures. Requests use Database.transaction's live guards.
+        connection = self.app.state.database._connect()
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
 
 @pytest.fixture(scope="session")
 def business_seed():
@@ -144,8 +160,8 @@ def saved(response, key):
     return response.json()[key]
 
 
-def business_rows(trial):
-    with trial.db() as connection:
+def business_rows(trial, *, raw=False):
+    with (trial.raw_db() if raw else trial.db()) as connection:
         return tuple(tuple(tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1"))
                      for table in ("events", "assignments", "messages", "contacts", "posts", "activity"))
 
@@ -723,6 +739,8 @@ def test_concurrent_reviews_publish_one_post(business, business_admin):
 
 def as_legacy_database(business):
     with business.db() as connection:
+        for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
+            connection.execute(f"DROP TABLE {table}")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -741,19 +759,19 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
     saved(business_admin.request("POST", "/api/messages", json={"body": "Preserved legacy message"}), "message")
     employee = business.login("alex")
     as_legacy_database(business)
-    before = business_rows(business)
+    before = business_rows(business, raw=True)
     identity = (business.directory / "identity.key").read_bytes()
     accounts = (business.directory / "ACCOUNTS.md").read_bytes()
-    with business.db() as connection:
+    with business.raw_db() as connection:
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
         sessions_before = [tuple(row) for row in connection.execute("SELECT * FROM sessions WHERE user_id<>'admin' ORDER BY token_hash")]
     with pytest.raises(ValueError, match="explicit"):
         create_app(business.directory, public_origin=ORIGIN)
     Database(business.directory, migrate=True)
     migrated = create_app(business.directory, public_origin=ORIGIN)
-    assert business_rows(business) == before
-    with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert business_rows(business, raw=True) == before
+    with business.raw_db() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == sessions_before
     assert (business.directory / "identity.key").read_bytes() == identity
@@ -769,7 +787,7 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
 def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl(business, damage):
     from business.db import Database
     as_legacy_database(business)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         if damage == "missing-old-table":
             connection.execute("DROP TABLE contacts")
         else:
@@ -779,7 +797,7 @@ def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
     with pytest.raises(ValueError):
         Database(business.directory, migrate=True)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
@@ -791,8 +809,8 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
     from business import db
 
     as_legacy_database(business)
-    before = business_rows(business)
-    with business.db() as connection:
+    before = business_rows(business, raw=True)
+    with business.raw_db() as connection:
         schema_before = [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")]
     apply = db._apply_submission_migration
 
@@ -803,14 +821,14 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
     monkeypatch.setattr(db, "_apply_submission_migration", fail_after_ddl)
     with pytest.raises(ValueError):
         db.Database(business.directory, migrate=True)
-    assert business_rows(business) == before
-    with business.db() as connection:
+    assert business_rows(business, raw=True) == before
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
     monkeypatch.setattr(db, "_apply_submission_migration", apply)
     db.Database(business.directory, migrate=True)
-    with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    with business.raw_db() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 @pytest.mark.parametrize("condition", ["paused", "address-limit", "global-limit", "queue-full"])

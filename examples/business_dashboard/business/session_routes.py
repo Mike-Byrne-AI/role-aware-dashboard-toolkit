@@ -11,6 +11,7 @@ from .models import Empty, Reauthentication
 from .security import COOKIE_NAME, IDLE_SECONDS, SESSION_SECONDS, _live, token_hash, verify_password
 from .session_state import current_time, record_verification, require_recent, verification_expiry
 from .work_limits import BoundedWork
+from .security_events import record_event
 
 
 def install_session_routes(app, database, authorized):
@@ -79,6 +80,7 @@ def install_session_routes(app, database, authorized):
             record_verification(connection, hashed, now, method)
             _release_success(connection, key, reserved)
             record_activity(connection, auth.user["name"], "Verified identity", "Own session")
+            record_event(connection, "identity_verified", actor=auth.user["principal"], method=method)
             result = {"ok": True, "verification_expires_at": verification_expiry(connection, hashed)}
         metrics.record("reauth_succeeded")
         return result
@@ -104,5 +106,6 @@ def install_session_routes(app, database, authorized):
                 require_recent(connection, hashed)
             connection.execute("DELETE FROM sessions WHERE token_hash=?", (target["token_hash"],))
             record_activity(connection, auth.user["name"], "Revoked session", "Own current session" if own else "Own other session")
+            record_event(connection, "session_revoked", actor=auth.user["principal"])
             # Do not clear cookies in a delayed response: a newer login wins.
             return {"ok": True, "current_session_revoked": own}

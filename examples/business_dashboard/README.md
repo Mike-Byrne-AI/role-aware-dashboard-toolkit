@@ -189,7 +189,8 @@ policy rejections keep the current session and do not charge a failed guess
 when the current password was correct.
 
 Schema four added private receipts for safe create retries. Schema five adds
-independently keyed MFA encryption and session verification state. Version-three
+independently keyed MFA encryption and session verification state. Schema six
+adds structured security events and a durable local delivery outbox. Version-three
 upgrades preserve accounts, passwords, sessions, MFA, quotas and business records.
 Version-one and version-two upgrades also revoke old administrator sessions
 because those sessions did not establish MFA. All upgrade steps share one
@@ -203,9 +204,11 @@ writes, and rehearse on a protected copy before upgrading existing hosted data:
 
 Replace the example path with the existing private directory. This command
 validates and upgrades existing storage, prints no credentials, and opens no
-listener. Create the independent MFA encryption key first with
-`--create-mfa-key`; use the same data and key paths for migration. Local startup
-and hosted preflight require schema five and never migrate automatically.
+listener. For pre-five storage without an encryption key, explicitly create the
+independent MFA key first with `--create-mfa-key`. For an existing schema-five
+workspace, preserve its original MFA key. Use the same data and key paths for
+migration. Local startup and hosted preflight require schema six and never
+migrate automatically.
 Do not reprovision.
 Existing account login budgets retain their original namespace.
 Enroll missing administrator authenticators once, using the same private store:

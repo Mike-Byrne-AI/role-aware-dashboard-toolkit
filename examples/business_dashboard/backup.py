@@ -23,14 +23,14 @@ import tempfile
 import time
 
 from business.db import (
-    Database, _require_schema, check_private_file, create_private_file,
+    Database, _apply_event_migration, _require_schema, check_private_file, create_private_file,
     record_activity, utc_now, validate_data_dir,
 )
 from business.secret_store import SecretStore
 from business.security import TransactionAccessStore, principal_for_user
 from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 FILES = ("business.sqlite3", "identity.key")
 QUARANTINE = "RESTORE_QUARANTINE"
 MAX_MANIFEST_BYTES = 16384
@@ -84,12 +84,12 @@ def _connect(path, *, readonly=True):
     return connection
 
 
-def _validate(connection, identity, secrets):
-    if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
+    if schema_version not in (5, SCHEMA_VERSION) or connection.execute("PRAGMA user_version").fetchone()[0] != schema_version:
         raise BackupError("Only reviewed current-schema storage can be backed up or restored.")
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         raise BackupError("The database failed its integrity check.")
-    _require_schema(connection, SCHEMA_VERSION)
+    _require_schema(connection, schema_version)
     users = connection.execute("SELECT id,principal FROM users").fetchall()
     if not users or any(row["principal"] != principal_for_user(row["id"], identity) for row in users):
         raise BackupError("The database and original identity key do not match.")
@@ -138,7 +138,7 @@ def create_backup(data_dir, output, *, mfa_key_file=None):
     return manifest
 
 
-def _bundle(directory):
+def _bundle(directory, *, upgrade_backup_schema=False):
     directory = _directory(directory)
     if {path.name for path in directory.iterdir()} != {*FILES, "manifest.json"}:
         raise BackupError("Backup is incomplete or contains unexpected files.")
@@ -152,8 +152,10 @@ def _bundle(directory):
         manifest = json.loads(content)
     except (ValueError, UnicodeError, RecursionError):
         raise BackupError("Backup manifest is invalid.") from None
+    allowed_schemas = {5, SCHEMA_VERSION} if upgrade_backup_schema else {SCHEMA_VERSION}
     if (not isinstance(manifest, dict) or manifest.get("format") != "westbridge-backup-v1"
-            or manifest.get("schema") != SCHEMA_VERSION or manifest.get("encrypted") is not False
+            or type(manifest.get("schema")) is not int or manifest["schema"] not in allowed_schemas
+            or manifest.get("encrypted") is not False
             or manifest.get("external_mfa_key_included") is not False
             or not isinstance(manifest.get("files"), dict) or set(manifest["files"]) != set(FILES)):
         raise BackupError("Backup manifest is unsupported.")
@@ -189,19 +191,32 @@ def _reconcile(destination, current, identity, secrets):
         destination.execute(f"UPDATE users SET {fields} WHERE id=?", tuple(row)[1:] + (row["id"],))
     for table in ("admin_mfa", "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits"):
         _replace_rows(destination, current, table)
+    # Security evidence and delivery acknowledgements belong to the current
+    # security source, not the historical business snapshot. Preserve them
+    # together so restore cannot resurrect an old delivery obligation.
+    for table in ("security_sink_receipts", "security_outbox", "security_events", "security_denial_budget"):
+        destination.execute(f"DELETE FROM {table}")
+    for table in ("security_events", "security_outbox", "security_sink_receipts", "security_denial_budget"):
+        _replace_rows(destination, current, table)
     revision = current.execute("SELECT freeze_revision FROM settings WHERE id=1").fetchone()[0]
     destination.execute("UPDATE settings SET frozen=1,freeze_revision=?,changed_by=NULL WHERE id=1", (revision + 1,))
 
 
-def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=None, security_source=None):
+def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=None, security_source=None,
+                   upgrade_backup_schema=False):
     """Restore business records with current security state, or keep offline.
 
     security_source is an explicit operator assertion of current authority. It
     must be an existing reviewed workspace, not another historical backup. Its
     write transaction remains held through reconciliation/publication. Sources
     are never changed. Reconciled restores remain frozen and contain no sessions.
+    Explicit upgrade_backup_schema permits only validated schema-five archives
+    to become schema six inside the private restore transaction. Startup and
+    backup creation never implicitly migrate older storage.
     """
-    source, manifest = _bundle(bundle)
+    if type(upgrade_backup_schema) is not bool:
+        raise BackupError("Backup schema upgrade must be an explicit boolean choice.")
+    source, manifest = _bundle(bundle, upgrade_backup_schema=upgrade_backup_schema)
     identity = _identity(source)
     old_secrets = SecretStore(source, identity, backup_mfa_key_file or mfa_key_file)
     current_directory = _directory(security_source) if security_source else None
@@ -226,7 +241,12 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
         create_private_file(staged / "identity.key", identity)
         with closing(_connect(staged / "business.sqlite3", readonly=False)) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            _validate(connection, identity, old_secrets)
+            _validate(connection, identity, old_secrets, schema_version=manifest["schema"])
+            if manifest["schema"] == 5:
+                # The original archive stays unchanged. DDL, revocation and
+                # current-authority reconciliation share this staged transaction.
+                _apply_event_migration(connection)
+                _validate(connection, identity, old_secrets)
             for table in ("passkey_challenges", "session_passkey", "session_security", "session_mfa", "sessions"):
                 connection.execute(f"DELETE FROM {table}")
             if current:
@@ -267,6 +287,8 @@ def _finish_restore(connection, staged, output, identity, secrets, source, manif
             raise BackupError("Restored editing pause could not be verified.")
     receipt = {"format": "westbridge-restore-v1", "restored_at": utc_now(),
                "backup_database_sha256": manifest["files"]["business.sqlite3"],
+               "backup_schema": manifest["schema"], "restored_schema": SCHEMA_VERSION,
+               "schema_upgraded": manifest["schema"] != SCHEMA_VERSION,
                "quarantined": quarantined, "sessions_revoked": True, "frozen": True}
     create_private_file(destination / "restore.json", json.dumps(receipt, indent=2).encode() + b"\n")
     if not quarantined:
@@ -286,6 +308,8 @@ def main(argv=None):
     restore.add_argument("--mfa-key-file", required=True, help="Current independent MFA key (original key for quarantine)")
     restore.add_argument("--backup-mfa-key-file", help="Original backup MFA key when the current key has rotated")
     restore.add_argument("--security-source", help="Explicitly trusted current workspace; omission keeps restore offline")
+    restore.add_argument("--upgrade-backup-schema", action="store_true",
+                         help="Explicitly upgrade a validated schema-five archive only in private restore staging")
     args = parser.parse_args(argv)
     try:
         if args.command == "backup":
@@ -293,7 +317,8 @@ def main(argv=None):
             print("Consistent private backup created. Encrypt retained copies; hold the MFA key separately.")
         else:
             result = restore_backup(args.bundle, args.output, mfa_key_file=args.mfa_key_file,
-                                    backup_mfa_key_file=args.backup_mfa_key_file, security_source=args.security_source)
+                                    backup_mfa_key_file=args.backup_mfa_key_file, security_source=args.security_source,
+                                    upgrade_backup_schema=args.upgrade_backup_schema)
             print("Restored offline in quarantine. No account can sign in." if result["quarantined"] else
                   "Restored with current security state. All sessions revoked; editing paused. Verify before switching hosts.")
     except (ValueError, OSError, sqlite3.Error):

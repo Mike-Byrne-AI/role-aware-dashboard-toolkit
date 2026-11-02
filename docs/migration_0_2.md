@@ -54,9 +54,23 @@ including its own dependencies.
 - `RoleDef` requires a permission mapping with nonempty string keys and actual
   `bool` values. Replace `None` with `{}`, and replace truthy strings or numbers
   with deliberate `True` or `False` values. Only `True` grants permission.
+- `SecurityContext` fields and its copied permission mapping are read-only.
+  Construct a new context or use `dataclasses.replace(ctx, perms=new_permissions)`
+  when the snapshot changes. Copies preserve its live authorization callback;
+  they do not grant new roles or bypass revocation. `copy`, `deepcopy`,
+  `dataclasses.asdict` and JSON serialization of permission mappings remain
+  supported; use `dict(ctx.perms)` for an editable mapping. Non-mapping permission
+  containers are rejected at construction. This prevents accidental mutation
+  in trusted Python code; it is not isolation from an untrusted plugin.
 - Every registered control requires a nonempty string `permission`; the API
   refuses a control without one. Inventory custom controls and grant their
   explicit permissions to the intended roles.
+- Control keys must be strings in `ControlDef` and `ControlRegistry.register`.
+  Convert numeric or other keys deliberately before registering them; implicit
+  JSON key conversion can otherwise change their identity. `register(key=None)`
+  still derives the key from the name, and empty, Unicode and slash-containing
+  string keys retain their existing meaning. Invalid keys fail before registration
+  changes the registry.
 - With governance configured, the built-in Close case action requires
   `can_view_team_ops`, `can_view_decisions` and `can_view_governance` to evaluate
   governance, as well as `can_manage_runs`. The `close_case` governance block

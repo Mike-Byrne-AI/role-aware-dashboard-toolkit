@@ -266,8 +266,10 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     assert "python tools/business_dashboard_browser.py" in browser
     assert 'python tools/business_dashboard_browser.py --security-only --output-dir "$RUNNER_TEMP/business-security-browser"' in browser
     assert 'python tools/business_dashboard_browser.py --passkeys-only --output-dir "$RUNNER_TEMP/business-passkey-browser"' in browser
+    assert 'python tools/business_dashboard_browser.py --lab-only --output-dir "$RUNNER_TEMP/business-lab-browser"' in browser
     assert "${{ runner.temp }}/business-security-browser" in browser
     assert "${{ runner.temp }}/business-passkey-browser" in browser
+    assert "${{ runner.temp }}/business-lab-browser" in browser
     assert "path: ${{ runner.temp }}/business-browser" in browser
     assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]

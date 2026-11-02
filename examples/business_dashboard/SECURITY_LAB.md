@@ -1,14 +1,99 @@
 # Learn security with Westbridge
 
-Use a disposable local workspace or an isolated staging service for these
-exercises. The ordinary dashboard remains a working application. Its public
-deployment is not a traffic-saturation target, and the application exposes no
-attack or test-control endpoints.
+Use disposable local workspaces first, then the existing hosted Westbridge
+testbed for explicitly bounded hosted acceptance. Another paid service is not
+required. Preserve its state and working administrator access, and use a
+maintenance window for offline operations. Its public endpoint is not a
+traffic-saturation target; the application exposes no attack or test-control
+endpoints.
 
 For each exercise, record the threat, the expected rejection, a legitimate
 operation that still succeeds, unchanged business state after rejection, and
 the exact source and environment tested. Passing one exercise establishes that
 behavior under those conditions; it does not certify the whole application.
+
+## Guided evidence and engineering decisions
+
+Open `/security-lab` without signing in to inspect three bounded stories:
+revoked-session rejection, conflicting toolkit API writers, and recovery without
+restoring revoked authority. The private administrator timeline is a separate
+authenticated read. Opening the lab never executes a scenario or changes
+business records; authenticated reads retain ordinary session housekeeping.
+
+Generate real local evidence in a new directory outside the checkout:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = "1"
+$demoEvidence = Join-Path ([System.IO.Path]::GetTempPath()) ("westbridge-security-" + [guid]::NewGuid())
+.\.venv\Scripts\python.exe tools/business_security_demo.py --output-dir $demoEvidence
+```
+
+Review the exit code and `receipt.json`, including failures and not-run checks.
+`BUSINESS_SECURITY_EVIDENCE_FILE` optionally selects that private, sanitized
+receipt when starting the app. The file must remain outside source storage.
+The public API accepts only the bounded exact receipt schema; it exposes no raw
+logs, screenshots, paths, user-submitted content, cookies or credentials. Keep
+private diagnostics outside the public evidence file. Browser runs also emit
+`receipt.json` alongside their local diagnostic summary.
+
+Receipts identify source bytes, acceptance code, mode, runtime, time, scope and
+individual outcomes. A source change during a run fails its receipt. The lab
+marks a receipt stale when it differs from the source snapshot captured on the
+serving process's first lab request; restart after source changes. A checksum
+detects corruption, not a dishonest operator or compromised host. This is
+operator-supplied evidence, not independent attestation. Local results never
+become physical-device or public-host acceptance merely by uploading them.
+
+Use the [security design dossier](SECURITY_DESIGN.md) for trust boundaries,
+threats, design decisions and a versioned, deliberately scoped ASVS mapping.
+
+## Durable events and delivery failure
+
+Schema six adds structured security events and delivery obligations to the
+business database. Required sensitive-action events commit with the action;
+failure to record them rolls the transaction back. Fixed codes, outcomes,
+reasons and opaque principals replace arbitrary request content. Authentication
+and authorization rejections use bounded observation after the failed action;
+suppressed denials and recording failures remain visible as process diagnostics.
+The existing aggregate counters retain their separate in-memory scope. Denial
+observations occupy at most 1,000 retained events and at most one quarter of
+total event capacity, reserving at least three quarters from unauthenticated
+traffic. Excess optional observations are suppressed with a visible diagnostic;
+already admitted pending obligations are preserved.
+
+Administrators can load the durable timeline in **Security lab**. Its endpoint
+is `/api/admin/security/events`; current authorization is checked for every
+read. Delivery uses a local idempotent consumer and a stable event ID. It is
+at least once: a crash after delivery but before acknowledgment can repeat
+delivery, while the consumer applies that event only once. No external service
+receives these events. This local record does not protect against a host
+administrator rewriting storage, and it is not an off-host alert service.
+
+Retention is bounded at 10,000 events. Delivered events become eligible for
+pruning after 30 days and are pruned when a new event is recorded; this is not
+a scheduled deletion deadline. Pending obligations are preserved. Ordinary
+events stop at a 9,000-record watermark; the remaining 1,000 slots are reserved
+for fully verified, currently active administrator login/reverification and
+narrow containment: pause, disable an account, revoke a session, remove a passkey
+or log out. The writer checks current administrator status in the action's
+transaction. Employees and routine administrator changes cannot consume this
+reserve. If even that finite reserve fills, required mutations fail instead of
+dropping their evidence. A freshly verified
+administrator can POST an empty JSON object to
+`/api/admin/security/events/dispatch` with the ordinary Origin and CSRF controls.
+If no administrator session remains, use the trusted offline operator tool
+after verifying maintenance and stopping workers:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/dispatch_security_events.py --help
+```
+
+Run `tests/test_business_security_events.py` for atomic rollback, restart,
+delivery failure, deduplication, bounded denial floods, capacity recovery and
+timeline access. An operator-supplied callback in these tests deliberately fails
+between delivery and acknowledgment. Preserve its original failure and prove
+that a subsequent delivery resumes without repeating the protected business
+action.
 
 ## Reads and concurrent writes
 
@@ -118,6 +203,93 @@ through a separate reviewed retention and credential-rotation procedure.
 Run `tests/test_business_secret_store.py` for real encryption, binding,
 tampering, wrong-key, explicit migration and rollback cases.
 
+## Key rotation boundaries
+
+Maintain separate protected version/retention records for `identity.key` and
+the external MFA encryption key. Rotation records identify the operator,
+reason, affected database/backups, cutover and verification results; they do
+not contain key bytes, seeds or bearer credentials. Schedule reviews according
+to key purpose and exposure, and contain suspected compromise immediately.
+
+`rotate_mfa_key.py` supplies an offline MFA encryption-key rotation. It creates
+an independent key at a new path and commits every enrollment ciphertext and
+the database key binding in one transaction. It preserves the original key,
+identity key, enrollment generations, consumed TOTP counters, sessions and current
+permissions. `--migrate-storage` upgrades the schema and `--create-mfa-key`
+creates a key; neither performs a rotation. Never overwrite an existing key to
+resolve a startup error.
+
+**Identity key.** This key derives user principals, passkey user handles and
+other keyed identifiers; it also participates in MFA ciphertext context
+binding. Replacing the file alone fails database validation and can break
+credential continuity. The toolkit's empty-access-store reprovisioning
+procedure does not migrate this business database. An identity-key change
+requires a separately reviewed host migration covering every derived
+identifier, ownership/audit linkage, MFA re-encryption, session/challenge
+invalidation, passkey replacement or a verified compatibility strategy, and
+backup recovery. Until that migration is implemented and rehearsed, keep an
+affected deployment closed and preserve the matched original files. Do not
+reseed the database or remove restore-quarantine markers to reopen it.
+
+**MFA encryption key.** Rehearse the following procedure on a private disposable
+copy before rotating the testbed's key:
+
+1. Close ingress and stop all application/background writers. Verify that
+   protected reads and writes are unavailable; pausing edits alone is not an
+   access barrier. Take a consistent protected backup and preserve the original
+   MFA key separately. Rehearse on a private disposable copy first.
+2. Choose a new protected key path outside source and runtime-backup directories;
+   it must not exist. Run the command below with the verified maintenance state
+   and original key. It generates the replacement itself, re-encrypts every
+   enrollment while preserving account/generation binding, and replaces the
+   database key-binding ciphertext in the same SQLite transaction. A failure
+   before commit rolls back every row, the binding and the activity event.
+3. Validate all ciphertext and the binding with the replacement key before
+   cutover. Verify the original key no longer opens the migrated database.
+   Switch `BUSINESS_MFA_KEY_FILE` and restart every serving process while ingress
+   remains closed. Test legitimate administrator sign-in, rejected invalid MFA,
+   current grants/revocations and a restored backup before reopening access.
+4. Keep original keys under separate protected custody while retained backups
+   still require them. Restore such backups with the backup's key and the current
+   security source's key, as described below. Record the dependency explicitly;
+   deleting an old key can make its backups unrecoverable.
+
+Example PowerShell command, after independently verifying closed ingress,
+stopped workers and the protected backup:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/rotate_mfa_key.py C:\private\westbridge `
+  --current-mfa-key-file C:\private\westbridge.secrets\mfa.key `
+  --new-mfa-key-file C:\private\westbridge.secrets\mfa-rotation-001.key `
+  --maintenance-confirmed
+```
+
+The maintenance flag is an operator assertion, not a probe of the public host.
+The exclusive SQLite transaction serializes writers but does not exclude WAL
+readers. Runtime transactions recheck the key binding, so a process retaining
+the old key refuses its next read or write after cutover; this does not replace
+stopping and restarting every worker or checking ingress. The tool does not
+change `BUSINESS_MFA_KEY_FILE`, open ingress or restart the service.
+
+Preserve a newly created replacement even if the attempt fails. A process can
+stop after committing but before printing success, so an uncertain outcome
+requires verifying the database/key pair while offline before any restart or
+new attempt. The command refuses an existing replacement path and never silently
+retries, overwrites keys or rolls back a committed cutover. Keep a private record
+of the operator, reason, attempt paths, backup dependencies and acceptance results.
+
+`tests/test_business_mfa_rotation.py` covers actual process interruption before
+commit in rollback-journal and WAL modes, exception rollback, unchanged current
+authority, stale-worker rejection and recovery of an older backup with distinct
+original/current keys. These are disposable local tests, not hosted rotation
+acceptance. Run the documented sign-in and backup recovery checks on the
+existing testbed before reopening it.
+For a failed planned cutover, restore a consistent database/key pair only after
+reconciling current revocations. Do not roll back to a compromised key. If an
+MFA key and ciphertext were exposed, replacing the encryption key cannot make
+copied authenticator seeds secret again: affected enrollments and sessions need
+revocation and fresh trusted enrollment under the host's recovery procedure.
+
 ## Backups and recovery
 
 `backup.py backup` uses SQLite's backup API so committed WAL records are
@@ -134,6 +306,16 @@ current credentials, permissions and MFA state replace historical authority.
 Keep the original service stopped throughout reconciliation and cutover so
 later revocations cannot be lost.
 
+Preserved schema-five archives need the explicit `restore --upgrade-backup-schema`
+option. It verifies the archive's checksums, exact schema, original identity and
+MFA key, then upgrades only its private staging copy to six. Reconciliation uses
+the reviewed current schema-six security source, including current event delivery
+acknowledgments. The original archive and authority source remain unchanged.
+Without current authority, the upgraded result remains quarantined. Other
+legacy archive versions are refused; ordinary startup and backup creation stay
+schema-six-only. `restore.json` records original and resulting schema versions.
+Run `tests/test_business_backup_schema_upgrade.py` for this migration boundary.
+
 The small recovery-sheet tool and whole-application backup are separate. The
 sheet tool retains its 1 MiB limit. Run the real-tool drill with a trusted
 official age executable to prove encrypted-file and larger bundle recovery:
@@ -146,7 +328,8 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 The drill uses fictional data and private temporary storage. Review its exact
 arguments and preserve each receipt in a new directory outside the checkout.
 Local results do not prove a hosted restore, host permissions or retained
-backups. Repeat the procedure on an isolated service before deployment.
+backups. Rehearse the existing testbed's controlled maintenance and cutover
+procedure separately before accepting a hosted restore.
 
 ## Abuse decisions and availability
 

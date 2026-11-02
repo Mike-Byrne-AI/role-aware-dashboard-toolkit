@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Mapping
 import importlib
 import json
 import os
@@ -306,18 +307,19 @@ class TestSecurity:
         assert has_perm(None, "anything") is False
         assert has_perm(None, "anything", default=True) is True
 
-    def test_has_perm_surfaces_malformed_permission_mapping(self):
-        class BrokenPerms(dict):
-            def get(self, *_args, **_kwargs):
+    def test_context_surfaces_unreadable_permission_mapping_before_use(self):
+        class BrokenPerms(Mapping):
+            def __iter__(self):
+                return iter(["can_edit_controls"])
+
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, _key):
                 raise RuntimeError("bad permissions")
 
-        ctx = SecurityContext(role="Broken", perms=BrokenPerms())
-        try:
-            has_perm(ctx, "can_edit_controls", default=True)
-        except RuntimeError as exc:
-            assert str(exc) == "bad permissions"
-        else:
-            raise AssertionError("has_perm should surface malformed permission mappings")
+        with pytest.raises(RuntimeError, match="bad permissions"):
+            SecurityContext(role="Broken", perms=BrokenPerms())
 
     def test_can_write_respects_freeze(self):
         ctx = make_security_context("Operator", {"can_edit_controls": True}, controls_writable=False)

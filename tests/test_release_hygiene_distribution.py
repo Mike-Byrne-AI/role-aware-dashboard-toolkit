@@ -329,6 +329,9 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
     members = _logical_members(built_release_artifacts["sdist"])
     assert {name[len(prefix):] for name in members if name.startswith(prefix)} == {
         "README.md", "HOSTING.md", "RECOVERY.md", "SECURITY_LAB.md", "requirements.txt", "run.py", "recovery.py",
+        "SECURITY_DESIGN.md", "rotate_mfa_key.py", "dispatch_security_events.py",
+        "business/evidence.py", "business/security_lab.py", "business/security_events.py", "business/security_event_routes.py",
+        "business/static/security-lab.js", "business/static/security-lab.css",
         "hosting/pilot.py", "business/__init__.py",
         "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
         "business/auth_routes.py", "business/submission_routes.py", "business/work_limits.py",

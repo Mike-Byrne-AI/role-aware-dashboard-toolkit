@@ -24,6 +24,7 @@ from webauthn.helpers.structs import (
 
 from .auth_routes import _identity_state
 from .db import record_activity
+from .security_events import record_event
 from .models import Empty, RequestModel
 from .security import COOKIE_NAME, IDLE_SECONDS, ROLES, SESSION_SECONDS, authenticate, token_hash
 from .session_state import record_verification, require_recent, verification_expiry
@@ -270,6 +271,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
             ))
             row = connection.execute("SELECT * FROM passkey_credentials WHERE credential_id=?", (verified.credential_id,)).fetchone()
             record_activity(connection, auth.user["name"], "Added passkey", "Own account")
+            record_event(connection, "passkey_registered", actor=auth.user["principal"], method="passkey")
             result = {"ok": True, "passkey": _public(row)}
         metrics.record("passkey_registered")
         return result
@@ -310,6 +312,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                                    "DO UPDATE SET credential_id=excluded.credential_id", (hashed, stored["credential_id"]))
                 record_verification(connection, hashed, current_time(), "passkey")
                 record_activity(connection, auth.user["name"], "Verified identity with passkey", "Own session")
+                record_event(connection, "identity_verified", actor=auth.user["principal"], method="passkey")
                 result = {"ok": True, "verification_expires_at": verification_expiry(connection, hashed)}
             metrics.record("passkey_reauth_succeeded")
             return result
@@ -334,6 +337,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
             auth.authorize("can_view_team")
             result = auth.session_payload()
             record_activity(connection, user["name"], "Signed in with passkey", "Workspace")
+            record_event(connection, "login_succeeded", actor=auth.user["principal"], method="passkey")
         metrics.record("passkey_login_succeeded")
         response.set_cookie(COOKIE_NAME, token, max_age=SESSION_SECONDS, httponly=True,
                             secure=origin.scheme == "https", samesite="strict", path="/")
@@ -358,6 +362,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
             connection.execute("DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM session_passkey WHERE credential_id=?)", (row[0],))
             connection.execute("DELETE FROM passkey_credentials WHERE credential_id=?", (row[0],))
             record_activity(connection, auth.user["name"], "Removed passkey", "Own account")
+            record_event(connection, "passkey_removed", actor=auth.user["principal"], method="passkey")
             result = {"ok": True, "current_session_revoked": own}
         metrics.record("passkey_removed")
         return result

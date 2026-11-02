@@ -126,6 +126,25 @@ def test_reconciled_restore_uses_current_password_disable_mfa_limits_and_revokes
                                             headers={"Origin": ORIGIN}).status_code == 401
 
 
+def test_restore_keeps_current_security_ledger_and_delivery_receipts(business):
+    from business.security_events import dispatch_pending, record_event
+
+    with business.db() as connection:
+        record_event(connection, "editing_paused")
+    bundle = _make_backup(business)
+    assert dispatch_pending(business.app.state.database)["delivered"] == 1
+    with business.db() as connection:
+        record_event(connection, "editing_resumed")
+    restored = business.directory.parent / "current-security-ledger"
+    backup.restore_backup(bundle, restored, security_source=business.directory,
+                          mfa_key_file=default_key_path(business.directory))
+    for table in ("security_events", "security_outbox", "security_sink_receipts", "security_denial_budget"):
+        assert _rows(restored, table) == _rows(business.directory, table)
+    recovered = Database(restored, mfa_key_file=default_key_path(business.directory))
+    assert dispatch_pending(recovered) == {"delivered": 1, "failed": 0, "pending": 0}
+    assert len(_rows(restored, "security_sink_receipts")) == 2
+
+
 @pytest.mark.parametrize("damage", ["checksum", "missing-key", "wrong-key", "different-identity", "different-users", "backup-as-authority"])
 def test_restore_refuses_mismatch_before_creating_output(business, damage):
     bundle = _make_backup(business)

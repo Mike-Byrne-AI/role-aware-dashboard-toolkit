@@ -19,6 +19,55 @@ Use a file store when:
 
 Role-Aware Dashboard Toolkit file stores do not provide distributed locking, cross-process
 transactions, or live conflict resolution.
+Audit appenders within one process coordinate complete records per resolved path,
+including short writes; this does not coordinate other processes or external writers.
+
+## Revisioned live control state
+
+The separate `state_store` module supplies `InMemoryStateStore` and
+`SQLiteStateStore` for one application's live control values. Their common
+`StateStore` contract is `read()` and `compare_and_set(values, expected_revision)`.
+Each returns a `StateSnapshot` with detached `values` and a `revision`. Editing
+a returned dictionary does not change the stored state.
+
+An empty store starts at revision zero. A successful replacement increments
+that revision once; an outdated revision raises `StateConflict` without writing.
+Callers must reread and resolve the conflict instead of silently retrying with
+an updated revision. Values replace the whole snapshot, so callers preserve
+unmodified values explicitly. Non-finite numbers, non-string object keys and
+other values that cannot round-trip through JSON are refused before mutation.
+Snapshots contain JSON types; for example, input tuples become JSON lists.
+
+```python
+from role_aware_dashboard_toolkit.state_store import SQLiteStateStore
+
+# Provision once in a private directory outside the source checkout:
+store = SQLiteStateStore.create(private_state_path)
+# On subsequent starts, open existing storage without creating or resetting it:
+store = SQLiteStateStore(private_state_path)
+snapshot = store.read()
+updated = store.compare_and_set({**snapshot.values, "workers": 3}, snapshot.revision)
+```
+
+The in-memory implementation serializes threads within that store object and
+loses state on restart. SQLite serializes writes with a transaction and checks
+the expected revision inside it, including writes from separate processes.
+Each read observes one coherent snapshot. It supports one host and a trusted
+local disk; network filesystems and multi-host coordination are unsupported.
+A busy, missing, unreadable or malformed database raises `StateStoreError`;
+opening existing storage never reseeds it. Explicit creation refuses an
+existing path. Protect its directory and backups with operating-system access
+controls, including Windows ACLs.
+
+Choose a distinct state store per application or isolated tenant. Callers must
+remove sensitive controls and credentials before storing values: this backend
+does not encrypt them or infer which application data is confidential. Its
+transaction covers only live control values and their revision, not profile
+files, audit events, authorization checks or external actions. Applications
+needing those effects to commit together must implement a common transaction
+at their own persistence boundary. Back up SQLite consistently; restoring a
+backup also restores its older revision, so stop writers and reconcile external
+effects before serving the restored state.
 
 ## Diagnostics
 

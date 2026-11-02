@@ -60,6 +60,8 @@ def _admin_operations():
         ("GET", "/api/admin/submissions", None),
         ("GET", "/api/admin/users", None),
         ("GET", "/api/admin/security-metrics", None),
+        ("GET", "/api/admin/security/events", None),
+        ("POST", "/api/admin/security/events/dispatch", {}),
         ("POST", "/api/schedule", event_body()),
         ("PUT", "/api/schedule/{identifier}", {**event_body(), "revision": 0}),
         ("POST", "/api/schedule/{identifier}/archive", {"revision": 0}),
@@ -93,6 +95,7 @@ def test_route_inventory_keeps_admin_adversarial_matrix_complete(business):
     other = {
         ("POST", "/api/login"), ("POST", "/api/password"), ("POST", "/api/logout"),
         ("GET", "/api/session"), ("GET", "/api/schedule"), ("GET", "/api/messages"),
+        ("GET", "/api/security-lab"),
         ("POST", "/api/messages"), ("GET", "/api/public/posts"), ("POST", "/api/public/submissions"),
         ("GET", "/api/security/sessions"), ("POST", "/api/security/reauthenticate"),
         ("POST", "/api/security/sessions/{identifier}/revoke"),

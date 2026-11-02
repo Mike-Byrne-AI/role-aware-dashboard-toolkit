@@ -20,6 +20,7 @@ from .security import (
 from .work_limits import BoundedWork
 from .session_state import record_verification
 from .telemetry import SecurityMetrics
+from .security_events import record_event
 
 ATTEMPT_LIMIT = 8
 ATTEMPT_WINDOW_SECONDS = 300
@@ -181,6 +182,7 @@ def install_auth_routes(app, database, authorized, origin):
             auth = authenticate(connection, token, database.identity_key)
             auth.authorize("can_view_team")
             record_activity(connection, user["name"], "Signed in", "Workspace")
+            record_event(connection, "login_succeeded", actor=auth.user["principal"], method="totp" if generation else "password")
             result = auth.session_payload()
             _release_success(connection, key, reserved_window)
         metrics.record("login_succeeded")
@@ -229,6 +231,7 @@ def install_auth_routes(app, database, authorized, origin):
             connection.execute("DELETE FROM sessions WHERE user_id=?", (auth.user["id"],))
             _release_success(connection, key, reserved_window)
             record_activity(connection, auth.user["name"], "Changed password", "Own account")
+            record_event(connection, "password_changed", actor=auth.user["principal"])
         metrics.record("password_changed")
         # Revocation above invalidates every old cookie on the server. Do not
         # expire a browser cookie here: a delayed response could otherwise erase

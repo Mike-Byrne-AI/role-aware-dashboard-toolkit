@@ -128,9 +128,9 @@ def inspect_existing_storage(configuration: Configuration) -> None:
             connection.execute("BEGIN")
             if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
                 raise ValueError("The existing database failed its integrity check.")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != 5:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 6:
                 raise ValueError("The existing schema needs an explicit reviewed migration before hosting.")
-            _require_schema(connection, 5)
+            _require_schema(connection, 6)
             secret_store.validate_database(connection)
             TransactionAccessStore(connection).read_freeze()
             users = connection.execute("SELECT id,principal FROM users").fetchall()
@@ -180,7 +180,7 @@ def provision(configuration: Configuration) -> tuple[Path, Path]:
 
 
 def create_application(configuration: Configuration):
-    """Create an application only after verifying existing schema-v5 state."""
+    """Create an application only after verifying existing schema-v6 state."""
     from business.app import create_app
 
     preflight(configuration)

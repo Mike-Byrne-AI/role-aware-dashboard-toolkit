@@ -179,6 +179,8 @@ def test_cli_setup_and_reset_report_paths_not_secrets(business):
 
 def downgrade_v2(business):
     with business.db() as connection:
+        for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
+            connection.execute(f"DROP TABLE {table}")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -198,7 +200,7 @@ def test_v2_upgrade_preserves_business_and_staff_revokes_admin_requires_local_en
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("SELECT COUNT(*) FROM admin_mfa").fetchone()[0] == 0
     admin = business.client(migrated)
     admin.cookies.set(COOKIE_NAME, business_admin.client.cookies.get(COOKIE_NAME))
@@ -211,7 +213,7 @@ def test_v2_upgrade_preserves_business_and_staff_revokes_admin_requires_local_en
 
 def test_mfa_migration_failure_rolls_back_ddl_and_admin_session_deletion(business, business_admin, monkeypatch):
     downgrade_v2(business)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         before = [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")]
     apply = db._apply_mfa_migration
     completed = []
@@ -225,7 +227,7 @@ def test_mfa_migration_failure_rolls_back_ddl_and_admin_session_deletion(busines
     with pytest.raises(ValueError):
         db.Database(business.directory, migrate=True)
     assert completed == [True]
-    with business.db() as connection:
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == before
         assert connection.execute("SELECT name FROM sqlite_master WHERE name='admin_mfa'").fetchone() is None

@@ -14,12 +14,46 @@ app = radt.create_app(
     registry, profile_store=radt.InMemoryProfileStore(), api_role="Viewer")
 ```
 
-Each `create_app()` owns separate in-memory control values. Sharing a registry
+By default each `create_app()` owns separate in-memory control values. Sharing a registry
 shares definitions only. API updates and profile activation do not invoke
 control callbacks or a dashboard's `on_change`, and do not update Streamlit
-session state. Shared stores do not synchronize live controls. A host must
+session state. Shared profile stores do not synchronize live controls. A host must
 explicitly integrate shared state or external actions and enforce authorization
 there; this API is not an automatic remote-control connection to a dashboard.
+
+For individual users, pass `authentication=APIAuthentication(verifier, access_store,
+identity_key)`; import it from `role_aware_dashboard_toolkit.api_access`. The host
+verifier synchronously checks request credentials and returns a current `Identity`
+or None. The API checks current identity/grants/freeze at protected boundaries and
+binds audit events to the principal. `X-Dashboard-Role` can select only a granted
+role. This mode has no API-key/anonymous fallback and cannot combine with an
+explicit shared `api_role`. Cookie-session verifiers must enforce host CSRF
+policy. Do not infer authority from raw claims, headers or a saved profile.
+
+The tenant model is one organization per isolated app/store: separate access
+store/key, profile store, audit log and live-state backend for each organization.
+Per-user mode requires explicit `profile_store` or `profile_dir` configuration.
+The API does not switch organizations from a tenant header or partition shared
+stores. Verify a tenant-A administrator cannot access tenant-B resources.
+
+For durable public control state, explicitly provision
+`SQLiteStateStore.create(path)` once in an OS-protected directory outside Git,
+then pass `state_store=SQLiteStateStore(path)` to `create_app`. Import from
+`role_aware_dashboard_toolkit.state_store`. Startup never resets missing or
+corrupt state. Control reads return an ETag; send its exact value in `If-Match`
+on control updates and profile activation. Explicit backend mode returns 428
+without it, 409 for outdated/concurrent writes, and 503 for unavailable or
+schema-incompatible state. Refresh before retrying. `InMemoryStateStore` supports
+the same revision contract without restart persistence. Default apps retain
+their in-memory behavior and may optionally send `If-Match`.
+
+Explicit state backends refuse secret-control writes and structured secret
+fields. Use host secret storage instead. Per-app operations are serialized;
+SQLite CAS coordinates live state across processes on one host/local disk.
+Shared file profiles still need one writer process. Audit, authorization and
+external actions are separate transactions; a state commit is not proof of
+durable audit delivery or cancellation of already-authorized work. Close access
+and invalidate old clients when restoring prior values/revisions.
 
 Save the example as `api_app.py` under the host's instructions and run an
 installed Uvicorn with `--host 127.0.0.1`. Protected routes require the server's

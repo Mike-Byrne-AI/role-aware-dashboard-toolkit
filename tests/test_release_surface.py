@@ -21,6 +21,7 @@ EXPECTED_FAMILIES = {
     "profiles-and-audit",
     "release-tooling",
     "installed-guidance",
+    "live-state",
     "runbook-and-snapshots",
     "runtime-and-observability",
     "validation-and-protocol",

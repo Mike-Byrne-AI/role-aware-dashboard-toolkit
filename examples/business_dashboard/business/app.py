@@ -28,6 +28,9 @@ from .security import COOKIE_NAME, ROLES, TransactionAccessStore, authenticate, 
 from .session_routes import install_session_routes
 from .passkeys import install_passkey_routes
 from .session_state import require_recent
+from .security_events import record_event
+from .security_event_routes import install_security_event_routes
+from .security_lab import install_security_lab_routes
 
 LOGGER = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -115,6 +118,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             if write or csrf:
                 auth.check_csrf(request.headers.get("x-csrf-token"))
             auth.authorize(permission, write=write)
+            request.scope["security_actor"] = auth.user["principal"]
             if write and permission in ("can_manage_business", "can_manage_freeze"):
                 require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
             yield connection, auth
@@ -123,6 +127,8 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
     install_session_routes(app, database, authorized)
     install_passkey_routes(app, database, authorized, origin, public_origin)
     install_submission_routes(app, database, submission_guard)
+    install_security_event_routes(app, database, authorized)
+    install_security_lab_routes(app, database, authorized)
 
     @app.get("/api/session")
     def session(request: Request):
@@ -140,6 +146,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
     def logout(payload: Empty, request: Request):
         with authorized(request, csrf=True) as (connection, auth):
             connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(request.cookies[COOKIE_NAME]),))
+            record_event(connection, "session_logged_out", actor=auth.user["principal"])
         # The token is revoked in storage. Expiring it in a delayed response
         # could erase a newer login that has already replaced the browser cookie.
         return {"ok": True}
@@ -320,6 +327,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             except FreezeConflict:
                 raise HTTPException(409, "Editing status changed. Refresh before trying again.") from None
             record_activity(connection, auth.user["name"], "Paused editing" if state.frozen else "Resumed editing", "Workspace")
+            record_event(connection, "editing_paused" if state.frozen else "editing_resumed", actor=auth.user["principal"])
             return {"frozen": state.frozen, "freeze_revision": state.revision}
 
     @app.get("/api/admin/security-metrics")
@@ -348,6 +356,8 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             if not payload.active:
                 connection.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
             record_activity(connection, auth.user["name"], "Enabled account" if payload.active else "Disabled account", user["name"])
+            record_event(connection, "account_enabled" if payload.active else "account_disabled",
+                         actor=auth.user["principal"], target=user["principal"])
             return {"ok": True}
 
     @app.get("/healthz")

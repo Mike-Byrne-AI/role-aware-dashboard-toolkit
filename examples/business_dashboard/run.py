@@ -39,7 +39,7 @@ def main(argv=None):
         if options.migrate_storage:
             from business.db import Database
             Database(options.data_dir, mfa_key_file=options.mfa_key_file, migrate=True)
-            print("Existing storage validated and upgraded to schema five. Old backups and SQLite remnants may still contain plaintext MFA seeds.")
+            print("Existing storage validated and upgraded to schema six. Old backups and SQLite remnants may still contain plaintext MFA seeds.")
             return 0
         if options.provision:
             from business.seed import provision

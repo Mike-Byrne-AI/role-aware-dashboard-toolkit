@@ -347,6 +347,94 @@ cancellation semantics. Enforce authorization in real loaders, tenant queries,
 downloads, APIs and trusted plugins. A local HTTP identity provider and successful
 synthetic checks do not satisfy these production requirements.
 
+## Key rotation and recovery
+
+The host operator owns rotation. Keep a protected inventory of each secret's
+purpose, owner, version label, deployment consumers, planned review date and
+dependent backups. Record cutover and verification results without recording
+the key, token or raw provider subject in ordinary logs. Choose the rotation
+interval for that secret's function and exposure; suspected compromise requires
+containment and revocation, not waiting for the next scheduled rotation.
+
+| Secret | Rotation boundary | Required verification |
+| --- | --- | --- |
+| Toolkit `identity.key` | Replace the matched key and access store through the offline procedure below; all opaque principal IDs change. | Current grants work, revoked users remain denied, and no process uses the previous pair. |
+| HTTP API shared key | Coordinate clients and every serving process around one replacement value in protected configuration. This mode accepts one key per process, with no built-in overlap/key-ring mechanism. | Replacement credential succeeds with its assigned role; previous credential receives 401 on every serving instance. |
+| Provider client secret | Follow the configured provider's issue, activate and revoke procedure. | Fresh sign-in and callback succeed; the provider confirms retirement of the previous credential. |
+| Streamlit cookie secret | Replace protected host configuration and restart every session-serving process; plan for reauthentication. | Previous cookies do not establish a new authenticated session, and existing sessions have ended. Provider sessions require separate logout/revocation. |
+| Host data-encryption keys | Use the host's transactional re-encryption and backup-retention procedure. | Current data decrypts with the replacement; retained backups remain recoverable under separately protected custody. |
+
+An environment variable read on each API request does not update another
+process's environment. A deployment must replace or restart all affected
+workers and must not leave a worker accepting the retired key. Keep ingress
+closed during a coordinated cutover if mixed credentials cannot be tolerated.
+
+### Rotate a toolkit identity key by reprovisioning
+
+This procedure applies to the toolkit's `access.sqlite3` and `identity.key`
+pair. It is not a migration procedure for a host application's business
+database. The CLI provides `init`, `grant` and `revoke`; it has no `rotate`
+command, and opaque old principal IDs cannot recover provider subjects.
+
+1. Rehearse with synthetic accounts and a private copy of the deployment
+   configuration. Establish an authoritative, current grant/revocation record
+   containing verified issuer/subject identities and intended roles. If it is
+   missing, reconstruct and review it through the provider's trusted
+   administrative workflow before proceeding. Do not infer current authority
+   from a historical database or an email address.
+2. Close ingress and stop all dashboard, API and background processes that can
+   use the access store. Verify protected reads and writes are unavailable.
+   Freeze alone is insufficient because it permits reads. Keep access closed
+   through acceptance and cutover, and prevent grant changes during the move.
+3. Preserve the original matched store and key in protected backup custody.
+   Create a different application-specific directory outside repositories and
+   apply the directory permissions described above. Initialize a new pair:
+
+   ```powershell
+   # Set this to the new, already protected directory, not the current store.
+   $nextAccessDirectory = Join-Path $env:LOCALAPPDATA "RoleAwareDashboard\shared-dashboard-next"
+   python -m role_aware_dashboard_toolkit.access_cli init --directory $nextAccessDirectory
+   ```
+
+   Initialization refuses existing files and produces an empty, frozen store.
+   Do not copy the old grant rows or overwrite the old key in place.
+4. Reprovision only currently authorized accounts. Use `--issuer` and the
+   private subject prompt for every account; do not use old `--principal`
+   values, which belong to the previous key. For example:
+
+   ```powershell
+   python -m role_aware_dashboard_toolkit.access_cli grant --directory $nextAccessDirectory --issuer $env:RADT_OIDC_ISSUER --role Admin
+   python -m role_aware_dashboard_toolkit.access_cli grant --directory $nextAccessDirectory --issuer $env:RADT_OIDC_ISSUER --role Viewer
+   ```
+
+   Each invocation prompts for its intended account. Preserve exact approved
+   role sets; `grant` replaces the entire set. Custom-role hosts must use their
+   reviewed provisioning integration with the store's allowed-role contract.
+5. Review host records, resource ownership and audit references keyed by opaque
+   principal ID. Migrate ownership through the host's own reviewed procedure,
+   and retain a protected old/new identity mapping if continuity is required.
+   Do not rewrite historical audit actors or assume the new key updates them.
+   If these dependencies cannot be reconciled, keep the old deployment offline
+   and do not cut over.
+6. Update trusted launcher configuration so every process uses the new matched
+   pair. Retain the intended provider/secrets configuration separately; `init`
+   does not copy it. Restart processes behind closed ingress, discard old
+   application sessions, and test fresh administrator and viewer sign-in,
+   denied unassigned/revoked accounts, denied self-promotion, and shared freeze.
+   Check that the previous process/session population cannot serve requests.
+   Revoke provider sessions separately if the incident requires it.
+7. Reopen ingress only after those checks pass, then record the key version and
+   exact deployment checked. Create a fresh protected backup of the new pair.
+   Retire the old key only when every retained backup or identity-linkage
+   dependency has a documented recovery or retention disposition.
+
+For a failed planned rotation, keep ingress closed. Returning to the old pair
+requires confirmation that it is uncompromised and reconciliation of all grants
+and revocations since the saved copy; never restore only one member of the pair.
+For compromise, do not roll back to the compromised credential. Preserve
+evidence, keep the affected deployment closed, revoke dependent sessions or
+credentials as required, and recover into reviewed replacement state.
+
 Primary references: [Streamlit authentication](https://docs.streamlit.io/develop/concepts/connections/authentication),
 [Streamlit secrets](https://docs.streamlit.io/develop/concepts/connections/secrets-management),
 and [OIDC ID-token claims](https://openid.net/specs/openid-connect-core-1_0.html#IDToken).

@@ -129,8 +129,19 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
         "optional-api": family_cls(
             family_id="optional-api",
             display_name="Optional API server",
-            symbols=("FASTAPI_AVAILABLE", "create_app"),
-            description="Optional FastAPI routes for controls, profiles, roles, and audit.",
+            symbols=("FASTAPI_AVAILABLE", "create_app", "APIAuthentication"),
+            description="Optional FastAPI routes for controls, profiles, roles, and audit. "
+            "Import APIAuthentication from api_access for host-verified per-request identity "
+            "and live grants in one isolated organization app.",
+        ),
+        "live-state": family_cls(
+            family_id="live-state",
+            display_name="Versioned live state (module imports)",
+            symbols=("StateStore", "StateSnapshot", "StateConflict", "StateStoreError",
+                     "InMemoryStateStore", "SQLiteStateStore"),
+            description="Import from state_store. Detached JSON snapshots and atomic "
+            "revision-checked replacements; SQLite persists public control values on "
+            "one host. Audit and external operations are separate transactions.",
         ),
         "operator-records": family_cls(
             family_id="operator-records",

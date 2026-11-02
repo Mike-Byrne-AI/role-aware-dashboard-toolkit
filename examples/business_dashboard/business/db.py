@@ -12,6 +12,12 @@ import stat
 from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
 SOURCE_ROOTS = {Path(__file__).absolute().parents[3], Path(__file__).resolve().parents[3]}
+
+
+class RuntimeKeyError(ValueError, AccessStoreError):
+    """A previously opened worker can no longer prove current key custody."""
+
+
 SCHEMA_V1 = """
 CREATE TABLE users (
  id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
@@ -130,7 +136,31 @@ CREATE TABLE session_passkey (
 );
 """
 SCHEMA_V5 = SCHEMA_V4 + SECURITY_SCHEMA + "PRAGMA user_version=5;\n"
-SCHEMA = SCHEMA_V5
+EVENT_SCHEMA = """
+CREATE TABLE security_events (
+ sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+ occurred_at REAL NOT NULL, code TEXT NOT NULL, outcome TEXT NOT NULL,
+ reason TEXT NOT NULL, actor TEXT, target TEXT, method TEXT NOT NULL
+);
+CREATE INDEX security_events_time ON security_events(occurred_at);
+CREATE TABLE security_outbox (
+ event_id TEXT PRIMARY KEY REFERENCES security_events(id) ON DELETE CASCADE,
+ attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
+ next_attempt_at REAL NOT NULL DEFAULT 0, delivered_at REAL,
+ last_error TEXT CHECK(last_error IS NULL OR last_error='delivery_failed')
+);
+CREATE INDEX security_outbox_pending ON security_outbox(delivered_at,next_attempt_at);
+CREATE TABLE security_sink_receipts (
+ event_id TEXT PRIMARY KEY REFERENCES security_events(id) ON DELETE CASCADE,
+ received_at REAL NOT NULL, payload_json TEXT NOT NULL
+);
+CREATE TABLE security_denial_budget (
+ id INTEGER PRIMARY KEY CHECK(id=1), window INTEGER NOT NULL,
+ admitted INTEGER NOT NULL CHECK(admitted>=0)
+);
+"""
+SCHEMA_V6 = SCHEMA_V5 + EVENT_SCHEMA + "PRAGMA user_version=6;\n"
+SCHEMA = SCHEMA_V6
 
 
 def _schema_objects(connection):
@@ -145,7 +175,7 @@ def _require_schema(connection, version):
     expected = sqlite3.connect(":memory:")
     expected.row_factory = sqlite3.Row
     try:
-        expected.executescript({1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3, 4: SCHEMA_V4, 5: SCHEMA_V5}[version])
+        expected.executescript({1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3, 4: SCHEMA_V4, 5: SCHEMA_V5, 6: SCHEMA_V6}[version])
         if _schema_objects(connection) != _schema_objects(expected):
             raise ValueError("Business database schema is incomplete or unsupported; existing state was preserved.")
     finally:
@@ -206,6 +236,11 @@ def _apply_security_migration(connection, secret_store):
     connection.execute("PRAGMA user_version=5")
 
 
+def _apply_event_migration(connection):
+    _execute_schema(connection, EVENT_SCHEMA)
+    connection.execute("PRAGMA user_version=6")
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -253,6 +288,7 @@ class Database:
     """Open existing initialized state only; never repair/reseed on startup."""
 
     def __init__(self, data_dir: str | Path, *, mfa_key_file=None, migrate=False):
+        self._initialized = False
         self.directory = validate_data_dir(data_dir)
         if os.path.lexists(self.directory / "RESTORE_QUARANTINE"):
             raise ValueError("Restored storage is quarantined; reconcile current security state before serving it.")
@@ -272,15 +308,16 @@ class Database:
             self._validate_schema(migrate=migrate)
         except (sqlite3.Error, AccessStoreError):
             raise ValueError("Business database is invalid or incomplete; preserve it and investigate.") from None
+        self._initialized = True
 
     def _validate_schema(self, *, migrate=False):
         with self.transaction() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5):
+            if version not in (1, 2, 3, 4, 5, 6):
                 raise ValueError("Unsupported or incomplete business database.")
             _require_schema(connection, version)
-            if version < 5 and not migrate:
-                raise ValueError("Existing storage requires an explicit reviewed migration to schema five.")
+            if version < 6 and not migrate:
+                raise ValueError("Existing storage requires an explicit reviewed migration to schema six.")
             from .security import TransactionAccessStore, principal_for_user
             TransactionAccessStore(connection).read_freeze()
             users = connection.execute("SELECT id,principal FROM users").fetchall()
@@ -298,6 +335,9 @@ class Database:
             if version < 5:
                 _apply_security_migration(connection, self.mfa_secrets)
                 _require_schema(connection, 5)
+            if version < 6:
+                _apply_event_migration(connection)
+                _require_schema(connection, 6)
             self.mfa_secrets.validate_database(connection)
 
     def _connect(self, *, readonly=False):
@@ -312,12 +352,23 @@ class Database:
         connection.row_factory = sqlite3.Row
         return connection
 
+    def _require_current_key(self, connection):
+        if self._initialized:
+            row = connection.execute("SELECT ciphertext FROM mfa_key_binding WHERE id=1").fetchone()
+            if row is None:
+                raise RuntimeKeyError("MFA encryption key binding is missing; preserve existing state.")
+            try:
+                self.mfa_secrets.check_binding(row[0])
+            except ValueError:
+                raise RuntimeKeyError("MFA ciphertext or encryption key is invalid; preserve existing state.") from None
+
     @contextmanager
     def transaction(self):
         connection = self._connect()
         try:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("BEGIN IMMEDIATE")
+            self._require_current_key(connection)
             yield connection
             connection.commit()
         except BaseException:
@@ -338,6 +389,7 @@ class Database:
         try:
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
+            self._require_current_key(connection)
             yield connection
         finally:
             connection.close()

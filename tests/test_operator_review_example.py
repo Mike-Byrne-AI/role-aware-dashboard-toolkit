@@ -1,5 +1,6 @@
 """Behavior proofs for the synthetic operator workflow and actual Streamlit controls."""
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -143,10 +144,12 @@ def test_operator_cannot_signoff_and_frozen_authorized_reader_can_export():
 def test_signoff_permissions_cannot_bypass_missing_team_visibility(permission):
     session, _ = candidate_session()
     denied = context("Approver")
+    perms = dict(denied.perms)
     if permission is None:
-        denied.perms.pop("can_view_team_ops")
+        perms.pop("can_view_team_ops")
     else:
-        denied.perms["can_view_team_ops"] = permission
+        perms["can_view_team_ops"] = permission
+    denied = replace(denied, perms=perms)
     before = session.current_run()
     with pytest.raises(PermissionError):
         record_review(session, denied, decision="approved", actor="Hidden reviewer", reason="Hidden reason")

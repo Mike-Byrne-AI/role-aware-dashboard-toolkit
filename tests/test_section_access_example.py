@@ -6,6 +6,7 @@ claim to exercise provider login, signatures, TLS, or deployment permissions.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -302,9 +303,7 @@ def test_demo_or_fabricated_permission_snapshot_cannot_read_or_write(authenticat
 def test_forged_context_role_and_permissions_do_not_override_bound_policy():
     host = _host(("AOnly",))
     ctx = _context(host, "AOnly")
-    ctx.role = "Admin"
-    ctx.perms = dict(build_roles()["Admin"].perms)
-    ctx.controls_writable = True
+    ctx = replace(ctx, role="Admin", perms=build_roles()["Admin"].perms, controls_writable=True)
     loader, action = Mock(), Mock()
     assert visible_sections(ctx) == ("A",)
     with pytest.raises(AccessDenied):

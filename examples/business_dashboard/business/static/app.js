@@ -491,7 +491,7 @@ function renderLogin() {
   stopBoardUpdates();
   removeSubmissionChallenge();
   editor.close();editor.replaceChildren();dialogState=null;
-  if(location.pathname === "/board" || location.hash === "#board")history.replaceState(null, "", "/");
+  if(["/board","/security-lab"].includes(location.pathname) || location.hash === "#board")history.replaceState(null, "", "/");
   navigation++;
   state.page = "";
   state.submissionReceipt = false;
@@ -508,16 +508,18 @@ function renderLogin() {
   const passkeyButton=document.createElement("button");passkeyButton.type="button";passkeyButton.className="button";
   passkeyButton.dataset.action="passkey-login";passkeyButton.textContent="Sign in with a passkey";
   document.querySelector("#login-form").append(passkeyButton);
+  const labLink=document.createElement("a");labLink.href="/security-lab";labLink.className="button guest-button";
+  labLink.textContent="Explore the security lab";document.querySelector(".login-form-wrap").append(labLink);
 }
 
-const pages = {overview:{label:"Overview",icon:"grid"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"}};
+const pages = {overview:{label:"Overview",icon:"grid"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"},lab:{label:"Security lab",icon:"shield"}};
 
 function shell(content) {
   const title = pages[state.page]?.label || "Workspace";
   const guest = !state.user;
-  const allowed = isAdmin() ? ["overview","schedule","messages","outreach","public","security"] : ["schedule","messages","public"];
+  const allowed = isAdmin() ? ["overview","schedule","messages","outreach","public","security","lab"] : ["schedule","messages","public","lab"];
   const sidebar = `<aside class="sidebar" id="sidebar" aria-label="Workspace navigation"><div class="row">${brand()}<button class="icon-button mobile-close" aria-label="Close navigation" data-action="menu-close">${icon("close")}</button></div><p class="workspace-label">Your workspace</p><nav>${allowed.map(key=>`<button class="nav-link${state.page===key?" active":""}" data-page="${key}"${state.page===key?' aria-current="page"':""}>${icon(pages[key].icon)}<span>${pages[key].label}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="sidebar-note"><strong>Westbridge Business Group</strong>Good people. Thoughtful work.</div></div></aside>`;
-  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
+  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><a class="button" href="${state.page==="lab"?"/board":"/security-lab"}">${state.page==="lab"?"Public board":"Security lab"}</a><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
   app.innerHTML = `<div class="workspace${guest?" guest-workspace":""}">${guest?"":sidebar}<div class="workspace-main"><header class="topbar">${header}</header><main id="main" class="content">${!guest && state.frozen ? `<div class="notice frozen-banner" role="status">${icon("lock")}<span>Workspace changes are paused. You can continue to view schedules, messages, and updates.${isAdmin()?" You can still unpublish posts and pause employee access.":""}</span></div>`:""}${content}<footer class="workspace-footer"><span>© ${new Date().getFullYear()} Westbridge Business Group</span><span>${guest?"Company news & community":"A clearer view of your working day."}</span></footer></main></div></div>`;
   document.title = `${title} · Westbridge`;
 }
@@ -531,7 +533,7 @@ async function navigate(page, options = {}) {
   stopBoardUpdates();
   const ticket = ++navigation;
   if (!Object.hasOwn(pages,page)) page = isAdmin() ? "overview" : "schedule";
-  if (!state.user && page !== "public") {renderLogin(); return;}
+  if (!state.user && !["public","lab"].includes(page)) {renderLogin(); return;}
   if (state.user && !isAdmin() && ["overview","outreach","security"].includes(page)) page = "schedule";
   state.page = page;
   shell(heading("Workspace", pages[page].label, "") + '<div class="panel empty" role="status" aria-busy="true">Loading your workspace…</div>');
@@ -540,7 +542,8 @@ async function navigate(page, options = {}) {
     if (page === "overview") {
       const [overview,schedule,users] = await Promise.all([api("/api/admin/overview"),api("/api/schedule"),api("/api/admin/users")]);
       data = {...overview,...schedule,...users};
-    } else if (page === "schedule") data = await api("/api/schedule");
+    } else if (page === "lab") data = await api("/api/security-lab");
+    else if (page === "schedule") data = await api("/api/schedule");
     else if (page === "messages") data = await api("/api/messages");
     else if (page === "outreach") data = await api("/api/admin/contacts");
     else if (page === "security") {
@@ -557,9 +560,9 @@ async function navigate(page, options = {}) {
     if (ticket !== navigation) return;
     state.data = data;
     if (data.frozen !== undefined) {state.frozen=Boolean(data.frozen);state.freeze_revision=data.freeze_revision;}
-    const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity};
+    const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity,lab:data=>window.WestbridgeSecurityLab.render(data,{e,heading,isAdmin:isAdmin()})};
     shell(render[page](data));
-    history.replaceState(null, "", page === "public" ? "/board" : "/");
+    history.replaceState(null, "", page === "public" ? "/board" : page === "lab" ? "/security-lab" : "/");
     if(page === "public")startBoardUpdates();
     const pageTitle = document.querySelector("#main h1");
     pageTitle?.setAttribute("tabindex", "-1");
@@ -972,6 +975,24 @@ document.addEventListener("click",async(event)=>{
   if(action==="menu-close"){closeMenu();return;}
   if(action==="profile"){profileDialog();return;}
   if(action==="activity"&&isAdmin()&&state.page==="overview"){activityDialog();return;}
+  if(action==="lab-events"&&isAdmin()&&state.page==="lab"){
+    const owns=securityOwner(),region=document.querySelector(".lab-timeline");
+    const current=()=>owns()&&region?.isConnected&&state.page==="lab";
+    button.disabled=true;region.querySelector("#lab-events-error").hidden=true;
+    region.querySelector("#lab-events-status").textContent="Loading protected events…";
+    try{
+      const data=await api("/api/admin/security/events?limit=50");
+      if(!current())return;
+      region.querySelector("#lab-events-content").innerHTML=window.WestbridgeSecurityLab.timeline(data,e);
+      region.querySelector("#lab-events-status").textContent="Latest retained events. Refresh to observe new decisions.";
+    }catch(error){
+      if(!current())return;
+      region.querySelector("#lab-events-content").replaceChildren();
+      region.querySelector("#lab-events-status").textContent="The timeline could not be loaded.";
+      errorAt(error,region.querySelector("#lab-events-error"));
+    }finally{if(current())button.disabled=false;}
+    return;
+  }
   if(action==="recovery-copy"&&isAdmin()&&state.page==="security"){
     const code=document.querySelector(`#recovery-${button.dataset.command}`);
     if(!code)return;
@@ -1215,7 +1236,8 @@ document.addEventListener("submit",async(event)=>{
 
 async function start() {
   const boardLanding=location.pathname==="/board" || location.hash==="#board";
-  try {const session=await api("/api/session");setSession(session);if(boardLanding){state.guest=!state.user;await navigate("public");}else if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
+  const labLanding=location.pathname==="/security-lab";
+  try {const session=await api("/api/session");setSession(session);if(labLanding){state.guest=!state.user;await navigate("lab");}else if(boardLanding){state.guest=!state.user;await navigate("public");}else if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
   catch(error){renderLogin();errorAt(error,document.querySelector("#login-error"));}
 }
 start();

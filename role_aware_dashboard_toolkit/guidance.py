@@ -63,6 +63,8 @@ def inspect_capabilities() -> dict[str, Any]:
     """Describe installed APIs; dependency metadata is not a compatibility test."""
     from .appearance import build_streamlit_theme_toml
     from .access import AccessPolicy, SQLiteAccessStore
+    from .api_access import APIAuthentication
+    from .state_store import InMemoryStateStore, SQLiteStateStore
     from .controls import ControlDef, ControlRegistry, VALID_KINDS
     from .dashboard import DashboardConfig, prepare_access
     from .diagnostics import list_diagnostics
@@ -75,6 +77,9 @@ def inspect_capabilities() -> dict[str, Any]:
         "DashboardConfig": DashboardConfig,
         "AccessPolicy": AccessPolicy,
         "SQLiteAccessStore.create": SQLiteAccessStore.create,
+        "APIAuthentication": APIAuthentication,
+        "InMemoryStateStore": InMemoryStateStore,
+        "SQLiteStateStore.create": SQLiteStateStore.create,
         "prepare_access": prepare_access,
         "StreamlitIdentityResolver": StreamlitIdentityResolver,
         "clear_authenticated_state": clear_authenticated_state,

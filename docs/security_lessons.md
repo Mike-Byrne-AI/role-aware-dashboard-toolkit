@@ -356,6 +356,25 @@ explicit migration and rollback. Database-only encryption cannot protect against
 a host that can read both inputs, and a migration cannot erase historical
 plaintext pages, backups or enrollment sheets.
 
+## Treat key rotation as a state transition
+
+Inventory each key's consumers and backup dependencies before changing it.
+Identity-derivation, session-signing and data-encryption keys have different
+effects: changing a derivation key changes identifiers, while an encryption-key
+change requires consistent re-encryption and continued backup recoverability.
+Close access and stop affected processes during a coordinated offline cutover;
+freeze does not close read access. Verify both legitimate use of replacement
+state and rejection of retired authority before reopening.
+
+Preserve historical audit identities and reconcile current revocations during
+recovery. A planned rollback requires an uncompromised, consistent state/key
+pair; compromise cannot be repaired by restoring the compromised credential.
+Re-encrypting exposed MFA seeds does not invalidate copies: revoke affected
+enrollments and sessions. A schema migration, key-creation helper or restore
+test is not proof of a working rotation procedure. See the
+[toolkit rotation procedure](../role_aware_dashboard_toolkit/resources/guides/authentication.md#key-rotation-and-recovery)
+and [Westbridge rotation boundaries](../examples/business_dashboard/SECURITY_LAB.md#key-rotation-boundaries).
+
 ## Restore records without restoring revoked authority
 
 Use SQLite's backup API rather than copying only its main file while WAL writes

@@ -27,6 +27,8 @@ def _downgrade_v3(trial):
             secret = trial.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
             connection.execute("UPDATE admin_mfa SET secret_ciphertext=? WHERE user_id=?", (secret, row["user_id"]))
         connection.execute("ALTER TABLE admin_mfa RENAME COLUMN secret_ciphertext TO secret")
+        for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
+            connection.execute(f"DROP TABLE {table}")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -37,7 +39,7 @@ def _downgrade_v3(trial):
 
 
 def _snapshot(trial):
-    with trial.db() as connection:
+    with trial.raw_db() as connection:
         # Only fixed internal table names; secret material never enters assertion output.
         data = {
             table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")]
@@ -58,7 +60,7 @@ def _snapshot(trial):
 
 
 def _schema(trial):
-    with trial.db() as connection:
+    with trial.raw_db() as connection:
         return (connection.execute("PRAGMA user_version").fetchone()[0],
                 [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")])
 
@@ -74,7 +76,7 @@ def test_v3_upgrade_preserves_data_admin_and_employee_sessions_and_identity(busi
     replacement = create_app(business.directory, public_origin=ORIGIN)
     assert _snapshot(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
         assert connection.execute("SELECT COUNT(*) FROM create_receipts").fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     admin_client = business.client(replacement)
@@ -90,7 +92,7 @@ def test_v3_upgrade_preserves_data_admin_and_employee_sessions_and_identity(busi
 @pytest.mark.parametrize("damage", ["receipt-table-collision", "missing-existing-index"])
 def test_v3_upgrade_refuses_unexpected_schema_before_any_ddl(business, damage):
     _downgrade_v3(business)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         if damage == "receipt-table-collision":
             connection.execute("CREATE TABLE create_receipts(preserved TEXT)")
             connection.execute("INSERT INTO create_receipts VALUES('Keep existing data')")
@@ -102,7 +104,7 @@ def test_v3_upgrade_refuses_unexpected_schema_before_any_ddl(business, damage):
     assert _schema(business) == schema_before
     assert _snapshot(business) == data_before
     if damage == "receipt-table-collision":
-        with business.db() as connection:
+        with business.raw_db() as connection:
             assert connection.execute("SELECT preserved FROM create_receipts").fetchone()[0] == "Keep existing data"
 
 
@@ -122,7 +124,7 @@ def test_v3_upgrade_ddl_and_version_roll_back_together_on_storage_failure(busine
     assert _schema(business) == schema_before
     assert _snapshot(business) == data_before
     db.Database(business.directory, migrate=True)
-    assert _schema(business)[0] == 5
+    assert _schema(business)[0] == 6
     assert _snapshot(business) == data_before
 
 
@@ -148,9 +150,9 @@ def test_explicit_upgrade_cli_exits_without_listener_provisioning_or_secret_outp
     before = _snapshot(business)
     assert _cli().main(["--data-dir", str(business.directory), "--migrate-storage"]) == 0
     captured = capsys.readouterr()
-    assert captured.out == "Existing storage validated and upgraded to schema five. Old backups and SQLite remnants may still contain plaintext MFA seeds.\n"
+    assert captured.out == "Existing storage validated and upgraded to schema six. Old backups and SQLite remnants may still contain plaintext MFA seeds.\n"
     assert captured.err == ""
-    assert _schema(business)[0] == 5
+    assert _schema(business)[0] == 6
     assert _snapshot(business) == before
 
 

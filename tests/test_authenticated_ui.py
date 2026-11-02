@@ -539,15 +539,12 @@ def test_absent_or_denied_permission_does_not_reach_live_authorization(check, pe
 @pytest.mark.parametrize("perms", [[], "Admin", False])
 def test_malformed_permission_mapping_never_authorizes(perms):
     authorization_calls = []
-    ctx = SecurityContext(
-        role="Admin", perms=perms, authenticated=True,
-        _authorize=lambda *args: authorization_calls.append(args) or True,
-    )
-    assert can_write(ctx, "can_edit_controls", default=True) is False
-    assert can_mutate(ctx, "can_edit_controls", default=True) is False
-    # has_perm retains its documented type-error contract for malformed maps.
+    # Invalid containers are refused while constructing the read-only snapshot.
     with pytest.raises(TypeError, match="must be a mapping"):
-        has_perm(ctx, "can_edit_controls", default=True)
+        SecurityContext(
+            role="Admin", perms=perms, authenticated=True,
+            _authorize=lambda *args: authorization_calls.append(args) or True,
+        )
     assert authorization_calls == []
 
 

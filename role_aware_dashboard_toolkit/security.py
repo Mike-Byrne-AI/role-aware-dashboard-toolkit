@@ -8,21 +8,73 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
 
-@dataclass
+class _PermissionSnapshot(dict[str, bool]):
+    """A copied dict with no ordinary mutation API, including during copying.
+
+    Keeping dict compatibility supports JSON and dataclasses.asdict. This is
+    protection from accidental changes in trusted Python, not a plugin sandbox.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> _PermissionSnapshot:
+        result = super().__new__(cls)
+        dict.__init__(result, *args, **kwargs)
+        return result
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # __new__ fills the snapshot once; calling __init__ again cannot edit it.
+        pass
+
+    def _deny_mutation(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("SecurityContext.perms is read-only; create a new context")
+
+    __setitem__ = __delitem__ = __ior__ = _deny_mutation
+    clear = pop = popitem = setdefault = update = _deny_mutation
+
+    def __copy__(self) -> _PermissionSnapshot:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _PermissionSnapshot:
+        result = type(self)()
+        memo[id(self)] = result
+        dict.update(result, ((deepcopy(key, memo), deepcopy(value, memo)) for key, value in self.items()))
+        return result
+
+    def __reduce__(self) -> tuple[Any, tuple[dict[str, bool]]]:
+        return type(self), (dict(self),)
+
+
+@dataclass(frozen=True)
 class SecurityContext:
-    """Immutable-ish snapshot of who the current user is and what they can do."""
+    """Read-only identity and permission snapshot with optional live authority.
+
+    Construct a new context or use dataclasses.replace instead of editing fields.
+    Permission mappings are defensively copied; copying/serializing a snapshot
+    never grants authority. Authenticated checks still consult the live authorizer.
+    This does not isolate untrusted Python code running inside the host process.
+    """
 
     role: str = ""
-    perms: dict[str, bool] = field(default_factory=dict)
+    perms: Mapping[str, bool] = field(default_factory=dict)
     controls_writable: bool = True
     authenticated: bool = False
     user_id: str = ""
     session_id: str = ""
     _authorize: Callable[[str, bool], bool] | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Retain the existing fail-closed behavior for an absent mapping. Other
+        # malformed containers are rejected before a context can be used.
+        if self.perms is not None:
+            if not isinstance(self.perms, Mapping):
+                raise TypeError("SecurityContext.perms must be a mapping")
+            object.__setattr__(self, "perms", _PermissionSnapshot(self.perms))
 
 
 
