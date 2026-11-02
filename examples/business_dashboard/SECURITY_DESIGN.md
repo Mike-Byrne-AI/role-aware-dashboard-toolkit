@@ -95,11 +95,17 @@ The private event timeline requires current administrator authority.
   have a bounded budget; suppressed observations and recording failures remain
   visible in counters. The outbox uses at-least-once delivery to a local
   idempotent consumer. It is not an off-host archive or a tamper-proof log.
-  Pending obligations are retained; capacity exhaustion can refuse sensitive
-  work until an operator drains them. Ordinary events cannot consume the final
-  1,000 of 10,000 slots, which are reserved for current-administrator verified
-  authentication recovery and narrow containment. This is finite headroom, not
-  unlimited availability; an offline operator can drain an exhausted queue.
+  A lifespan-owned worker attempts at most 100 local deliveries per cycle, with
+  five-second waits between cycles; protected status reports progress and failures. Pending
+  obligations are retained; capacity exhaustion can still refuse sensitive work.
+  Ordinary admission keeps retained events plus usable employee sessions within
+  9,000 slots. Each such session reserves its eventual termination receipt; only
+  a verified removal of an owned session may consume that reservation. The final
+  1,000 slots remain administrator authentication/containment headroom, and
+  administrator actions preserve employee reservations. Existing overfull state
+  reports a reservation deficit and needs draining before these guarantees apply.
+  This is finite headroom, not unlimited availability; an offline operator can
+  drain an exhausted queue if automatic delivery cannot recover it.
 - **Key custody and recovery are operational work.** `[verified/source]`
   MFA encryption protects database-only disclosure. A host able to read both key
   and database can decrypt seeds. Rotation does not erase already exposed seeds,

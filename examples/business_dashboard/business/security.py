@@ -16,6 +16,7 @@ from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeCo
 from role_aware_dashboard_toolkit.security import RoleDef
 
 COOKIE_NAME = "westbridge_session"
+HTTPS_COOKIE_NAME = "__Host-westbridge_session"
 ISSUER = "westbridge-business-example"
 PASSWORD_ITERATIONS = 600_000
 SESSION_SECONDS = 8 * 60 * 60
@@ -25,6 +26,27 @@ ROLES = {
     "employee": RoleDef("employee", EMPLOYEE_PERMISSIONS),
     "admin": RoleDef("admin", {**EMPLOYEE_PERMISSIONS, "can_manage_business": True, "can_manage_freeze": True}),
 }
+
+
+def session_cookie_name(origin):
+    """Bind HTTPS sessions to the configured host, never a sibling's Domain cookie.
+
+    The unprefixed name is only for the explicit loopback HTTP demonstration.
+    HTTPS must not fall back to it, including during a deployment transition.
+    """
+    return HTTPS_COOKIE_NAME if origin.scheme == "https" else COOKIE_NAME
+
+
+def read_session_token(request, cookie_name):
+    """Refuse ambiguous selected cookies before a parser chooses one by order."""
+    count = sum(
+        segment.partition("=")[0].strip() == cookie_name
+        for header in request.headers.getlist("cookie")
+        for segment in header.split(";") if "=" in segment
+    )
+    if count > 1:
+        raise HTTPException(400, "Ambiguous session cookies. Clear this site's cookies and sign in again.")
+    return request.cookies.get(cookie_name)
 
 
 def hash_password(password: str) -> str:

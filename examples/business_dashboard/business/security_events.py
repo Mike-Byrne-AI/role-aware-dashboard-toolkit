@@ -57,6 +57,24 @@ def _normal_capacity():
     return MAX_EVENTS - _containment_reserve()
 
 
+def _session_reserve(connection, *, now=None):
+    """Earmark one future termination event per currently usable employee session.
+
+    Count server-owned rows, never request claims. Expired sessions and disabled
+    accounts no longer carry authority. Conservatively counting an otherwise
+    invalid session only withholds capacity; it cannot grant access.
+    """
+    from .security import IDLE_SECONDS, SESSION_SECONDS
+
+    now = time.time() if now is None else now
+    return connection.execute(
+        "SELECT COUNT(*) FROM sessions s JOIN users u ON u.id=s.user_id "
+        "WHERE u.active=1 AND u.role='employee' AND s.expires_at>? "
+        "AND s.last_seen>? AND s.created_at>?",
+        (now, now - IDLE_SECONDS, now - SESSION_SECONDS),
+    ).fetchone()[0]
+
+
 def _can_use_containment_reserve(connection, code, outcome, actor):
     # Actor comes from the host's verified auth context, never a request label.
     # Recheck current active administrator status inside the mutation's own
@@ -91,6 +109,36 @@ def record_event(connection, code, *, outcome="succeeded", reason="completed", a
     This function deliberately propagates failures: the associated sensitive
     mutation must roll back when its required event cannot be committed.
     """
+    return _record_event(connection, code, outcome=outcome, reason=reason, actor=actor,
+                         target=target, method=method, now=now)
+
+
+def terminate_own_session(connection, code, *, hashed, actor):
+    """Atomically terminate an owned session and spend its reserved event slot.
+
+    HTTP routes must authenticate and check CSRF/freshness first. This helper
+    independently proves the existing session belongs to that active principal;
+    no caller-supplied priority or event name alone can consume session headroom.
+    Failure rolls back with the caller's action transaction.
+    """
+    if not connection.in_transaction or code not in {"session_logged_out", "session_revoked"}:
+        raise ValueError("Session termination requires a verified action transaction.")
+    reserve_now = time.time()
+    reserved_before = _session_reserve(connection, now=reserve_now)
+    removed = connection.execute(
+        "DELETE FROM sessions WHERE token_hash=? AND user_id IN "
+        "(SELECT id FROM users WHERE principal=? AND active=1)", (hashed, actor),
+    ).rowcount
+    if removed != 1:
+        raise ValueError("The owned session is unavailable for termination.")
+    # An expired session was not reserved: deleting it cannot claim privilege.
+    reserved_slot_released = _session_reserve(connection, now=reserve_now) < reserved_before
+    return _record_event(connection, code, actor=actor, session_terminated=reserved_slot_released,
+                         reserve_now=reserve_now)
+
+
+def _record_event(connection, code, *, outcome="succeeded", reason="completed", actor=None,
+                  target=None, method="none", now=None, session_terminated=False, reserve_now=None):
     if not connection.in_transaction:
         raise ValueError("Security events require the action transaction.")
     if (code not in CODES or outcome not in {"succeeded", "denied"} or reason not in REASONS
@@ -101,7 +149,11 @@ def record_event(connection, code, *, outcome="succeeded", reason="completed", a
     now = time.time() if now is None else now
     if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
         raise ValueError("Invalid security event time.")
-    capacity = MAX_EVENTS if _can_use_containment_reserve(connection, code, outcome, actor) else _normal_capacity()
+    privileged = session_terminated or _can_use_containment_reserve(connection, code, outcome, actor)
+    # E + S <= normal capacity for ordinary events; E + S <= MAX_EVENTS for
+    # administrator containment. A proven termination lowers S before adding E,
+    # so it still fits after an administrator has used part of its reserve.
+    capacity = (MAX_EVENTS if privileged else _normal_capacity()) - _session_reserve(connection, now=reserve_now)
     _trim(connection, now, capacity)
     identifier = secrets.token_hex(16)
     connection.execute(
@@ -152,12 +204,17 @@ def timeline(connection, *, limit=50, before=None):
         "WHERE (? IS NULL OR e.sequence<?) ORDER BY e.sequence DESC LIMIT ?", (before, before, limit + 1),
     ).fetchall()
     visible = [dict(row) for row in rows[:limit]]
+    session_reserve = _session_reserve(connection)
+    retained = connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0]
     return {"events": visible, "next_before": visible[-1]["sequence"] if len(rows) > limit else None,
             "delivery": delivery_status(connection),
             "retention": {"max_events": MAX_EVENTS, "max_age_days": MAX_AGE_SECONDS // 86400,
                           "max_denial_events": _denial_capacity(),
-                          "normal_event_capacity": _normal_capacity(),
+                          "normal_event_capacity": max(0, _normal_capacity() - session_reserve),
+                          "base_normal_event_capacity": _normal_capacity(),
                           "containment_reserve": _containment_reserve(),
+                          "employee_session_reserve": session_reserve,
+                          "reservation_deficit": max(0, retained + session_reserve - MAX_EVENTS),
                           "reserve_eligibility": "current_active_admin_containment_only",
                           "pending_events_preserved": True}}
 
@@ -176,7 +233,8 @@ def consume_local(connection, event):
         raise ValueError("Security event identity does not match its delivered payload.")
 
 
-def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, transaction_factory=None):
+def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, transaction_factory=None,
+                     stop_requested=None):
     """Bounded delivery with durable retries and no automatic business replay.
 
     `deliver` is a trusted injectable consumer for local fault tests. No network
@@ -196,6 +254,8 @@ def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, t
         ).fetchall()
     delivered = failed = 0
     for row in rows:
+        if stop_requested is not None and stop_requested():
+            break
         event = dict(row)
         with transaction() as connection:
             pending = connection.execute(

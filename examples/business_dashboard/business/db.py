@@ -289,6 +289,27 @@ def create_private_file(path: Path, content: bytes) -> None:
         os.fsync(handle.fileno())
 
 
+def sync_directory(directory: Path) -> bool:
+    """Flush a published directory entry on POSIX; failures must stop cutover.
+
+    Python's portable Windows file API does not supply directory fsync. False
+    explicitly leaves directory-entry durability unverified on that platform;
+    flushing file contents alone is not a host/power-loss durability guarantee.
+    """
+    if os.name != "posix":
+        return False
+    flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+             | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = os.open(directory, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError("Key publication requires an ordinary directory.")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return True
+
+
 class Database:
     """Open existing initialized state only; never repair/reseed on startup."""
 
@@ -350,8 +371,13 @@ class Database:
         check_private_file(self.path)
         for suffix in ("-journal", "-wal", "-shm"):
             auxiliary = Path(str(self.path) + suffix)
-            if auxiliary.exists() or auxiliary.is_symlink():
+            try:
                 check_private_file(auxiliary)
+            except FileNotFoundError:
+                # SQLite can remove a sidecar when another connection commits
+                # or closes. Missing auxiliaries are ordinary; invalid links,
+                # ownership and permission failures must still fail closed.
+                pass
         mode = "ro" if readonly else "rw"
         connection = sqlite3.connect(self.path.as_uri() + "?mode=" + mode, uri=True, timeout=10)
         connection.row_factory = sqlite3.Row

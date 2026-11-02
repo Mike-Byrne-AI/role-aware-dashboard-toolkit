@@ -228,6 +228,8 @@ def test_hosted_app_secure_cookies_host_origin_and_forwarding_boundary(hosted, b
         })
         assert response.status_code == 200
         cookie = response.headers["set-cookie"].lower()
+        assert cookie.startswith("__host-westbridge_session=")
+        assert "domain=" not in cookie and "path=/" in cookie
         assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
         assert response.headers["strict-transport-security"] == "max-age=31536000"
         assert client.post("/api/logout", json={}, headers={

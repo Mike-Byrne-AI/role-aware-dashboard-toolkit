@@ -16,6 +16,7 @@ from tests.test_business_dashboard import (
 )
 from tests.test_business_backup import backup
 from business.db import Database, RuntimeKeyError, create_private_file
+from business import db as storage
 from business.mfa import enroll_in_transaction
 from business.secret_store import SecretStore, default_key_path
 from business.app import create_app
@@ -281,3 +282,55 @@ def test_reusing_original_key_material_is_not_accepted_as_rotation(business, mon
         _rotate(business)
     assert replacement.exists() and _fingerprint(business) == before
     Database(business.directory, mfa_key_file=original)
+
+
+@pytest.mark.parametrize("new_parents", [False, True])
+def test_key_directory_entries_are_published_before_ciphertext_changes(business, monkeypatch, new_parents):
+    original, replacement = _paths(business)
+    if new_parents:
+        replacement = business.directory.parent / "new-custody" / "nested" / "replacement.key"
+    expected = [replacement.parent]
+    if new_parents:
+        expected.extend((replacement.parent.parent, business.directory.parent))
+    synced = []
+    reencrypt = rotation._reencrypt
+
+    def sync_directory(directory):
+        assert replacement.is_file()
+        synced.append(directory)
+
+    def after_publication(*args):
+        assert synced == expected, "Key and new ancestor entries must be flushed before cutover"
+        return reencrypt(*args)
+
+    # Inject the platform synchronization boundary, so ordering also runs on
+    # Windows. POSIX's real directory-descriptor behavior is checked separately.
+    monkeypatch.setattr(storage, "sync_directory", sync_directory, raising=False)
+    monkeypatch.setattr(rotation, "_reencrypt", after_publication)
+    rotation.rotate_mfa_key(business.directory, current_mfa_key_file=original,
+                            new_mfa_key_file=replacement, maintenance_confirmed=True)
+    Database(business.directory, mfa_key_file=replacement)
+
+
+@pytest.mark.parametrize("failed_sync", [0, 1, 2])
+def test_directory_flush_failure_prevents_key_cutover_and_preserves_attempt(business, monkeypatch, failed_sync):
+    original, _ = _paths(business)
+    replacement = business.directory.parent / "failed-custody" / "nested" / "replacement.key"
+    before = _fingerprint(business)
+    calls = []
+
+    def fail_sync(directory):
+        calls.append(directory)
+        if len(calls) - 1 == failed_sync:
+            raise OSError("Disposable directory flush failure")
+
+    monkeypatch.setattr(storage, "sync_directory", fail_sync, raising=False)
+    monkeypatch.setattr(rotation, "_reencrypt", lambda *args: pytest.fail("Unsynced key reached ciphertext changes"))
+    with pytest.raises(OSError, match="directory flush"):
+        rotation.rotate_mfa_key(business.directory, current_mfa_key_file=original,
+                                new_mfa_key_file=replacement, maintenance_confirmed=True)
+    assert len(calls) == failed_sync + 1
+    assert replacement.is_file() and _fingerprint(business) == before
+    Database(business.directory, mfa_key_file=original)
+    with pytest.raises(ValueError, match="ciphertext|encryption key"):
+        Database(business.directory, mfa_key_file=replacement)

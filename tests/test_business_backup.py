@@ -54,6 +54,9 @@ def test_backup_captures_committed_wal_records_and_excludes_external_secrets(bus
         writer.commit()
         before = _fingerprint(business.directory)
         output = _make_backup(business)
+        # A read-write SQLite inspection can clean up WAL sidecars. Inspect the
+        # actual published bundle first, before any helper opens its database.
+        assert {item.name for item in output.iterdir()} == {*backup.FILES, "manifest.json"}
         assert _fingerprint(output) == before
     assert _fingerprint(business.directory) == before
     assert {item.name for item in output.iterdir()} == {"business.sqlite3", "identity.key", "manifest.json"}
@@ -218,10 +221,10 @@ def test_final_snapshot_failure_leaves_offline_marker_and_sources_unchanged(busi
     before = _fingerprint(business.directory), _fingerprint(bundle)
     original = backup._snapshot
 
-    def fail_publication(source, destination):
+    def fail_publication(source, destination, **options):
         if destination.parent == restored:
             raise OSError("Disposable simulated storage failure")
-        return original(source, destination)
+        return original(source, destination, **options)
 
     monkeypatch.setattr(backup, "_snapshot", fail_publication)
     with pytest.raises(OSError):
@@ -288,15 +291,20 @@ def _backup_cli(*arguments):
                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
 
 
-def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_authority(business):
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_authority(business, journal_mode):
     attempt = business.directory.parent / "staging-attempt"
     attempt.mkdir(mode=0o700)
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=" + journal_mode)
     with business.db() as connection:
         connection.execute("INSERT INTO messages VALUES('large-doc-drill','alex',?,'2026-10-27')",
                            ("Disposable archive record " * 50000,))
     key = default_key_path(business.directory)
     created = _backup_cli("backup", business.directory, "--output", attempt / "bundle", "--mfa-key-file", key)
     assert created.returncode == 0, created.stderr
+    # Pack the untouched CLI output; no fingerprint/read-write connection may
+    # silently repair the artifact before the operator's next documented step.
     packed = _hosting_snippet("pack", attempt)
     assert packed.returncode == 0, packed.stderr
     assert (attempt / "backup.zip").stat().st_size > 1024 * 1024
@@ -326,6 +334,49 @@ def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_auth
     if os.name == "posix":
         assert (attempt / "decrypted-bundle").stat().st_mode & 0o777 == 0o700
         assert all(path.stat().st_mode & 0o777 == 0o600 for path in (attempt / "decrypted-bundle").iterdir())
+
+
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_cli_backup_is_immediately_restorable_without_inspecting_database(business, journal_mode):
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=" + journal_mode)
+    bundle = business.directory.parent / "untouched-cli-bundle"
+    restored = business.directory.parent / "untouched-cli-restored"
+    key = default_key_path(business.directory)
+    created = _backup_cli("backup", business.directory, "--output", bundle, "--mfa-key-file", key)
+    assert created.returncode == 0, created.stderr
+    completed = _backup_cli("restore", bundle, "--output", restored, "--mfa-key-file", key,
+                            "--security-source", business.directory)
+    assert completed.returncode == 0, completed.stderr
+    assert {item.name for item in bundle.iterdir()} == {*backup.FILES, "manifest.json"}
+    assert _rows(restored, "users") == _rows(business.directory, "users")
+    assert _rows(restored, "sessions") == []
+    with Database(restored, mfa_key_file=key).transaction() as connection:
+        assert connection.execute("SELECT frozen FROM settings WHERE id=1").fetchone()[0] == 1
+    # Only the new snapshot is normalized; the live source keeps its mode.
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0].upper() == journal_mode
+
+
+def test_historical_wal_bundle_can_be_restored_twice_without_source_sidecars(business):
+    bundle = _make_backup(business)
+    # A historical valid bundle can have a WAL header but no WAL dependency:
+    # its previous writer checkpointed and closed before archiving three files.
+    with closing(sqlite3.connect(bundle / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["business.sqlite3"] = backup._digest(bundle / "business.sqlite3")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = {path.name: backup._digest(path) for path in bundle.iterdir()}
+    assert set(before) == {*backup.FILES, "manifest.json"}
+    for attempt in range(2):
+        restored = business.directory.parent / f"historical-wal-restore-{attempt}"
+        backup.restore_backup(bundle, restored, mfa_key_file=default_key_path(business.directory),
+                              security_source=business.directory)
+        # No SQLite connection to the original may hide sidecar creation here.
+        assert {path.name: backup._digest(path) for path in bundle.iterdir()} == before
+        assert _rows(restored, "sessions") == []
 
 
 @pytest.mark.parametrize("damage", ["traversal", "duplicate", "missing", "compressed", "digest"])

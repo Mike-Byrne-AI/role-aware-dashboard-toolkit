@@ -332,8 +332,9 @@ Use disposable fictional records and private evidence for these checks:
 
 1. Confirm the deployed source revision, URL, exact public origin, persistent
    mount and current runtime dependency audit.
-2. Check HTTPS redirects/certificate, accepted Host/Origin, cookie Secure,
-   HttpOnly and SameSite attributes, and absence of secrets in service logs.
+2. Check HTTPS redirects/certificate, accepted Host/Origin, the
+   `__Host-westbridge_session` cookie with Secure, HttpOnly, SameSite=Strict,
+   Path=/ and no Domain attribute, and absence of secrets in service logs.
 3. Sign in with the administrator password plus authenticator; verify wrong,
    missing and reused codes fail. Verify employee password-only sign-in and
    guest access do not grant administration.
@@ -403,6 +404,17 @@ then rehearse the existing testbed's controlled maintenance/cutover procedure
 and reconcile current access before switching to restored storage.
 
 ## Prepare the existing security testbed
+
+HTTPS sessions now use `__Host-westbridge_session`. Deploying this change
+requires existing HTTPS users to sign in again: the old `westbridge_session`
+cookie is deliberately not accepted as a fallback. Preserve a working password
+and authenticator or passkey before the update, and verify both sign-in methods
+on the deployed revision. Do not rename or copy an existing cookie to bridge the
+transition. The explicit loopback HTTP demonstration retains its old cookie
+name. Duplicate cookies with the selected name are rejected, rather than letting
+header order choose an account. Supporting browsers reject a sibling site's
+attempt to set the `__Host-` cookie with a parent Domain attribute; verify that
+boundary separately from the public host's TLS/proxy configuration.
 
 The existing Westbridge service is the testbed. These exercises do not require
 creating another paid service. Identify the existing service, exact deployed

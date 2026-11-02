@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from contextlib import closing
+from contextlib import AsyncExitStack, asynccontextmanager, closing
 from datetime import datetime, timedelta
 import json
 import hashlib
@@ -56,6 +56,7 @@ class LabFixture:
     """Runner-owned app switch; no HTTP endpoint can change its target."""
 
     def __init__(self, data_dir, public_origin, output):
+        from starlette.routing import Router
         from business.app import create_app
         from business.secret_store import default_key_path
         from business.evidence import write_receipt
@@ -76,9 +77,20 @@ class LabFixture:
                 os.environ.pop("BUSINESS_SECURITY_EVIDENCE_FILE", None)
             else:
                 os.environ["BUSINESS_SECURITY_EVIDENCE_FILE"] = previous
+        self._lifespan_handler = Router(lifespan=self._lifespan)
+
+    @asynccontextmanager
+    async def _lifespan(self, _app):
+        # Requests can switch targets, but both apps keep their actual startup
+        # and shutdown contracts. Partial startup also unwinds entered contexts.
+        async with AsyncExitStack() as stack:
+            for app in (self.absent, self.configured):
+                await stack.enter_async_context(app.router.lifespan_context(app))
+            yield
 
     async def __call__(self, scope, receive, send):
-        await self.application(scope, receive, send)
+        target = self._lifespan_handler if scope["type"] == "lifespan" else self.application
+        await target(scope, receive, send)
 
     def select_evidence(self):
         from business.evidence import write_receipt
@@ -1832,6 +1844,88 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
             context.close()
 
 
+def exercise_https_cookie_boundary(browser, credentials, checks, data_dir):
+    """Real browser cookies over intercepted fictional HTTPS; no live host/TLS claim."""
+    from fastapi.testclient import TestClient
+    from business.app import create_app
+    from business.secret_store import default_key_path
+    from business.security import COOKIE_NAME, HTTPS_COOKIE_NAME
+
+    origin = "https://dashboard.example.test"
+    keys = ("BUSINESS_TURNSTILE_SITE_KEY", "BUSINESS_TURNSTILE_SECRET_KEY")
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ.update({key: "synthetic-cookie-boundary-key" for key in keys})
+        application = create_app(data_dir, public_origin=origin, mfa_key_file=default_key_path(data_dir))
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    context = browser.new_context()
+    try:
+        with TestClient(application, base_url=origin) as backend:
+            response = backend.post("/api/login", json={"username": "blair", "password": credentials["blair"]},
+                                    headers={"Origin": origin})
+            assert response.status_code == 200
+            foreign = backend.cookies[HTTPS_COOKIE_NAME]
+            backend.cookies.clear()
+
+            def route_request(route, request):
+                target = urlsplit(request.url)
+                if target.hostname == "evil.example.test":
+                    # Both attempts are actual browser Set-Cookie processing.
+                    name = HTTPS_COOKIE_NAME if target.path == "/prefixed" else COOKIE_NAME
+                    route.fulfill(status=200, content_type="text/html", body="<h1>Disposable sibling</h1>", headers={
+                        "Set-Cookie": f"{name}={foreign}; Secure; HttpOnly; SameSite=Strict; Domain=example.test; Path=/",
+                    })
+                elif target.hostname == "dashboard.example.test" and target.path == "/fixture":
+                    route.fulfill(status=200, content_type="text/html", body="<h1>Disposable dashboard origin</h1>")
+                elif target.hostname == "dashboard.example.test" and target.path.startswith("/api/"):
+                    headers = {key: value for key, value in request.all_headers().items()
+                               if key in ("cookie", "origin", "content-type", "x-csrf-token", "sec-fetch-site")}
+                    backend.cookies.clear()
+                    response = backend.request(request.method, target.path, headers=headers, content=request.post_data)
+                    backend.cookies.clear()
+                    route.fulfill(status=response.status_code, body=response.content, headers={
+                        key: value for key, value in response.headers.items() if key in ("content-type", "set-cookie")
+                    })
+                else:
+                    route.abort()
+
+            context.route("**/*", route_request)
+            page = context.new_page()
+            page.goto(origin + "/fixture")
+            signed_in = page.evaluate("""async payload => {
+                const response = await fetch('/api/login', {method:'POST',
+                    headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+                return {status:response.status, body:await response.json()};
+            }""", {"username": "alex", "password": credentials["alex"]})
+            assert signed_in["status"] == 200 and signed_in["body"]["user"]["id"] == "alex"
+            original = next(cookie["value"] for cookie in context.cookies(origin) if cookie["name"] == HTTPS_COOKIE_NAME)
+            page.goto("https://evil.example.test/legacy")
+            page.goto("https://evil.example.test/prefixed")
+            selected = [cookie for cookie in context.cookies(origin) if cookie["name"] == HTTPS_COOKIE_NAME]
+            assert len(selected) == 1 and selected[0]["value"] == original
+            assert selected[0]["domain"] == "dashboard.example.test"
+            assert any(cookie["name"] == COOKIE_NAME and cookie["value"] == foreign for cookie in context.cookies(origin))
+            page.goto(origin + "/fixture")
+            session = page.evaluate("async () => await (await fetch('/api/session')).json()")
+            assert session["user"]["id"] == "alex"
+            saved = page.evaluate("""async csrf => {
+                const response = await fetch('/api/messages', {method:'POST',
+                    headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+                    body:JSON.stringify({body:'Disposable original-account cookie control'})});
+                return {status:response.status, body:await response.json()};
+            }""", session["csrf"])
+            assert saved["status"] == 201 and saved["body"]["message"]["author"] == "Alex Morgan"
+            checks.append("the real browser rejects a sibling Domain cookie for the HTTPS host-prefixed session; legacy injection cannot switch the account or write attribution")
+    finally:
+        context.close()
+
+
 def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
     """Real browser WebAuthn with Chrome's virtual authenticator, never a live key."""
     import pyotp
@@ -2045,11 +2139,21 @@ def exercise_lab(browser, url, output, credentials, checks, data_dir, fixture):
         with page.expect_response(lambda response: urlsplit(response.url).path == "/api/admin/security/events") as response:
             page.get_by_role("button", name="Load timeline", exact=True).click()
         assert response.value.status == 200
+        timeline = response.value.json()
+        assert timeline["automatic_delivery"]["running"] is True
         expect(page.locator(".lab-event-list li").first).to_be_visible()
         assert page.locator(".lab-event-list li").count() > 0
+        expect(page.locator("#lab-events-content")).to_contain_text("Automatic delivery: running")
+        principals = page.locator(".lab-event-list li").first.locator("details")
+        principals.locator("summary").click()
+        expect(principals.locator("code").nth(0)).to_have_text(timeline["events"][0]["actor"] or "Not established")
+        expect(principals.locator("code").nth(1)).to_have_text(timeline["events"][0]["target"] or "Not recorded")
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         page.screenshot(path=str(output / "lab-admin-timeline.png"), full_page=True)
-        checks.append("an authenticated administrator explicitly loads persisted security events through the read-only timeline")
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Expanded principals overflow mobile timeline"
+        page.screenshot(path=str(output / "lab-admin-timeline-mobile.png"), full_page=True)
+        checks.append("an administrator loads persisted events, inspects automatic delivery and opaque principals, and retains a readable mobile timeline")
 
     with browser.new_context(viewport={"width": 390, "height": 844}) as employee:
         response = employee.request.post(url + "/api/login", data={"username": "alex", "password": credentials["alex"]},
@@ -2123,6 +2227,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
                 return
             if security_only:
                 exercise_security(browser, url, output, credentials, checks, data_dir)
+                exercise_https_cookie_boundary(browser, credentials, checks, data_dir)
                 return
             if safe_saves_only:
                 exercise_safe_saves(browser, url, output, credentials, checks, data_dir)
@@ -2406,7 +2511,7 @@ def main(argv=None):
     focused.add_argument("--admin-tools-only", action="store_true", help="Run only administrator guidance, activity and session-race browser checks.")
     focused.add_argument("--password-faults-only", action="store_true", help="Run only real local password-change interruption and session-race checks.")
     focused.add_argument("--safe-saves-only", action="store_true", help="Run only real create retry, posting-limit and password-policy browser checks.")
-    focused.add_argument("--security-only", action="store_true", help="Run real local session revocation, fresh verification and draft-preservation checks.")
+    focused.add_argument("--security-only", action="store_true", help="Run real local session, verification, draft-preservation and HTTPS sibling-cookie checks.")
     focused.add_argument("--passkeys-only", action="store_true", help="Run real local WebAuthn with a disposable Chrome virtual authenticator.")
     focused.add_argument("--lab-only", action="store_true", help="Run disposable scenarios and inspect the public evidence lab and protected timeline in a real browser.")
     options = parser.parse_args(argv)

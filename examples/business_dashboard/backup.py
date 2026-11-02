@@ -76,9 +76,14 @@ def _digest(path) -> str:
     return digest.hexdigest()
 
 
-def _connect(path, *, readonly=True):
+def _connect(path, *, readonly=True, immutable=False):
+    if immutable and not readonly:
+        raise BackupError("An immutable archive connection must be read-only.")
     check_private_file(path)
-    connection = sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True, timeout=10)
+    query = "?mode=ro" if readonly else "?mode=rw"
+    if immutable:
+        query += "&immutable=1"
+    connection = sqlite3.connect(path.as_uri() + query, uri=True, timeout=10)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
     return connection
@@ -101,7 +106,7 @@ def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
         raise BackupError("The database access state is incomplete or invalid.") from None
 
 
-def _snapshot(source, destination):
+def _snapshot(source, destination, *, frozen_bundle=False):
     """Use SQLite's backup API, including committed WAL data, with a deadline."""
     create_private_file(destination, b"")
     started = time.monotonic()
@@ -110,8 +115,19 @@ def _snapshot(source, destination):
         if time.monotonic() - started > SNAPSHOT_SECONDS:
             raise BackupError("Snapshot deadline exceeded; no complete backup was published.")
 
-    with closing(_connect(source)) as incoming, closing(_connect(destination, readonly=False)) as outgoing:
+    # Only restore's validated three-file archive is immutable: no journal
+    # dependency exists, its digest is checked before/after copying, and its
+    # operator must keep it unchanged. Normal live snapshots retain locking and
+    # include committed WAL data. Immutable archive reads must not add sidecars
+    # beside an old standalone bundle whose database still has a WAL header.
+    with closing(_connect(source, immutable=frozen_bundle)) as incoming, closing(_connect(destination, readonly=False)) as outgoing:
         incoming.backup(outgoing, pages=128, progress=progress, sleep=0.05)
+        # A backup inherits the source's WAL header. A later read-only open can
+        # then leave WAL/SHM sidecars, violating the standalone bundle contract.
+        # Normalize only the newly created destination while we own its sole
+        # writer; never delete a WAL file or change the source's journal mode.
+        if outgoing.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+            raise BackupError("The new snapshot could not be made standalone; preserve the incomplete output.")
 
 
 def create_backup(data_dir, output, *, mfa_key_file=None):
@@ -134,6 +150,8 @@ def create_backup(data_dir, output, *, mfa_key_file=None):
         "files": {name: _digest(destination / name) for name in FILES},
     }
     create_private_file(destination / "manifest.json", json.dumps(manifest, indent=2).encode() + b"\n")
+    if {path.name for path in destination.iterdir()} != {*FILES, "manifest.json", "BACKUP_INCOMPLETE"}:
+        raise BackupError("The new backup contains unexpected files; preserve the incomplete output.")
     incomplete.unlink()
     return manifest
 
@@ -233,7 +251,7 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
     # The private staging copy is disposable; never remove either source.
     with tempfile.TemporaryDirectory(prefix=".westbridge-restore-", dir=output.parent) as temporary:
         staged = Path(temporary)
-        _snapshot(source / "business.sqlite3", staged / "business.sqlite3")
+        _snapshot(source / "business.sqlite3", staged / "business.sqlite3", frozen_bundle=True)
         # SQLite backup may normalize page metadata. Validate the staged schema
         # and state below; verify the original bundle remained unchanged.
         if manifest["files"]["business.sqlite3"] != _digest(source / "business.sqlite3"):

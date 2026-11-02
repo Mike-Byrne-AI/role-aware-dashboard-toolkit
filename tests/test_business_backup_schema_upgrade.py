@@ -79,7 +79,8 @@ def test_schema_five_archive_requires_explicit_restore_upgrade(business):
     assert (_archive_bytes(bundle), _fingerprint(business.directory)) == before
 
 
-def test_schema_five_restore_keeps_old_business_data_and_current_security_authority(business):
+@pytest.mark.parametrize("archive_journal_mode", ["DELETE", "WAL"])
+def test_schema_five_restore_keeps_old_business_data_and_current_security_authority(business, archive_journal_mode):
     with business.db() as connection:
         connection.execute("UPDATE contacts SET notes='Historical business notes' WHERE id='contact-1'")
         connection.execute(
@@ -88,6 +89,9 @@ def test_schema_five_restore_keeps_old_business_data_and_current_security_author
              0, 0, 0, "Historical synthetic credential", 1.0),
         )
     bundle = _schema_five_archive(business)
+    with closing(sqlite3.connect(bundle / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=" + archive_journal_mode)
+    _refresh_manifest(bundle)
     replacement_password = "Current authority password 93724!"
     with business.db() as connection:
         connection.execute("UPDATE contacts SET notes='Newer business notes' WHERE id='contact-1'")

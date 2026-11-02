@@ -121,6 +121,12 @@ def business_seed():
 
 @pytest.fixture
 def business(business_seed, monkeypatch):
+    # Event accounting/fault tests control delivery explicitly. Real lifespan
+    # delivery, failure and overlapping-client behavior have dedicated tests in
+    # test_business_security_delivery.py; production/browser apps keep it on.
+    from business.security_delivery import SecurityEventDispatcher
+    monkeypatch.setattr(SecurityEventDispatcher, "start", lambda self: None)
+    monkeypatch.setattr(SecurityEventDispatcher, "stop", lambda self: None)
     with tempfile.TemporaryDirectory(prefix="radt-business-test-") as temporary:
         directory = Path(temporary).resolve() / "private"
         shutil.copytree(business_seed.directory, directory)

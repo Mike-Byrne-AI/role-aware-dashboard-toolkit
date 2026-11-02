@@ -197,6 +197,7 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/business_dashboard/business/evidence.py",
         "/examples/business_dashboard/business/security_lab.py",
         "/examples/business_dashboard/business/security_events.py",
+        "/examples/business_dashboard/business/security_delivery.py",
         "/examples/business_dashboard/business/security_event_routes.py",
         "/examples/business_dashboard/business/secret_store.py",
         "/examples/business_dashboard/business/session_state.py",

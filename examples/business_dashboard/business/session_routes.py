@@ -8,13 +8,13 @@ from fastapi.responses import JSONResponse
 from .db import record_activity
 from .mfa import verify_admin_code
 from .models import Empty, Reauthentication
-from .security import COOKIE_NAME, IDLE_SECONDS, SESSION_SECONDS, _live, token_hash, verify_password
+from .security import IDLE_SECONDS, SESSION_SECONDS, _live, read_session_token, session_cookie_name, token_hash, verify_password
 from .session_state import current_time, record_verification, require_recent, verification_expiry
 from .work_limits import BoundedWork
-from .security_events import record_event
+from .security_events import record_event, terminate_own_session
 
 
-def install_session_routes(app, database, authorized):
+def install_session_routes(app, database, authorized, origin):
     # Imported at installation to keep authentication primitives independent
     # from route composition. Use the same durable reservation semantics.
     from .auth_routes import (
@@ -22,12 +22,13 @@ def install_session_routes(app, database, authorized):
         _release_success, _reservation_valid, _reserve,
     )
     metrics = app.state.security_metrics
+    cookie_name = session_cookie_name(origin)
     work = BoundedWork(1, "Identity verification", on_event=lambda event: metrics.record("reauth_" + event))
 
     @app.get("/api/security/sessions")
     def sessions(request: Request):
         with authorized(request) as (connection, auth):
-            hashed = token_hash(request.cookies[COOKIE_NAME])
+            hashed = token_hash(read_session_token(request, cookie_name))
             rows = connection.execute(
                 "SELECT s.*,v.public_id,v.method FROM sessions s JOIN session_security v "
                 "ON v.token_hash=s.token_hash WHERE s.user_id=? ORDER BY s.created_at DESC,v.public_id",
@@ -76,7 +77,7 @@ def install_session_routes(app, database, authorized):
                     metrics.record("reauth_rejected")
                     return JSONResponse({"detail": "The verification details are incorrect."}, status_code=403)
                 method = "totp"
-            hashed = token_hash(request.cookies[COOKIE_NAME])
+            hashed = token_hash(read_session_token(request, cookie_name))
             record_verification(connection, hashed, now, method)
             _release_success(connection, key, reserved)
             record_activity(connection, auth.user["name"], "Verified identity", "Own session")
@@ -92,7 +93,7 @@ def install_session_routes(app, database, authorized):
     @app.post("/api/security/sessions/{identifier}/revoke")
     def revoke(identifier: str, payload: Empty, request: Request):
         with authorized(request, csrf=True) as (connection, auth):
-            hashed = token_hash(request.cookies[COOKIE_NAME])
+            hashed = token_hash(read_session_token(request, cookie_name))
             if not re.fullmatch(r"[0-9a-f]{32}", identifier):
                 raise HTTPException(404, "The session was not found.")
             target = connection.execute(
@@ -104,8 +105,8 @@ def install_session_routes(app, database, authorized):
             own = target["token_hash"] == hashed
             if not own:
                 require_recent(connection, hashed)
-            connection.execute("DELETE FROM sessions WHERE token_hash=?", (target["token_hash"],))
+            terminate_own_session(connection, "session_revoked", hashed=target["token_hash"],
+                                  actor=auth.user["principal"])
             record_activity(connection, auth.user["name"], "Revoked session", "Own current session" if own else "Own other session")
-            record_event(connection, "session_revoked", actor=auth.user["principal"])
             # Do not clear cookies in a delayed response: a newer login wins.
             return {"ok": True, "current_session_revoked": own}

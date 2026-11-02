@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import stat
+import tempfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +18,55 @@ from tests.test_business_dashboard import (  # noqa: E402
 )
 from business import db  # noqa: E402
 from business.secret_store import SecretStore, create_key_file, default_key_path, key_path  # noqa: E402
+
+
+@pytest.mark.parametrize("failure", [None, "open", "fsync"])
+def test_posix_directory_flush_closes_descriptor_and_propagates_failure(monkeypatch, failure):
+    calls = []
+
+    def open_directory(path, flags):
+        calls.append("open")
+        if failure == "open":
+            raise OSError("Disposable directory open failure")
+        return 73
+
+    def flush(descriptor):
+        assert descriptor == 73
+        calls.append("fsync")
+        if failure == "fsync":
+            raise OSError("Disposable directory fsync failure")
+
+    platform = SimpleNamespace(name="posix", O_RDONLY=os.O_RDONLY, open=open_directory,
+                               fstat=lambda descriptor: SimpleNamespace(st_mode=stat.S_IFDIR),
+                               fsync=flush, close=lambda descriptor: calls.append("close"))
+    # Patch this module's platform interface, not global os.name/Path behavior.
+    monkeypatch.setattr(db, "os", platform)
+    if failure:
+        with pytest.raises(OSError, match="directory"):
+            db.sync_directory(Path("disposable-directory"))
+    else:
+        assert db.sync_directory(Path("disposable-directory")) is True
+    assert calls == (["open"] if failure == "open" else ["open", "fsync", "close"])
+
+
+def test_windows_directory_flush_does_not_claim_supported_durability(monkeypatch):
+    monkeypatch.setattr(db, "os", SimpleNamespace(name="nt"))
+    assert db.sync_directory(Path("disposable-directory")) is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native directory fsync requires a POSIX host")
+def test_native_directory_flush_uses_a_directory_descriptor(monkeypatch):
+    original = os.fsync
+    seen = []
+
+    def flush(descriptor):
+        seen.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+        return original(descriptor)
+
+    with tempfile.TemporaryDirectory(prefix="radt-directory-flush-") as temporary:
+        monkeypatch.setattr(os, "fsync", flush)
+        assert db.sync_directory(Path(temporary).resolve()) is True
+    assert seen == [True]
 
 
 def _cli():

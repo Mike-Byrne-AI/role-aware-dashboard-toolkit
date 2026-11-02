@@ -28,14 +28,15 @@ from business.security import COOKIE_NAME, token_hash  # noqa: E402
 class Authenticator:
     """A fresh disposable key signs actual ES256 WebAuthn protocol messages."""
 
-    def __init__(self, *, synced=False):
+    def __init__(self, *, synced=False, origin=ORIGIN):
         self.private = ec.generate_private_key(ec.SECP256R1())
         self.identifier = secrets.token_bytes(32)
         self.synced = synced
         self.handle = None
+        self.origin = origin
 
     def _client(self, options, kind, **changes):
-        return json.dumps({"type": kind, "challenge": options["challenge"], "origin": ORIGIN,
+        return json.dumps({"type": kind, "challenge": options["challenge"], "origin": self.origin,
                            "crossOrigin": False, **changes}, separators=(",", ":")).encode()
 
     def register(self, options, *, uv=True):

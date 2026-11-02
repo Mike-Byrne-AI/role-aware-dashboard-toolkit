@@ -394,6 +394,59 @@ provide durable alerting, visitor identity or measured capacity. Pair rejection
 tests with legitimate-operation controls and check real proxy behavior before
 treating a socket address as a distinct visitor.
 
+## Verify the artifact without repairing it during inspection
+
+Restore a newly produced backup before opening it through a connection that
+could checkpoint or clean up SQLite files. A test helper can accidentally repair
+the defect it is meant to detect. Normalize the new snapshot before publishing
+its manifest; keep the live source's journal configuration unchanged. Test the
+untouched backup and the encrypted archive path as separate operator workflows.
+
+## Bind browser authority to a host
+
+For HTTPS, use a `__Host-` session cookie with Secure, Path=/ and no Domain
+attribute, and reject ambiguous repeated session cookie names. SameSite does
+not isolate sibling hosts under the same site. An HTTPS fallback to an old
+unprefixed cookie preserves the injection path; plan a new sign-in after the
+cookie-name transition. Keep loopback HTTP behavior explicit. Test browser
+enforcement as well as server parsing, with a legitimate-session control.
+See the [browser cookie-prefix rules](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#cookie_prefixes).
+
+## Preserve attribution when an authenticated action is refused
+
+Attach the verified principal immediately after authentication, before checking
+CSRF and permission. A denial should retain an identity already established by
+the server, while genuinely unverified callers remain unattributed. Never use a
+submitted username or header as proof of identity. Recording who was refused
+does not grant them permission; test both the refusal and its audit record.
+
+## Reserve capacity to remove authority
+
+Required audit records must fit before granting new authority. Reserve a future
+termination receipt for each usable employee session, separately from
+administrator emergency capacity. Only a server-verified removal of an owned
+session may spend that reservation. Event names or caller-supplied priority
+cannot establish eligibility. Test logout and revocation after ordinary capacity
+is exhausted and after an administrator has used emergency headroom.
+Keep the scope explicit: current-session termination needs no fresh verification;
+removing another session still obeys its freshness requirement, and a new
+reauthentication event may need delivery to make room.
+
+Run bounded delivery regularly and expose its health to authorized operators.
+Retain pending obligations through delivery failure and restart. A previously
+overfull database needs draining before new reservation guarantees apply; report
+that deficit instead of deleting evidence. Local consumer delivery remains local
+evidence, not off-host retention or protection from a compromised host.
+
+## Make a replacement key reachable before committing its dependents
+
+Flushing key bytes and committing database ciphertext are separate operations.
+On POSIX, persist the key file and the directory entries needed to reach it
+before committing data encrypted with it. A failed directory sync must stop
+before that cutover. Process termination, fault injection and actual power loss
+test different failure classes; report their platform and scope separately.
+See the [Linux fsync contract](https://man7.org/linux/man-pages/man2/fsync.2.html).
+
 ## Executable references
 
 - Business authorization and moderation: `tests/test_business_dashboard.py`
@@ -414,6 +467,9 @@ treating a socket address as a distinct visitor.
 - MFA encryption and key custody: `tests/test_business_secret_store.py`
 - Current-authority restoration: `tests/test_business_backup.py`
 - Aggregate security decisions: `tests/test_business_security_metrics.py`
+- Authenticated denial attribution: `tests/test_business_denial_attribution.py`
+- Reserved termination capacity and delivery lifecycle: `tests/test_business_security_delivery.py`
+- HTTPS session cookie boundaries: `tests/test_business_session_cookies.py`
 - [Real-browser workflow](../tools/business_dashboard_browser.py)
 - [Seeded API fuzz runner](../tools/business_dashboard_fuzz.py)
 - CI dependency-lane contract: `tests/test_landscaping_dependency_lane.py`

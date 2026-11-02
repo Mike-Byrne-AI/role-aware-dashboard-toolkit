@@ -69,16 +69,37 @@ delivery, while the consumer applies that event only once. No external service
 receives these events. This local record does not protect against a host
 administrator rewriting storage, and it is not an off-host alert service.
 
+Application startup starts one local delivery worker per app, shared across
+overlapping lifespans and stopped after the final lifespan exits. It attempts
+at most 100 deliveries per cycle, waits five seconds between cycles, and honors shutdown
+between events. Inspect **Automatic delivery** in the protected timeline:
+running state, last cycle, last delivery and failed-cycle counts are process
+diagnostics. Pending/failed event counts are durable. Failure logs contain fixed
+messages rather than consumer exceptions or credentials. A stalled or failing
+worker needs operator attention; successful local delivery is not off-host
+retention. Manual delivery remains available for recovery.
+
 Retention is bounded at 10,000 events. Delivered events become eligible for
 pruning after 30 days and are pruned when a new event is recorded; this is not
 a scheduled deletion deadline. Pending obligations are preserved. Ordinary
-events stop at a 9,000-record watermark; the remaining 1,000 slots are reserved
-for fully verified, currently active administrator login/reverification and
-narrow containment: pause, disable an account, revoke a session, remove a passkey
-or log out. The writer checks current administrator status in the action's
-transaction. Employees and routine administrator changes cannot consume this
-reserve. If even that finite reserve fills, required mutations fail instead of
-dropping their evidence. A freshly verified
+admission keeps retained events plus usable employee sessions within 9,000 slots.
+Each employee session therefore has room for its eventual logout/revocation
+receipt. Only a server-verified deletion of an owned session can spend that
+reservation; an event name or a request claiming priority cannot do so. Current
+administrator login/reverification and narrow containment may use the remaining
+1,000 slots while preserving employee reservations. Routine administrator
+changes do not qualify. Removal of authority and its audit event remain one
+transaction, including at the normal watermark.
+Current-session logout/revocation does not require fresh reauthentication.
+Revoking another own session retains its existing freshness requirement; a stale
+employee verification may still require delivery before a new verification
+event fits. The reservation does not bypass that authentication check.
+
+Existing databases can begin above the new reservation limit. The timeline
+reports any deficit against total capacity; delivery must make room before
+the termination guarantee applies. Required mutations fail on insufficient
+storage rather than dropping pending evidence. Disk/database failure still
+prevents a durable revocation, even when a logical slot is reserved. A freshly verified
 administrator can POST an empty JSON object to
 `/api/admin/security/events/dispatch` with the ordinary Origin and CSRF controls.
 If no administrator session remains, use the trusted offline operator tool
@@ -88,7 +109,8 @@ after verifying maintenance and stopping workers:
 .\.venv\Scripts\python.exe examples/business_dashboard/dispatch_security_events.py --help
 ```
 
-Run `tests/test_business_security_events.py` for atomic rollback, restart,
+Run `tests/test_business_security_events.py` and
+`tests/test_business_security_delivery.py` for atomic rollback, restart,
 delivery failure, deduplication, bounded denial floods, capacity recovery and
 timeline access. An operator-supplied callback in these tests deliberately fails
 between delivery and acknowledgment. Preserve its original failure and prove
@@ -244,6 +266,11 @@ copy before rotating the testbed's key:
    enrollment while preserving account/generation binding, and replaces the
    database key-binding ciphertext in the same SQLite transaction. A failure
    before commit rolls back every row, the binding and the activity event.
+   On POSIX, the key file and its directory entries (including newly created
+   ancestor directories) are flushed before ciphertext changes. A failed
+   directory flush stops cutover and preserves the attempted files. Windows
+   flushes file contents but has no directory-entry durability guarantee from
+   this helper; qualify that host separately before claiming power-loss safety.
 3. Validate all ciphertext and the binding with the replacement key before
    cutover. Verify the original key no longer opens the migrated database.
    Switch `BUSINESS_MFA_KEY_FILE` and restart every serving process while ingress
@@ -281,7 +308,8 @@ of the operator, reason, attempt paths, backup dependencies and acceptance resul
 `tests/test_business_mfa_rotation.py` covers actual process interruption before
 commit in rollback-journal and WAL modes, exception rollback, unchanged current
 authority, stale-worker rejection and recovery of an older backup with distinct
-original/current keys. These are disposable local tests, not hosted rotation
+original/current keys. Directory-flush ordering and failure tests exercise the
+publication boundary; they do not simulate a power failure. These are disposable local tests, not hosted rotation
 acceptance. Run the documented sign-in and backup recovery checks on the
 existing testbed before reopening it.
 For a failed planned cutover, restore a consistent database/key pair only after

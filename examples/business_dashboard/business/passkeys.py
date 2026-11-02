@@ -26,7 +26,7 @@ from .auth_routes import _identity_state
 from .db import record_activity
 from .security_events import record_event
 from .models import Empty, RequestModel
-from .security import COOKIE_NAME, IDLE_SECONDS, ROLES, SESSION_SECONDS, authenticate, token_hash
+from .security import IDLE_SECONDS, ROLES, SESSION_SECONDS, authenticate, read_session_token, session_cookie_name, token_hash
 from .session_state import record_verification, require_recent, verification_expiry
 from .work_limits import BoundedWork
 
@@ -187,6 +187,7 @@ def _advance(connection, stored, result):
 
 def install_passkey_routes(app, database, authorized, origin, public_origin):
     rp_id = origin.hostname
+    cookie_name = session_cookie_name(origin)
     metrics = app.state.security_metrics
     options_work = BoundedWork(2, "Passkey options",
                               on_event=lambda event: metrics.record("passkey_options_" + event))
@@ -214,14 +215,14 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                     "expires_in": CHALLENGE_SECONDS, "csrf": _preauth_csrf(database, cookie)}
         with authorized(request, csrf=True) as (connection, auth):
             if purpose == "register":
-                require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
+                require_recent(connection, token_hash(read_session_token(request, cookie_name)))
             rows = connection.execute("SELECT * FROM passkey_credentials WHERE user_id=?", (auth.user["id"],)).fetchall()
             if purpose == "register" and len(rows) >= MAX_CREDENTIALS:
                 metrics.record("passkey_credential_capacity_denied")
                 raise HTTPException(409, "Remove an old passkey before adding another.")
             if purpose == "reauth" and not rows:
                 raise HTTPException(409, "Add a passkey before using it to verify your identity.")
-            identifier, challenge = _issue(connection, purpose, token_hash(request.cookies[COOKIE_NAME]), auth.user, metrics=metrics)
+            identifier, challenge = _issue(connection, purpose, token_hash(read_session_token(request, cookie_name)), auth.user, metrics=metrics)
             descriptors = [PublicKeyCredentialDescriptor(id=row["credential_id"]) for row in rows]
             if purpose == "register":
                 generated = generate_registration_options(
@@ -243,7 +244,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
 
     def register(payload, request):
         with authorized(request, csrf=True) as (connection, auth):
-            hashed = token_hash(request.cookies[COOKIE_NAME])
+            hashed = token_hash(read_session_token(request, cookie_name))
             require_recent(connection, hashed)
             challenge = _take(connection, payload.request_id, "register", hashed)
             before = _identity_state(auth.user)
@@ -290,7 +291,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                 before = _identity_state(user) if user else None
         else:
             with authorized(request, csrf=True) as (connection, auth):
-                challenge = _take(connection, payload.request_id, purpose, token_hash(request.cookies[COOKIE_NAME]))
+                challenge = _take(connection, payload.request_id, purpose, token_hash(read_session_token(request, cookie_name)))
                 stored = _credential(connection, payload.credential) if challenge else None
                 user, before = auth.user, _identity_state(auth.user)
         if (challenge is None or stored is None or user is None or user["active"] != 1 or user["role"] not in ROLES
@@ -307,7 +308,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                 if (_identity_state(auth.user) != before or not _challenge_current(challenge)
                         or not _advance(connection, stored, verified)):
                     return failed()
-                hashed = token_hash(request.cookies[COOKIE_NAME])
+                hashed = token_hash(read_session_token(request, cookie_name))
                 connection.execute("INSERT INTO session_passkey VALUES(?,?) ON CONFLICT(token_hash) "
                                    "DO UPDATE SET credential_id=excluded.credential_id", (hashed, stored["credential_id"]))
                 record_verification(connection, hashed, current_time(), "passkey")
@@ -323,7 +324,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                 return failed()
             now = current_time()
             connection.execute("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", (now, now - IDLE_SECONDS))
-            old = request.cookies.get(COOKIE_NAME)
+            old = read_session_token(request, cookie_name)
             if old:
                 connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
             connection.execute("DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions "
@@ -339,7 +340,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
             record_activity(connection, user["name"], "Signed in with passkey", "Workspace")
             record_event(connection, "login_succeeded", actor=auth.user["principal"], method="passkey")
         metrics.record("passkey_login_succeeded")
-        response.set_cookie(COOKIE_NAME, token, max_age=SESSION_SECONDS, httponly=True,
+        response.set_cookie(cookie_name, token, max_age=SESSION_SECONDS, httponly=True,
                             secure=origin.scheme == "https", samesite="strict", path="/")
         return result
 
@@ -352,7 +353,7 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
     @app.post("/api/security/passkeys/{identifier}/remove")
     def remove(identifier: str, payload: Empty, request: Request):
         with authorized(request, csrf=True) as (connection, auth):
-            hashed = token_hash(request.cookies[COOKIE_NAME])
+            hashed = token_hash(read_session_token(request, cookie_name))
             require_recent(connection, hashed)
             row = connection.execute("SELECT credential_id FROM passkey_credentials WHERE public_id=? AND user_id=?",
                                      (identifier, auth.user["id"])).fetchone() if _ID.fullmatch(identifier) else None

@@ -277,6 +277,7 @@ _PUBLIC_SDIST_MEMBERS = frozenset(
         "examples/business_dashboard/business/evidence.py",
         "examples/business_dashboard/business/security_lab.py",
         "examples/business_dashboard/business/security_events.py",
+        "examples/business_dashboard/business/security_delivery.py",
         "examples/business_dashboard/business/security_event_routes.py",
         "examples/business_dashboard/business/static/security-lab.js",
         "examples/business_dashboard/business/static/security-lab.css",

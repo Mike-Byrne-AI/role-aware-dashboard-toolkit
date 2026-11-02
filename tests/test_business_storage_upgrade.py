@@ -20,6 +20,61 @@ from business import db  # noqa: E402
 from business.app import create_app  # noqa: E402
 
 
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+@pytest.mark.parametrize("readonly", [False, True])
+def test_connect_tolerates_auxiliary_file_removed_during_validation(business, monkeypatch, suffix, readonly):
+    database = business.app.state.database
+    auxiliary = Path(str(database.path) + suffix)
+    db.create_private_file(auxiliary, b"")
+    check = db.check_private_file
+    removed = []
+
+    def concurrent_removal(path):
+        if path == auxiliary:
+            auxiliary.unlink()
+            removed.append(path)
+        check(path)
+
+    monkeypatch.setattr(db, "check_private_file", concurrent_removal)
+    connection = database._connect(readonly=readonly)
+    try:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        connection.close()
+    assert removed == [auxiliary]
+
+
+@pytest.mark.parametrize("failure", [PermissionError, ValueError])
+def test_connect_preserves_auxiliary_file_security_failures(business, monkeypatch, failure):
+    database = business.app.state.database
+    auxiliary = Path(str(database.path) + "-journal")
+    db.create_private_file(auxiliary, b"")
+    check = db.check_private_file
+
+    def rejected_auxiliary(path):
+        if path == auxiliary:
+            raise failure("Disposable auxiliary file security failure")
+        check(path)
+
+    monkeypatch.setattr(db, "check_private_file", rejected_auxiliary)
+    with pytest.raises(failure, match="security failure"):
+        database._connect()
+
+
+def test_connect_does_not_ignore_missing_main_database(business, monkeypatch):
+    database = business.app.state.database
+    check = db.check_private_file
+
+    def missing_database(path):
+        if path == database.path:
+            raise FileNotFoundError("Disposable main database missing")
+        check(path)
+
+    monkeypatch.setattr(db, "check_private_file", missing_database)
+    with pytest.raises(FileNotFoundError, match="main database missing"):
+        database._connect()
+
+
 def _downgrade_v3(trial):
     with trial.db() as connection:
         rows = connection.execute("SELECT * FROM admin_mfa").fetchall()

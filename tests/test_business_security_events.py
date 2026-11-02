@@ -334,18 +334,19 @@ def test_general_admin_security_events_do_not_spend_containment_reserve(business
 
 
 def test_employee_login_flood_leaves_stale_admin_reauthentication_and_containment_capacity(business, business_admin, monkeypatch):
-    monkeypatch.setattr(events, "MAX_EVENTS", 8)
-    employees = [business.login("alex") for _ in range(4)]
-    assert len(_rows(business)) == 5
+    monkeypatch.setattr(events, "MAX_EVENTS", 20)
+    employees = [business.login("alex") for _ in range(8)]
+    assert len(_rows(business)) == 9
     policy = business_admin.request("GET", "/api/admin/security/events").json()["retention"]
-    assert policy["normal_event_capacity"] == 5 and policy["containment_reserve"] == 3
+    assert policy["normal_event_capacity"] == 9 and policy["containment_reserve"] == 3
+    assert policy["employee_session_reserve"] == 8
     assert policy["reserve_eligibility"] == "current_active_admin_containment_only"
     blocked = business.client().post("/api/login", json=business.login_payload("alex"), headers={
         "Origin": ORIGIN, "X-Role": "admin", "X-User-ID": "admin",
     })
-    assert blocked.status_code == 503 and len(_rows(business)) == 5
-    assert employees[-1].request("POST", "/api/logout", json={}).status_code == 503
-    assert employees[-1].request("GET", "/api/messages").status_code == 200
+    assert blocked.status_code == 503 and len(_rows(business)) == 9
+    assert employees[-1].request("POST", "/api/logout", json={}).status_code == 200
+    assert employees[-1].request("GET", "/api/messages").status_code == 401
     with business.db() as connection:
         connection.execute("UPDATE session_security SET verified_at=0")
     # Invalid credentials do not reserve privileged capacity merely because an
@@ -356,18 +357,18 @@ def test_employee_login_flood_leaves_stale_admin_reauthentication_and_containmen
     assert business_admin.request("POST", "/api/security/reauthenticate", json={
         "current_password": business.credentials["admin"],
     }).status_code == 403
-    assert len(_rows(business)) == 5
+    assert len(_rows(business)) == 10
     assert business_admin.request("POST", "/api/security/reauthenticate", json={
         "current_password": business.credentials["admin"], "otp": business.login_payload("admin")["otp"],
     }).status_code == 200
     assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 200
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
-    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 8
+    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 13
     with business.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions WHERE user_id='alex'").fetchone()[0] == 0
         assert connection.execute("SELECT active FROM users WHERE id='alex'").fetchone()[0] == 0
     assert business_admin.request("POST", "/api/admin/security/events/dispatch", json={}).json() == {
-        "delivered": 8, "failed": 0, "pending": 0,
+        "delivered": 13, "failed": 0, "pending": 0,
     }
     assert business.login("blair").request("GET", "/api/messages").status_code == 200
 
@@ -380,21 +381,126 @@ def test_only_fully_verified_current_admin_passkeys_can_use_reserve(business, mo
     owner = business.login(username)
     key, _ = enroll(owner)
     monkeypatch.setattr(events, "MAX_EVENTS", 8)
-    for _ in range(3):
-        business.login("alex")
-    assert len(_rows(business)) == 5
+    with business.db() as connection:
+        baseline = events._normal_capacity() - events._session_reserve(connection)
+        for _ in range(baseline - connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0]):
+            events.record_event(connection, "editing_resumed")
+    assert len(_rows(business)) == baseline
     client = business.client()
     ceremony = login_options(client)
     assert finish_login(client, ceremony, key.assertion(ceremony["options"], change="signature")).status_code == 403
-    assert len(_rows(business)) == 5
+    assert len(_rows(business)) == baseline
     ceremony = login_options(client)
     response = finish_login(client, ceremony, key.assertion(ceremony["options"]))
     assert response.status_code == expected
-    assert len(_rows(business)) == 5 + (username == "admin")
+    assert len(_rows(business)) == baseline + (username == "admin")
     with business.db() as connection:
         assert connection.execute("SELECT sign_count FROM passkey_credentials").fetchone()[0] == (username == "admin")
         count = connection.execute("SELECT COUNT(*) FROM security_events WHERE code='login_succeeded' AND method='passkey'").fetchone()[0]
         assert count == (username == "admin")
+
+
+def test_all_employee_sessions_can_terminate_after_admin_reserve_is_used(business, business_admin, monkeypatch):
+    monkeypatch.setattr(events, "MAX_EVENTS", 12)
+    employees = [business.login(name) for name in ("alex", "alex", "blair", "blair")]
+    identifiers = [next(row["id"] for row in actor.request("GET", "/api/security/sessions").json()["sessions"]
+                        if row["current"]) for actor in employees]
+    # Ordinary admission is full (five events plus four reserved terminations).
+    assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
+    with business.db() as connection:
+        principal = connection.execute("SELECT principal FROM users WHERE id='admin'").fetchone()[0]
+        for _ in range(2):
+            events.record_event(connection, "identity_verified", actor=principal)
+        assert events._session_reserve(connection) == 4
+    # Even the entire administrator reserve is now pending; no delivery occurs.
+    assert len(_rows(business)) == 8
+    for index, actor in enumerate(employees):
+        path = "/api/logout" if index % 2 == 0 else f"/api/security/sessions/{identifiers[index]}/revoke"
+        assert actor.request("POST", path, json={}).status_code == 200
+        assert actor.request("GET", "/api/messages").status_code == 401
+        with business.db() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0] + events._session_reserve(connection) == 12
+    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 12
+    assert all(row["delivered_at"] is None for row in _rows(business, "security_outbox"))
+    assert business.client().post("/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("casey")).status_code == 503
+
+
+def test_termination_requires_owned_existing_session_and_rolls_back_failed_event(business, monkeypatch):
+    business.login("alex")
+    business.login("blair")
+    monkeypatch.setattr(events, "MAX_EVENTS", 8)
+    with business.db() as connection:
+        principals = {row["id"]: row["principal"] for row in connection.execute("SELECT id,principal FROM users")}
+        target = connection.execute("SELECT token_hash FROM sessions WHERE user_id='blair'").fetchone()[0]
+        events.record_event(connection, "editing_resumed")
+    before = _rows(business), _rows(business, "sessions")
+    for hashed, actor in ((target, principals["alex"]), ("missing", principals["blair"])):
+        with pytest.raises(ValueError, match="owned session"), business.db() as connection:
+            events.terminate_own_session(connection, "session_revoked", hashed=hashed, actor=actor)
+    with pytest.raises(ValueError, match="verified action"), business.db() as connection:
+        events.terminate_own_session(connection, "identity_verified", hashed=target, actor=principals["blair"])
+    assert (_rows(business), _rows(business, "sessions")) == before
+
+    def fail(*args, **kwargs):
+        raise sqlite3.OperationalError("synthetic required event failure")
+
+    monkeypatch.setattr(events, "_record_event", fail)
+    with pytest.raises(sqlite3.OperationalError), business.db() as connection:
+        events.terminate_own_session(connection, "session_revoked", hashed=target, actor=principals["blair"])
+    assert (_rows(business), _rows(business, "sessions")) == before
+
+
+def test_expired_target_cannot_claim_slot_when_unrelated_session_expires_during_termination(business, monkeypatch):
+    business.login("alex")
+    business.login("blair")
+    now = events.time.time()
+    monkeypatch.setattr(events, "MAX_EVENTS", 8)
+    with business.db() as connection:
+        connection.execute("UPDATE sessions SET expires_at=? WHERE user_id='alex'", (now + 1,))
+        connection.execute("UPDATE sessions SET expires_at=? WHERE user_id='blair'", (now - 1,))
+        target = connection.execute("SELECT token_hash FROM sessions WHERE user_id='blair'").fetchone()[0]
+        actor = connection.execute("SELECT principal FROM users WHERE id='blair'").fetchone()[0]
+        for _ in range(2):
+            events.record_event(connection, "editing_resumed")
+    before = _rows(business), _rows(business, "sessions")
+    moments = iter((now, now + 2))
+    with monkeypatch.context() as patch:
+        patch.setattr(events.time, "time", lambda: next(moments))
+        with pytest.raises(events.EventCapacityError), business.db() as connection:
+            events.terminate_own_session(connection, "session_revoked", hashed=target, actor=actor)
+    assert (_rows(business), _rows(business, "sessions")) == before
+
+
+@pytest.mark.parametrize("invalidity", ["expired", "idle", "absolute", "disabled"])
+def test_unusable_employee_sessions_do_not_reserve_capacity(business, invalidity):
+    business.login("alex")
+    from business.security import IDLE_SECONDS, SESSION_SECONDS
+
+    now = events.time.time()
+    with business.db() as connection:
+        assert events._session_reserve(connection, now=now) == 1
+        if invalidity == "disabled":
+            connection.execute("UPDATE users SET active=0 WHERE id='alex'")
+        else:
+            field, value = {"expired": ("expires_at", now), "idle": ("last_seen", now - IDLE_SECONDS),
+                            "absolute": ("created_at", now - SESSION_SECONDS)}[invalidity]
+            connection.execute(f"UPDATE sessions SET {field}=?", (value,))
+        assert events._session_reserve(connection, now=now) == 0
+
+
+def test_legacy_reservation_deficit_is_visible_and_requires_delivery_without_losing_pending(business, monkeypatch):
+    actor = business.login("alex")
+    business.login("blair")
+    # Models a pre-upgrade backlog admitted without session earmarks.
+    monkeypatch.setattr(events, "MAX_EVENTS", 3)
+    with business.db() as connection:
+        assert events.timeline(connection)["retention"]["reservation_deficit"] == 1
+    assert actor.request("POST", "/api/logout", json={}).status_code == 503
+    assert actor.request("GET", "/api/messages").status_code == 200
+    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 2
+    assert events.dispatch_pending(business.app.state.database)["delivered"] == 2
+    assert actor.request("POST", "/api/logout", json={}).status_code == 200
+    assert actor.request("GET", "/api/messages").status_code == 401
 
 
 def test_denial_sink_failure_retains_original_response_and_visible_failure_counter(business, monkeypatch, caplog):
@@ -433,25 +539,25 @@ def test_fixed_fields_refuse_secret_content_and_unverified_identity(business):
 
 
 def test_retention_trims_delivered_only_and_capacity_recovery_allows_login(business, monkeypatch, capsys):
-    monkeypatch.setattr(events, "MAX_EVENTS", 4)
+    monkeypatch.setattr(events, "MAX_EVENTS", 6)
     with business.db() as connection:
         principal = connection.execute("SELECT principal FROM users WHERE id='admin'").fetchone()[0]
         first = events.record_event(connection, "editing_paused", actor=principal)
-        for _ in range(3):
+        for _ in range(5):
             events.record_event(connection, "editing_paused", actor=principal)
     client = business.client()
     response = client.post("/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("alex"))
     assert response.status_code == 503
-    assert len(_rows(business)) == 4
+    assert len(_rows(business)) == 6
     with business.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
     assert _cli().main(["--data-dir", str(business.directory), "--maintenance-confirmed"]) == 0
     output = capsys.readouterr().out
-    assert output == "Local receipts delivered: 4; failed: 0; pending: 0.\n"
+    assert output == "Local receipts delivered: 6; failed: 0; pending: 0.\n"
     assert business.login("alex").request("GET", "/api/messages").status_code == 200
-    assert len(_rows(business)) == 1
+    assert len(_rows(business)) == 2
     assert first not in {row["id"] for row in _rows(business)}
-    assert len(_rows(business, "security_sink_receipts")) == 0
+    assert len(_rows(business, "security_sink_receipts")) == 1
 
 
 def test_age_retention_preserves_pending_obligations(business):

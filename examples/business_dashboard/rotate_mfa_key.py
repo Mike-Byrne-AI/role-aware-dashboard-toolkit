@@ -80,6 +80,8 @@ def rotate_mfa_key(data_dir, *, current_mfa_key_file, new_mfa_key_file, maintena
         if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
             raise RotationError("The database failed its integrity check; preserve existing state.")
         database.mfa_secrets.validate_database(connection)
+        # On POSIX, creation flushes the key and all new directory entries;
+        # any publication failure aborts before ciphertext changes begin.
         created = create_key_file(database.directory, destination)
         replacement = SecretStore(database.directory, database.identity_key, created)
         count = _reencrypt(connection, database.mfa_secrets, replacement)
@@ -115,6 +117,9 @@ def main(argv=None):
     print(f"MFA encryption-key rotation committed for {result['enrollments_reencrypted']} enrollment(s). "
           "Original key preserved. Keep ingress closed; configure the replacement key, restart every worker "
           "and verify sign-in and backup recovery before reopening.")
+    if os.name != "posix":
+        print("Directory-entry durability is not verified on this platform; file flushing alone does not "
+              "establish recovery from host failure or power loss.")
     return 0
 
 

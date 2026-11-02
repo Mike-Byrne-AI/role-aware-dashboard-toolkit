@@ -14,8 +14,8 @@ from .mfa import verify_admin_code
 from .models import Login, PasswordChange
 from .password_policy import password_policy_error
 from .security import (
-    COOKIE_NAME, ROLES, SESSION_SECONDS, authenticate, dummy_password_check,
-    hash_password, token_hash, verify_password,
+    ROLES, SESSION_SECONDS, authenticate, dummy_password_check,
+    hash_password, read_session_token, session_cookie_name, token_hash, verify_password,
 )
 from .work_limits import BoundedWork
 from .session_state import record_verification
@@ -108,6 +108,7 @@ def _classify_login(database, username):
 
 def install_auth_routes(app, database, authorized, origin):
     """Register login and password routes using the host's transaction boundary."""
+    cookie_name = session_cookie_name(origin)
     metrics = SecurityMetrics()
     app.state.security_metrics = metrics
     known_work = BoundedWork(2, "Authentication", on_event=lambda event: metrics.record("auth_known_" + event))
@@ -164,7 +165,7 @@ def install_auth_routes(app, database, authorized, origin):
                 "DELETE FROM sessions WHERE expires_at<=? OR last_seen<?",
                 (session_now, session_now - 1800),
             )
-            old = request.cookies.get(COOKIE_NAME)
+            old = read_session_token(request, cookie_name)
             if old:
                 connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
             connection.execute(
@@ -187,7 +188,7 @@ def install_auth_routes(app, database, authorized, origin):
             _release_success(connection, key, reserved_window)
         metrics.record("login_succeeded")
         response.set_cookie(
-            COOKIE_NAME, token, max_age=SESSION_SECONDS, httponly=True,
+            cookie_name, token, max_age=SESSION_SECONDS, httponly=True,
             secure=origin.scheme == "https", samesite="strict", path="/",
         )
         return result

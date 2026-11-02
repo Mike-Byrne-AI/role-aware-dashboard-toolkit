@@ -59,14 +59,29 @@ def key_path(data_dir, configured=None) -> Path:
 
 
 def create_key_file(data_dir, configured=None) -> Path:
-    """Explicit exclusive creation. Never repair or overwrite an existing key."""
-    from .db import create_private_file, validate_data_dir
+    """Create exclusively and publish its directory entries before POSIX cutover.
+
+    A failed flush retains any new key and directories for investigation. It
+    never authorizes a ciphertext cutover or silently retries an uncertain path.
+    Windows directory-entry durability requires separate host qualification.
+    """
+    from .db import create_private_file, sync_directory, validate_data_dir
 
     path = key_path(data_dir, configured)
+    new_parents = []
+    for parent in (path.parent, *path.parent.parents):
+        if parent.exists():
+            break
+        new_parents.append(parent)
     validate_data_dir(path.parent, create=True)
     if os.path.lexists(path):
         raise ValueError("The MFA encryption key already exists; preserve it.")
     create_private_file(path, secrets.token_bytes(32))
+    # First persist the key name, then each newly created ancestor's name in
+    # its parent. A file fsync does not make these directory entries durable.
+    # Every POSIX error propagates before the caller can re-encrypt its rows.
+    for directory in (path.parent, *(parent.parent for parent in new_parents)):
+        sync_directory(directory)
     return path
 
 
