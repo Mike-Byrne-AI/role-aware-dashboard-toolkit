@@ -12,6 +12,7 @@ import sqlite3
 import sys
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -76,9 +77,12 @@ def _hold_browser_clock(directory, monkeypatch):
 
 
 def complete(database, username, grant):
-    started = enrollment.start_enrollment(database, username, grant)
-    enrollment.complete_enrollment(database, started.token, started.csrf, PASSWORD,
-                                   pyotp.TOTP(started.secret).at(enrollment.current_time()))
+    # This setup helper must not cross a TOTP step while password hashing runs.
+    # Production still accepts only the current step; clock/replay tests own it.
+    with patch.object(enrollment, "current_time", return_value=enrollment.current_time()):
+        started = enrollment.start_enrollment(database, username, grant)
+        enrollment.complete_enrollment(database, started.token, started.csrf, PASSWORD,
+                                       pyotp.TOTP(started.secret).at(enrollment.current_time()))
 
 
 def test_fresh_provision_reports_private_enrollment_without_permanent_credentials(fresh, capsys):
