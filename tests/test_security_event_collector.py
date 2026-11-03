@@ -21,7 +21,7 @@ from starlette.testclient import TestClient  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples" / "security_event_collector"))
 from collector import alerts  # noqa: E402
-from collector.app import create_app  # noqa: E402
+from collector.app import Application, create_app  # noqa: E402
 from collector.custody import create_backup, restore_quarantined  # noqa: E402
 from collector.event_wire import wire  # noqa: E402
 from collector.event_wire import load_transport  # noqa: E402
@@ -353,6 +353,100 @@ def test_http_ingress_denials_never_allocate_event_authority(pair, fault):
     assert set(response.json()) == {"v", "error"}
     assert issued.ingest_token not in response.text and "Traceback" not in response.text
     assert counts(collector.store)["events"] == 0
+
+
+@pytest.mark.parametrize("chunk", [b"", b"x"], ids=["empty", "nonempty"])
+def test_http_body_deadline_cancels_ready_chunks_without_dispatch(pair, monkeypatch, chunk):
+    collector, issued, _, _, clock = pair
+    app = create_app(collector.store.directory, clock=lambda: clock[0], evaluator=False)
+    dispatched = []
+    original = app.service.ingest_event
+
+    def ingest(token, body):
+        dispatched.append(body)
+        return original(token, body)
+
+    monkeypatch.setattr(app.service, "ingest_event", ingest)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        monotonic = [loop.time()]
+
+        async def request(token, *, ready_stream):
+            sent, received = [], 0
+
+            async def receive():
+                nonlocal received
+                received += 1
+                if ready_stream:
+                    # Advance the real scheduler's clock without sleeping. The
+                    # finite stream makes the pre-repair failure bounded too.
+                    monotonic[0] += 1
+                    return {"type": "http.request", "body": chunk, "more_body": received < 16}
+                return {"type": "http.request", "body": event(), "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            scope = {"type": "http", "method": "POST", "path": "/v1/events", "query_string": b"",
+                     "headers": [(b"authorization", ("Bearer " + token).encode()),
+                                 (b"content-type", b"application/json")]}
+            await app(scope, receive, send)
+            return sent[0]["status"], json.loads(sent[1]["body"]), received
+
+        with monkeypatch.context() as deadline_clock:
+            deadline_clock.setattr(loop, "time", lambda: monotonic[0])
+            status, _, received = await request("x" * 43, ready_stream=True)
+            assert status == 401 and received == 0
+            status, body, received = await request(issued.ingest_token, ready_stream=True)
+            assert status == 408
+            assert body == {"v": 1, "error": "deadline_exceeded"}
+            assert 0 < received < 16 and not dispatched
+            assert counts(collector.store)["events"] == 0
+
+        # Cancellation must release all intake admission and leave the service
+        # usable; the subsequent request still authenticates and commits once.
+        for _ in range(2):
+            assert app.gates["events"].acquire(blocking=False)
+        assert not app.gates["events"].acquire(blocking=False)
+        for _ in range(2):
+            app.gates["events"].release()
+        status, _, _ = await request(issued.ingest_token, ready_stream=False)
+        assert status == 200 and dispatched == [event()]
+        assert counts(collector.store)["events"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("chunks,declared,expected,status", [
+    ([b""], 0, b"", None),
+    ([b"", b"ab", b"", b"cd"], 4, b"abcd", None),
+    ([b"abcd", b""], None, b"abcd", None),
+    ([b""], 5, "body_too_large", 413),
+    ([b"", b"abcde"], None, "body_too_large", 413),
+    ([b"ab", b"", b"cde"], None, "body_too_large", 413),
+    ([b""], 1, "invalid_message", 400),
+])
+def test_body_reader_preserves_empty_and_size_boundaries(chunks, declared, expected, status):
+    async def scenario():
+        received = 0
+
+        async def receive():
+            nonlocal received
+            chunk = chunks[received]
+            received += 1
+            return {"type": "http.request", "body": chunk, "more_body": received < len(chunks)}
+
+        if status is None:
+            assert await Application._body(receive, 4, declared) == expected
+        else:
+            with pytest.raises(ServiceError, match=expected) as error:
+                await Application._body(receive, 4, declared)
+            assert error.value.status == status
+            if declared is not None and declared > 4:
+                assert received == 0
+
+    asyncio.run(scenario())
 
 
 def test_http_valid_delivery_and_persistent_rate_limit_do_not_starve_heartbeat(pair):

@@ -76,6 +76,16 @@ The same browser job exercises the Westbridge business example with disposable
 guest, administrator and employee workflows. Its API regressions run with the
 main test suite. See the [business example guide](examples/business_dashboard/README.md)
 for its local startup and verification commands.
+The separate `contributor-business-security` job runs enrollment and login-flow
+browser acceptance with bundled Chromium, plus the three-process local TLS
+collector drill. Once installation succeeds, each tool runs even if an earlier
+tool fails; any failure still blocks `contributor-checks`. Installation has a
+five-minute limit and each tool has four minutes within a twenty-minute job.
+Sanitized receipts, browser summaries and selected masked screenshots are
+retained for seven days, including on failure. Collector runtime databases,
+tokens, keys and raw failure traces are not uploaded. These checks use fictional
+accounts and local processes; they do not prove off-host custody, real-provider
+sign-in, physical-device passkeys or human response to an alert.
 The dedicated Linux landscaping job also installs the demo's optional
 dependencies and runs its API/security suite against the checkout, plus Chromium
 flows against the installed toolkit. The job also runs the disposable local
@@ -87,7 +97,7 @@ data. A source regression requires the copied landscaping action helper to match
 the generic workflow helper byte for byte; update both together when changing
 that recipe.
 The stable required check is `contributor-checks`; failed, skipped, or cancelled
-test, quality, browser, or landscaping jobs make it fail. Browser diagnostics are retained
+test, quality, browser, business-security, or landscaping jobs make it fail. Browser diagnostics are retained
 for seven days. The workflow has read-only permissions and does not receive
 release credentials. GitHub may require a maintainer to approve the first
 workflow run for a fork contributor.

@@ -125,12 +125,12 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
         assert forbidden not in workflow
     refs = re.findall(r"^\s*-?\s*uses:\s+([^\s]+)", workflow, flags=re.MULTILINE)
     assert Counter(refs) == Counter({
-        f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 4,
-        f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 4,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 5,
+        f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 5,
+        f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 5,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 6,
     })
-    assert workflow.count("persist-credentials: false") == 4
-    assert workflow.count("timeout-minutes:") == 5
+    assert workflow.count("persist-credentials: false") == 5
+    assert workflow.count("timeout-minutes:") == 11
     assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in workflow
     assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
     assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
@@ -200,16 +200,16 @@ def test_actual_matrix_install_propagates_dependency_failures(monkeypatch, workf
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
-@pytest.mark.parametrize("job", ["tests", "quality", "browser", "landscaping"])
+@pytest.mark.parametrize("job", ["tests", "quality", "browser", "business-security", "landscaping"])
 def test_actual_contributor_required_check_rejects_unsuccessful_jobs(monkeypatch, result, job):
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     gate = workflow.split("  required:\n", 1)[1]
     assert "    name: contributor-checks\n" in gate
     assert "    if: ${{ always() }}\n" in gate
-    assert "    needs: [tests, quality, browser, landscaping]\n" in gate
+    assert "    needs: [tests, quality, browser, business-security, landscaping]\n" in gate
     body = re.search(r"python - <<'PY'\n(.*?)^          PY$", gate, flags=re.MULTILINE | re.DOTALL).group(1)
     checks = compile(textwrap.dedent(body), "contributor-required-check", "exec")
-    results = {name: {"result": "success"} for name in ("tests", "quality", "browser", "landscaping")}
+    results = {name: {"result": "success"} for name in ("tests", "quality", "browser", "business-security", "landscaping")}
     results[job]["result"] = result
     monkeypatch.setenv("NEEDS_JSON", json.dumps(results))
     if result == "success":
@@ -238,6 +238,64 @@ def test_contributor_ci_exercises_landscaping_with_its_required_dependencies():
     assert "python -m playwright install --with-deps chromium" in demo
     assert "if: ${{ always() }}" in demo
     assert "path: ${{ runner.temp }}/landscaping-browser" in demo
+
+
+def test_contributor_security_acceptance_runs_every_tool_after_independent_failures():
+    workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
+    security = workflow.split("  business-security:\n", 1)[1].split("  landscaping:\n", 1)[0]
+    assert "    name: contributor-business-security\n" in security
+    assert "    runs-on: ubuntu-latest\n" in security
+    assert "    timeout-minutes: 20\n" in security
+    assert "          python-version: \"3.11\"\n" in security
+    assert 'python -m pip install ".[api]" "playwright==1.63.0" -r examples/business_dashboard/requirements.txt -r examples/security_event_collector/requirements.txt' in security
+    assert "python -m pip check\n" in security
+    assert "python -m playwright install --with-deps chromium\n" in security
+    steps = dict(re.findall(r"^      - name: ([^\n]+)\n(.*?)(?=^      - name:|\Z)", security,
+                            flags=re.MULTILINE | re.DOTALL))
+    assert set(steps) == {"Install", "Enrollment browser acceptance", "Login flow browser acceptance",
+                          "Collector TLS acceptance", "Retain sanitized business security evidence"}
+    assert "        id: install\n" in steps["Install"]
+    assert "        timeout-minutes: 5\n" in steps["Install"]
+    expected = {
+        "Enrollment browser acceptance": 'python tools/business_enrollment_browser.py --browser-channel chromium --output-dir "$RUNNER_TEMP/business-enrollment-browser"',
+        "Login flow browser acceptance": 'python tools/business_login_flow_browser.py --browser-channel chromium --output-dir "$RUNNER_TEMP/business-login-flow-browser"',
+        "Collector TLS acceptance": 'python tools/business_collector_drill.py --output-dir "$RUNNER_TEMP/business-collector-drill"',
+    }
+    for name, command in expected.items():
+        step = steps[name]
+        # The explicit status function overrides implicit success(), so a prior
+        # scenario failure/timeout cannot skip the remaining installed tools.
+        assert re.findall(r"^        if: (.+)$", step, flags=re.MULTILINE) == [
+            "${{ !cancelled() && steps.install.outcome == 'success' }}",
+        ]
+        assert "        timeout-minutes: 4\n" in step
+        assert re.findall(r"^        run: (.+)$", step, flags=re.MULTILINE) == [command]
+    assert "continue-on-error" not in security and "|| true" not in security
+
+    upload = steps["Retain sanitized business security evidence"]
+    assert "        if: ${{ always() }}\n" in upload
+    assert "        timeout-minutes: 2\n" in upload
+    assert f"        uses: actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}" in upload
+    assert "          retention-days: 7\n" in upload
+    # Only explicit sanitized files may leave the runner, including on failure.
+    # Collector keys, tokens, runtime DBs and raw failure traces remain private.
+    paths = re.findall(r"^            (.+)$", upload, flags=re.MULTILINE)
+    assert set(paths) == {
+        "${{ runner.temp }}/business-enrollment-browser/receipt.json",
+        "${{ runner.temp }}/business-enrollment-browser/summary.json",
+        "${{ runner.temp }}/business-enrollment-browser/diagnostic-summary.json",
+        "${{ runner.temp }}/business-enrollment-browser/enrollment-mobile.png",
+        "${{ runner.temp }}/business-enrollment-browser/enrollment-completed.png",
+        "${{ runner.temp }}/business-enrollment-browser/failure-masked.png",
+        "${{ runner.temp }}/business-login-flow-browser/receipt.json",
+        "${{ runner.temp }}/business-login-flow-browser/summary.json",
+        "${{ runner.temp }}/business-login-flow-browser/diagnostic-summary.json",
+        "${{ runner.temp }}/business-login-flow-browser/expired-late-login-desktop.png",
+        "${{ runner.temp }}/business-login-flow-browser/expired-late-login-mobile.png",
+        "${{ runner.temp }}/business-collector-drill/started.json",
+        "${{ runner.temp }}/business-collector-drill/receipt.json",
+    }
+    assert len(paths) == len(set(paths))
 
 
 def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_evidence():

@@ -330,6 +330,8 @@ reader pool before downstream work. Include a scheduling checkpoint when an
 ASGI receiver may return already-buffered chunks without suspending, so an
 empty-chunk stream cannot starve its timeout. Test valid fragmented bodies as a
 positive control alongside stalled, oversized and cancelled ones.
+Apply this boundary to authenticated collectors too: a valid sender credential
+does not establish that its input stream will cooperate with the deadline.
 
 These limits bound one stage, not total process or network resources. Tune and
 verify ingress limits, account quotas, retention and monitoring separately.
@@ -540,6 +542,7 @@ See the [Linux fsync contract](https://man7.org/linux/man-pages/man2/fsync.2.htm
 - Work admission and cancellation: `tests/test_business_work_limits.py`
 - Adversarial role and transaction boundaries: `tests/test_business_adversarial_access.py`
 - Adversarial intake and provider failure: `tests/test_business_adversarial_abuse.py`
+- Authenticated collector intake deadlines and size limits: `tests/test_security_event_collector.py`
 - Safe create retries and receipt boundaries: `tests/test_business_idempotency.py`
 - Additive storage upgrade and rollback: `tests/test_business_storage_upgrade.py`
 - Team-message quotas and storage capacity: `tests/test_business_message_limits.py`

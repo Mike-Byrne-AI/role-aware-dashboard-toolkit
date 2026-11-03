@@ -216,6 +216,60 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  business-security:
+    name: contributor-business-security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install
+        id: install
+        timeout-minutes: 5
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[api]" "playwright==1.63.0" -r examples/business_dashboard/requirements.txt -r examples/security_event_collector/requirements.txt
+          python -m pip check
+          python -m playwright install --with-deps chromium
+      - name: Enrollment browser acceptance
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 4
+        run: python tools/business_enrollment_browser.py --browser-channel chromium --output-dir "$RUNNER_TEMP/business-enrollment-browser"
+      - name: Login flow browser acceptance
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 4
+        run: python tools/business_login_flow_browser.py --browser-channel chromium --output-dir "$RUNNER_TEMP/business-login-flow-browser"
+      - name: Collector TLS acceptance
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 4
+        run: python tools/business_collector_drill.py --output-dir "$RUNNER_TEMP/business-collector-drill"
+      - name: Retain sanitized business security evidence
+        if: ${{ always() }}
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: business-security-acceptance
+          path: |
+            ${{ runner.temp }}/business-enrollment-browser/receipt.json
+            ${{ runner.temp }}/business-enrollment-browser/summary.json
+            ${{ runner.temp }}/business-enrollment-browser/diagnostic-summary.json
+            ${{ runner.temp }}/business-enrollment-browser/enrollment-mobile.png
+            ${{ runner.temp }}/business-enrollment-browser/enrollment-completed.png
+            ${{ runner.temp }}/business-enrollment-browser/failure-masked.png
+            ${{ runner.temp }}/business-login-flow-browser/receipt.json
+            ${{ runner.temp }}/business-login-flow-browser/summary.json
+            ${{ runner.temp }}/business-login-flow-browser/diagnostic-summary.json
+            ${{ runner.temp }}/business-login-flow-browser/expired-late-login-desktop.png
+            ${{ runner.temp }}/business-login-flow-browser/expired-late-login-mobile.png
+            ${{ runner.temp }}/business-collector-drill/started.json
+            ${{ runner.temp }}/business-collector-drill/receipt.json
+          if-no-files-found: warn
+          retention-days: 7
+
   landscaping:
     name: contributor-landscaping-demo
     runs-on: ubuntu-latest
@@ -269,7 +323,7 @@ jobs:
     # Keep this job name stable: main branch protection requires this context.
     name: contributor-checks
     if: ${{ always() }}
-    needs: [tests, quality, browser, landscaping]
+    needs: [tests, quality, browser, business-security, landscaping]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -283,7 +337,7 @@ jobs:
           import os
 
           results = json.loads(os.environ["NEEDS_JSON"])
-          expected = {"tests", "quality", "browser", "landscaping"}
+          expected = {"tests", "quality", "browser", "business-security", "landscaping"}
           if set(results) != expected or any(results[job].get("result") != "success" for job in expected):
               raise SystemExit("All contributor jobs must succeed; failed, skipped, or cancelled jobs block merging.")
           PY

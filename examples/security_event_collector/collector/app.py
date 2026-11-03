@@ -120,6 +120,10 @@ class Application:
         data = bytearray()
         async def read_body():
             while True:
+                # Buffered or empty chunks can make receive() return without
+                # suspending. Let the total deadline and cancellation run even
+                # while the transport has immediately available messages.
+                await anyio.lowlevel.checkpoint()
                 message = await receive()
                 if message["type"] != "http.request":
                     raise ServiceError("invalid_message", 400)

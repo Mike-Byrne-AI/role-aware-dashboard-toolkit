@@ -158,7 +158,7 @@ In the current service's Shell, after environment changes have applied:
 python examples/business_dashboard/hosting/pilot.py preflight
 ```
 
-This validates schema-eight storage, the matched identity and MFA keys, private
+This validates schema-ten storage, the matched identity and MFA keys, private
 files, account lifecycle/factors and challenge configuration. It reports
 `transition`, `enrollment_only`, `enrollment_incomplete` or `ready` separately
 from stored enrollment readiness. A fresh strict workspace can serve account
