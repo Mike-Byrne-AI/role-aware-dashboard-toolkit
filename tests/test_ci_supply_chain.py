@@ -244,6 +244,10 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     workflow = CONTRIBUTOR_WORKFLOW_PATH.read_text(encoding="utf-8")
     tests = workflow.split("  tests:\n", 1)[1].split("  quality:\n", 1)[0]
     assert "    runs-on: ${{ matrix.os }}\n" in tests
+    # Give the full Windows run headroom without raising other matrix budgets.
+    assert re.findall(r"^    timeout-minutes: (.+)$", tests, flags=re.MULTILINE) == [
+        "${{ matrix.os == 'windows-latest' && 30 || 20 }}",
+    ]
     assert "        os: [ubuntu-latest]\n" in tests
     assert re.search(
         r"include:\n\s+- os: windows-latest\n\s+python-version: [\"']3\.11[\"']",
