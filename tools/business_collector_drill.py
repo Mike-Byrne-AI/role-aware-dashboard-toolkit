@@ -7,6 +7,10 @@ Lost acknowledgement is injected after actual HTTPS receiver commitment.
 
 from __future__ import annotations
 
+# Refuse before dependency imports or runtime setup can begin.
+if not __debug__:
+    raise SystemExit("Collector evidence requires assertions; do not use optimized Python.")
+
 import argparse
 import asyncio
 from contextlib import contextmanager
@@ -23,9 +27,6 @@ import sys
 import time
 import traceback
 from urllib.parse import urlsplit
-
-if not __debug__:
-    raise SystemExit("Collector evidence requires assertions; do not use optimized Python.")
 
 ROOT = Path(__file__).resolve().parents[1]
 for _path in (ROOT, ROOT / "examples/business_dashboard", ROOT / "examples/security_event_collector"):

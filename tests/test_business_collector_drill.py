@@ -1,5 +1,6 @@
 """Harness admission and evidence boundaries; the CLI runs the actual TLS drill."""
 
+import builtins
 import json
 import os
 from pathlib import Path
@@ -110,11 +111,38 @@ def test_changed_source_forces_failed_receipt_even_when_scenario_returns(private
     assert result["checks"]["source_unchanged"] == "failed"
 
 
-def test_optimized_child_cannot_issue_success_receipt(private_parent):
+@pytest.mark.parametrize("optimization", [1, 2])
+def test_optimized_runner_refuses_before_imports_or_runtime_access(optimization):
+    path = Path(drill.__file__).resolve()
+    source = path.read_text(encoding="utf-8")
+    attempted = []
+
+    def refuse_import(name, *args, **kwargs):
+        if name == "__future__":
+            return builtins.__import__(name, *args, **kwargs)
+        attempted.append("import")
+        pytest.fail(f"Optimized runner reached dependency import: {name}")
+
+    def refuse_open(*args, **kwargs):
+        attempted.append("file")
+        pytest.fail("Optimized runner reached runtime file access")
+
+    namespace = {"__name__": "__main__", "__file__": str(path),
+                 "__builtins__": {**vars(builtins), "__import__": refuse_import, "open": refuse_open}}
+    with pytest.raises(SystemExit, match="requires assertions"):
+        exec(compile(source, str(path), "exec", optimize=optimization), namespace)
+    assert attempted == []
+
+
+@pytest.mark.parametrize("optimization", ["-O", "-OO"])
+def test_optimized_child_cannot_issue_success_receipt(private_parent, optimization):
     output = private_parent / "optimized"
-    result = subprocess.run([sys.executable, "-O", str(Path(drill.__file__).resolve()), "--output-dir", str(output)],
+    # Refusal needs no site startup, user configuration or installed packages.
+    result = subprocess.run([sys.executable, "-I", "-S", "-B", optimization,
+                             str(Path(drill.__file__).resolve()), "--output-dir", str(output)],
                             cwd=private_parent, env=drill.clean_environment(os.environ), capture_output=True, timeout=10)
     assert result.returncode != 0
+    assert result.stdout == b""
     assert not output.exists()
     assert b"requires assertions" in result.stderr
 
