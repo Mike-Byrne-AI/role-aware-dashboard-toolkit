@@ -23,14 +23,16 @@ import tempfile
 import time
 
 from business.db import (
-    Database, _apply_event_migration, _require_schema, check_private_file, create_private_file,
+    Database, _apply_browser_flow_migration, _apply_delivery_migration, _apply_enrollment_migration, _apply_event_migration,
+    _apply_session_predecessor_migration, _require_schema,
+    check_private_file, create_private_file,
     record_activity, utc_now, validate_data_dir,
 )
 from business.secret_store import SecretStore
 from business.security import TransactionAccessStore, principal_for_user
 from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 10
 FILES = ("business.sqlite3", "identity.key")
 QUARANTINE = "RESTORE_QUARANTINE"
 MAX_MANIFEST_BYTES = 16384
@@ -39,6 +41,11 @@ SNAPSHOT_SECONDS = 30
 
 class BackupError(ValueError):
     """Safe operator-facing failure without credential contents."""
+
+
+def current_time():
+    """Isolate the restore observation from unrelated fixture/session clocks."""
+    return time.time()
 
 
 def _directory(value) -> Path:
@@ -90,7 +97,7 @@ def _connect(path, *, readonly=True, immutable=False):
 
 
 def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
-    if schema_version not in (5, SCHEMA_VERSION) or connection.execute("PRAGMA user_version").fetchone()[0] != schema_version:
+    if schema_version not in (5, 6, 7, 8, 9, SCHEMA_VERSION) or connection.execute("PRAGMA user_version").fetchone()[0] != schema_version:
         raise BackupError("Only reviewed current-schema storage can be backed up or restored.")
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         raise BackupError("The database failed its integrity check.")
@@ -99,6 +106,16 @@ def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
     if not users or any(row["principal"] != principal_for_user(row["id"], identity) for row in users):
         raise BackupError("The database and original identity key do not match.")
     secrets.validate_database(connection)
+    if schema_version >= 9:
+        from business.event_destinations import validate_delivery_state
+
+        validate_delivery_state(connection)
+    if schema_version == 10:
+        from business.browser_flow import validate_state
+
+        # Backups can preserve a future rejection floor for offline recovery.
+        # Structural validity must not silently lower it to the local clock.
+        validate_state(connection)
     # A read transaction is required by the same adapter used by the app.
     try:
         TransactionAccessStore(connection).read_freeze()
@@ -170,7 +187,7 @@ def _bundle(directory, *, upgrade_backup_schema=False):
         manifest = json.loads(content)
     except (ValueError, UnicodeError, RecursionError):
         raise BackupError("Backup manifest is invalid.") from None
-    allowed_schemas = {5, SCHEMA_VERSION} if upgrade_backup_schema else {SCHEMA_VERSION}
+    allowed_schemas = {5, 6, 7, 8, 9, SCHEMA_VERSION} if upgrade_backup_schema else {SCHEMA_VERSION}
     if (not isinstance(manifest, dict) or manifest.get("format") != "westbridge-backup-v1"
             or type(manifest.get("schema")) is not int or manifest["schema"] not in allowed_schemas
             or manifest.get("encrypted") is not False
@@ -197,25 +214,48 @@ def _reconcile(destination, current, identity, secrets):
     current_ids = {row[0] for row in current.execute("SELECT id FROM users")}
     if restored_ids != current_ids:
         raise BackupError("Account sets differ; explicit account migration is required before recovery.")
-    if current.execute("SELECT 1 FROM users WHERE role='admin' AND active=1").fetchone() is None:
-        raise BackupError("Current security source has no active administrator.")
-    if current.execute("SELECT 1 FROM users u WHERE role='admin' AND active=1 "
-                       "AND NOT EXISTS(SELECT 1 FROM admin_mfa m WHERE m.user_id=u.id)").fetchone():
-        raise BackupError("Every active current administrator must have an authenticator.")
+    policy = current.execute("SELECT mode FROM authentication_policy WHERE id=1").fetchone()
+    if policy is None:
+        raise BackupError("Current authentication policy is missing.")
+    # A pending recovery is not administrator access. Preserve transition
+    # policy without promoting legacy accounts, while strict/active accounts
+    # require a confirmed factor. At least one administrator must remain usable.
+    usable_admin = current.execute(
+        "SELECT 1 FROM users u JOIN account_security s ON s.user_id=u.id "
+        "WHERE u.role='admin' AND u.active=1 AND "
+        "(s.lifecycle='active' OR (?='transition' AND s.lifecycle='legacy')) AND "
+        "(EXISTS(SELECT 1 FROM account_mfa m WHERE m.user_id=u.id "
+        "AND (m.last_counter>=0 OR (?='transition' AND s.lifecycle='legacy'))) "
+        "OR EXISTS(SELECT 1 FROM passkey_credentials p WHERE p.user_id=u.id)) LIMIT 1",
+        (policy["mode"], policy["mode"]),
+    ).fetchone()
+    if usable_admin is None:
+        raise BackupError("Current security source has no usable enrolled administrator.")
     # Match user IDs and current principal bindings, then restore every current
     # user field, including disabled state, passwords, roles and revision.
     fields = "username=?,name=?,password_hash=?,role=?,active=?,principal=?,revision=?"
     for row in current.execute("SELECT * FROM users"):
         destination.execute(f"UPDATE users SET {fields} WHERE id=?", tuple(row)[1:] + (row["id"],))
-    for table in ("admin_mfa", "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits"):
+    for table in ("account_mfa", "account_security", "authentication_policy", "enrollment_decisions", "mfa_key_binding",
+                  "passkey_credentials", "login_limits", "submission_limits"):
         _replace_rows(destination, current, table)
     # Security evidence and delivery acknowledgements belong to the current
     # security source, not the historical business snapshot. Preserve them
     # together so restore cannot resurrect an old delivery obligation.
-    for table in ("security_sink_receipts", "security_outbox", "security_events", "security_denial_budget"):
+    for table in ("security_delivery_obligations", "security_sink_receipts", "security_event_payloads",
+                  "security_events", "security_destinations", "security_delivery_identity", "security_denial_budget"):
         destination.execute(f"DELETE FROM {table}")
-    for table in ("security_events", "security_outbox", "security_sink_receipts", "security_denial_budget"):
+    for table in ("security_delivery_identity", "security_destinations", "security_events", "security_event_payloads",
+                  "security_delivery_obligations", "security_sink_receipts", "security_denial_budget"):
         _replace_rows(destination, current, table)
+    # A pruned source still owns its sequence high-water mark. Restoring older
+    # business data must not reuse a previous event sequence or routing cutoff.
+    sequence = current.execute(
+        "SELECT MAX(COALESCE((SELECT seq FROM sqlite_sequence WHERE name='security_events'),0),"
+        "COALESCE((SELECT MAX(sequence) FROM security_events),0))"
+    ).fetchone()[0]
+    destination.execute("DELETE FROM sqlite_sequence WHERE name='security_events'")
+    destination.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('security_events',?)", (sequence,))
     revision = current.execute("SELECT freeze_revision FROM settings WHERE id=1").fetchone()[0]
     destination.execute("UPDATE settings SET frozen=1,freeze_revision=?,changed_by=NULL WHERE id=1", (revision + 1,))
 
@@ -228,12 +268,13 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
     must be an existing reviewed workspace, not another historical backup. Its
     write transaction remains held through reconciliation/publication. Sources
     are never changed. Reconciled restores remain frozen and contain no sessions.
-    Explicit upgrade_backup_schema permits only validated schema-five archives
-    to become schema six inside the private restore transaction. Startup and
+    Explicit upgrade_backup_schema permits only validated schema-five through
+    -nine archives to become schema ten inside the private restore transaction. Startup and
     backup creation never implicitly migrate older storage.
     """
     if type(upgrade_backup_schema) is not bool:
         raise BackupError("Backup schema upgrade must be an explicit boolean choice.")
+    from business.browser_flow import reset_after_restore
     source, manifest = _bundle(bundle, upgrade_backup_schema=upgrade_backup_schema)
     identity = _identity(source)
     old_secrets = SecretStore(source, identity, backup_mfa_key_file or mfa_key_file)
@@ -264,22 +305,50 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
                 # The original archive stays unchanged. DDL, revocation and
                 # current-authority reconciliation share this staged transaction.
                 _apply_event_migration(connection)
+                _validate(connection, identity, old_secrets, schema_version=6)
+            if manifest["schema"] < 7:
+                _apply_session_predecessor_migration(connection)
+                _validate(connection, identity, old_secrets, schema_version=7)
+            if manifest["schema"] < 8:
+                _apply_enrollment_migration(connection)
+                _validate(connection, identity, old_secrets, schema_version=8)
+            if manifest["schema"] < 9:
+                _apply_delivery_migration(connection)
+                _validate(connection, identity, old_secrets, schema_version=9)
+            if manifest["schema"] < 10:
+                _apply_browser_flow_migration(connection)
                 _validate(connection, identity, old_secrets)
-            for table in ("passkey_challenges", "session_passkey", "session_security", "session_mfa", "sessions"):
+            # Neither historical nor current activation/recovery capabilities
+            # may survive restoration. Pending accounts remain pending and need
+            # a fresh, reviewed offline grant after the restored host is accepted.
+            archived_floor = connection.execute("SELECT rejection_time_floor FROM browser_flow_state WHERE id=1").fetchone()[0]
+            # Flow creators reference users. Drop transient binding/flow rows
+            # before any current-account reconciliation, never copy them back.
+            for table in ("session_browser_flow", "browser_login_flows", "enrollment_sessions", "enrollment_grants", "passkey_challenges", "session_predecessors", "session_passkey",
+                          "session_security", "session_mfa", "sessions"):
                 connection.execute(f"DELETE FROM {table}")
             if current:
                 # Hold source security stable until the completed new workspace
                 # is published. No source statements modify rows.
-                with current.transaction() as security:
+                # Offline custody must also inspect a source whose clock is
+                # behind its floor. The application's transaction entry would
+                # mutate/observe that clock; a checked explicit write lock keeps
+                # current authority stable in WAL mode without changing it.
+                with closing(_connect(current.path, readonly=False)) as security:
+                    security.execute("BEGIN IMMEDIATE")
                     _reconcile(connection, security, identity, current.mfa_secrets)
+                    current_floor = security.execute("SELECT rejection_time_floor FROM browser_flow_state WHERE id=1").fetchone()[0]
+                    quarantined = not reset_after_restore(connection, current_floor, now=current_time())
                     _finish_restore(connection, staged, output, identity, current.mfa_secrets,
-                                    source, manifest, quarantined=False)
+                                    source, manifest, quarantined=quarantined)
             else:
+                quarantined = True
+                reset_after_restore(connection, archived_floor, now=current_time())
                 connection.execute("UPDATE users SET active=0,password_hash='!restore-quarantined!',revision=revision+1")
                 connection.execute("UPDATE settings SET frozen=1,freeze_revision=freeze_revision+1,changed_by=NULL WHERE id=1")
                 _finish_restore(connection, staged, output, identity, old_secrets,
                                 source, manifest, quarantined=True)
-    return {"quarantined": current is None, "sessions_revoked": True, "frozen": True}
+    return {"quarantined": quarantined, "sessions_revoked": True, "frozen": True}
 
 
 def _finish_restore(connection, staged, output, identity, secrets, source, manifest, *, quarantined):
@@ -299,8 +368,9 @@ def _finish_restore(connection, staged, output, identity, secrets, source, manif
     with closing(_connect(destination / "business.sqlite3")) as completed:
         completed.execute("BEGIN")
         _validate(completed, identity, secrets)
-        if completed.execute("SELECT 1 FROM sessions").fetchone():
-            raise BackupError("Restored session revocation could not be verified.")
+        if any(completed.execute(f"SELECT 1 FROM {table}").fetchone() for table in
+               ("sessions", "session_predecessors", "session_browser_flow", "browser_login_flows", "enrollment_grants", "enrollment_sessions")):
+            raise BackupError("Restored session, browser-flow and enrollment revocation could not be verified.")
         if not TransactionAccessStore(completed).read_freeze().frozen:
             raise BackupError("Restored editing pause could not be verified.")
     receipt = {"format": "westbridge-restore-v1", "restored_at": utc_now(),
@@ -327,7 +397,7 @@ def main(argv=None):
     restore.add_argument("--backup-mfa-key-file", help="Original backup MFA key when the current key has rotated")
     restore.add_argument("--security-source", help="Explicitly trusted current workspace; omission keeps restore offline")
     restore.add_argument("--upgrade-backup-schema", action="store_true",
-                         help="Explicitly upgrade a validated schema-five archive only in private restore staging")
+                         help="Explicitly upgrade a validated schema-five through -nine archive only in private restore staging")
     args = parser.parse_args(argv)
     try:
         if args.command == "backup":

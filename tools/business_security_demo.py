@@ -29,6 +29,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(EXAMPLE))
 
 from business.evidence import CHECKS, finish_receipt, new_receipt, write_receipt  # noqa: E402
+from tools.business_login_client import login_post  # noqa: E402
 
 ORIGIN = "http://127.0.0.1:8091"
 
@@ -44,18 +45,16 @@ class Checks:
 
 
 def _fixture(directory):
-    from business.app import create_app
-    from business.secret_store import create_key_file, default_key_path
-    from business.seed import provision
+    from business.secret_store import default_key_path
+    from tools.business_dashboard_browser import prepare_fixture
 
     key = default_key_path(directory)
-    create_key_file(directory, key)
-    credentials = provision(directory, mfa_key_file=key)
-    return create_app(directory, public_origin=ORIGIN, mfa_key_file=key), credentials, key
+    credentials, application = prepare_fixture(directory, ORIGIN)
+    return application, credentials, key
 
 
-def _login(client, credentials, username="alex"):
-    response = client.post("/api/login", json={"username": username, "password": credentials[username]},
+def _login(client, credentials, code, username="alex"):
+    response = login_post(client, "/api/login", json={"username": username, "password": credentials[username], "otp": code(username)},
                            headers={"Origin": ORIGIN})
     if response.status_code != 200:
         raise AssertionError("Disposable login failed.")
@@ -71,11 +70,13 @@ def _business_fingerprint(database):
 
 def session_revocation(directory, checks):
     from fastapi.testclient import TestClient
+    from tools.business_dashboard_browser import synthetic_mfa_clock
 
     app, credentials, _key = _fixture(directory / "host")
-    with TestClient(app, base_url=ORIGIN) as first, TestClient(app, base_url=ORIGIN) as second:
-        old_headers = _login(first, credentials)
-        retained_headers = _login(second, credentials)
+    with (synthetic_mfa_clock(app.state.database) as code, TestClient(app, base_url=ORIGIN) as first,
+          TestClient(app, base_url=ORIGIN) as second):
+        old_headers = _login(first, credentials, code)
+        retained_headers = _login(second, credentials, code)
         checks.require("revoke_initial_access", first.get("/api/messages").status_code == 200)
         inventory = second.get("/api/security/sessions")
         if inventory.status_code != 200:
@@ -165,11 +166,12 @@ def recovery_authority(directory, checks):
     from business.app import create_app
     from business.security import COOKIE_NAME
     from fastapi.testclient import TestClient
+    from tools.business_dashboard_browser import synthetic_mfa_clock
 
     current = directory / "current"
     app, credentials, key = _fixture(current)
-    with TestClient(app, base_url=ORIGIN) as original:
-        _login(original, credentials)
+    with synthetic_mfa_clock(app.state.database) as code, TestClient(app, base_url=ORIGIN) as original:
+        _login(original, credentials, code)
         old_cookie = original.cookies.get(COOKIE_NAME)
         with app.state.database.transaction() as connection:
             connection.execute("INSERT INTO messages VALUES(?,?,?,?)", ("security-demo-history", "alex", "Historical fictional record", "2026-01-01"))
@@ -185,12 +187,14 @@ def recovery_authority(directory, checks):
         with restored_app.state.database.transaction() as connection:
             historical = connection.execute("SELECT body FROM messages WHERE id='security-demo-history'").fetchone()
         checks.require("restore_historical_record", historical is not None and historical[0] == "Historical fictional record")
-        with TestClient(restored_app, base_url=ORIGIN) as old, TestClient(restored_app, base_url=ORIGIN) as legitimate:
+        with (synthetic_mfa_clock(restored_app.state.database) as restored_code,
+              TestClient(restored_app, base_url=ORIGIN) as old, TestClient(restored_app, base_url=ORIGIN) as legitimate):
             rejected = old.get("/api/messages", headers={"Cookie": f"{COOKIE_NAME}={old_cookie}"})
             checks.require("restore_old_session_denied", rejected.status_code == 401)
-            rejected = old.post("/api/login", json={"username": "blair", "password": credentials["blair"]}, headers={"Origin": ORIGIN})
+            rejected = login_post(old, "/api/login", json={"username": "blair", "password": credentials["blair"],
+                                                     "otp": restored_code("blair")}, headers={"Origin": ORIGIN})
             checks.require("restore_disabled_user_denied", rejected.status_code == 401)
-            headers = _login(legitimate, credentials)
+            headers = _login(legitimate, credentials, restored_code)
             checks.require("restore_current_access", legitimate.get("/api/messages").status_code == 200)
             before = _business_fingerprint(restored_app.state.database)
             rejected = legitimate.post("/api/messages", json={"body": "Frozen disposable control"}, headers=headers)

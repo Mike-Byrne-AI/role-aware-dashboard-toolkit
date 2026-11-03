@@ -8,7 +8,6 @@ import hmac
 import math
 import secrets
 import sqlite3
-import time
 
 from fastapi import HTTPException
 from role_aware_dashboard_toolkit.access import AccessPolicy, Identity, principal_id
@@ -124,20 +123,31 @@ class TransactionAccessStore:
 
 
 def _live(connection, hashed: str, key: bytes):
+    from .browser_flow import bound_session, checked_time, current_time
+    from .enrollment import account_can_authenticate, requires_mfa
     if not connection.in_transaction:
         raise HTTPException(401, "Please sign in again.")
     session = connection.execute("SELECT * FROM sessions WHERE token_hash=?", (hashed,)).fetchone()
     if not session:
         raise HTTPException(401, "Please sign in again.")
     user = connection.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
-    now = time.time()
+    try:
+        now = current_time()
+        checked_time(connection, now)
+        flow = bound_session(connection, hashed, now=now)
+    except HTTPException:
+        raise HTTPException(401, "Please sign in again.") from None
     times = [session["created_at"], session["last_seen"], session["expires_at"]]
     if any(type(value) not in (int, float) or not math.isfinite(value) for value in times):
         raise HTTPException(401, "Please sign in again.")
-    expiry = min(session["expires_at"], session["last_seen"] + IDLE_SECONDS, session["created_at"] + SESSION_SECONDS)
-    if (not user or user["active"] != 1 or user["role"] not in ROLES or expiry <= now
-            or session["created_at"] > now or session["last_seen"] > now
-            or session["last_seen"] < session["created_at"]):
+    # Bound deadlines use one conservative integer representation. Legacy
+    # sessions retain raw subsecond ordinary use until explicit S+CSRF binding.
+    created, seen, absolute = [math.floor(value) for value in times] if flow is not None else times
+    expiry = min(absolute, seen + IDLE_SECONDS, created + SESSION_SECONDS)
+    if flow is not None:
+        expiry = min(expiry, flow["expires_at"])
+    if (not user or not account_can_authenticate(connection, user) or user["role"] not in ROLES or expiry <= now
+            or created > now or seen > now or seen < created):
         raise HTTPException(401, "Please sign in again.")
     passkey = connection.execute(
         "SELECT p.user_id FROM session_passkey s LEFT JOIN passkey_credentials p "
@@ -147,9 +157,9 @@ def _live(connection, hashed: str, key: bytes):
     if ((passkey is not None and passkey["user_id"] != user["id"])
             or (verification and verification["method"] == "passkey" and passkey is None)):
         raise HTTPException(401, "Please sign in again.")
-    if user["role"] == "admin":
+    if requires_mfa(connection, user):
         attestation = connection.execute(
-            "SELECT 1 FROM session_mfa s JOIN admin_mfa a ON a.user_id=? AND a.generation=s.generation WHERE s.token_hash=?",
+            "SELECT 1 FROM session_mfa s JOIN account_mfa a ON a.user_id=? AND a.generation=s.generation WHERE s.token_hash=?",
             (user["id"], hashed),
         ).fetchone()
         if attestation is None and passkey is None:
@@ -165,6 +175,7 @@ class AuthContext:
     user: sqlite3.Row = field(repr=False)
     csrf: str = field(repr=False)
     policy: AccessPolicy = field(repr=False)
+    session_hash: str = field(repr=False)
 
     def authorize(self, permission, *, write=False):
         if not self.policy.authorize(self.user["principal"], self.user["role"], permission, ROLES, write=write):
@@ -175,17 +186,31 @@ class AuthContext:
             raise HTTPException(403, "Request verification failed. Refresh and try again.")
 
     def session_payload(self):
+        from .enrollment import requires_mfa
         freeze = self.policy.store.read_freeze()
-        return {"user": {key: self.user[key] for key in ("id", "username", "name", "role")},
-                "csrf": self.csrf, "frozen": freeze.frozen, "freeze_revision": freeze.revision}
+        session = self.policy.store.connection.execute(
+            "SELECT q.public_id,s.expires_at,s.created_at FROM sessions s JOIN session_security q "
+            "ON q.token_hash=s.token_hash WHERE s.token_hash=?", (self.session_hash,),
+        ).fetchone()
+        if session is None:
+            raise HTTPException(401, "Please sign in again.")
+        return {"user": {**{key: self.user[key] for key in ("id", "username", "name", "role")},
+                         "mfa_required": requires_mfa(self.policy.store.connection, self.user)},
+                "csrf": self.csrf, "frozen": freeze.frozen, "freeze_revision": freeze.revision,
+                "session_id": session["public_id"],
+                "expires_at": min(session["expires_at"], session["created_at"] + SESSION_SECONDS)}
 
 
 def authenticate(connection, token, key) -> AuthContext:
+    from .browser_flow import bound_session, checked_time, current_time
     if not isinstance(token, str) or len(token) != 43 or not token.isascii():
         raise HTTPException(401, "Please sign in again.")
     hashed = token_hash(token)
     user, _ = _live(connection, hashed, key)
-    connection.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (time.time(), hashed))
+    now = current_time()
+    checked = checked_time(connection, now)
+    seen = checked if bound_session(connection, hashed, now=now) is not None else now
+    connection.execute("UPDATE sessions SET last_seen=? WHERE token_hash=?", (seen, hashed))
 
     def resolve():
         try:
@@ -193,4 +218,47 @@ def authenticate(connection, token, key) -> AuthContext:
         except (HTTPException, sqlite3.Error):
             return None
 
-    return AuthContext(user, csrf_for_token(token, key), AccessPolicy(resolve, TransactionAccessStore(connection), key))
+    return AuthContext(user, csrf_for_token(token, key), AccessPolicy(resolve, TransactionAccessStore(connection), key), hashed)
+
+
+def create_session(connection, user_id, key, *, flow_proof, method, mfa_generation=None, passkey_id=None):
+    """Create one proven head, move its binding, then revoke and enforce caps.
+
+    Admission/CAS and factor advancement have already happened in this same
+    transaction. Never delete the prior head before moving its flow binding:
+    its cascading deletion would correctly close that flow, including winner.
+    """
+    from .browser_flow import bind_login, checked_time
+    from .session_state import _trim_predecessors, record_verification
+
+    if not connection.in_transaction or not flow_proof.admitted:
+        raise ValueError("Session creation requires an admitted browser flow.")
+    now = checked_time(connection)
+    expiry = min(now + SESSION_SECONDS, flow_proof.expires_at)
+    if expiry <= now:
+        raise HTTPException(409, "Sign-in changed or expired. Start sign-in again.")
+    old = connection.execute("SELECT token_hash FROM session_security WHERE public_id=?",
+                             (flow_proof.old_public_id,)).fetchone()
+    token = secrets.token_urlsafe(32)
+    hashed = token_hash(token)
+    connection.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (hashed, user_id, now, now, expiry))
+    if mfa_generation is not None:
+        connection.execute("INSERT INTO session_mfa VALUES(?,?)", (hashed, mfa_generation))
+    if passkey_id is not None:
+        connection.execute("INSERT INTO session_passkey VALUES(?,?)", (hashed, passkey_id))
+    record_verification(connection, hashed, now, method)
+    public_id = connection.execute("SELECT public_id FROM session_security WHERE token_hash=?", (hashed,)).fetchone()[0]
+    bind_login(connection, flow_proof, public_id)
+    if old is not None:
+        connection.execute("DELETE FROM passkey_challenges WHERE binding_hash=?", (old[0],))
+        connection.execute("DELETE FROM sessions WHERE token_hash=?", (old[0],))
+    connection.execute("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", (now, now - IDLE_SECONDS))
+    # Keep the winner even when timestamps tie. At most seven other sessions.
+    connection.execute(
+        "DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions "
+        "WHERE user_id=? AND token_hash<>? ORDER BY created_at DESC,token_hash LIMIT -1 OFFSET 7)",
+        (user_id, hashed),
+    )
+    _trim_predecessors(connection, now)
+    auth = authenticate(connection, token, key)
+    return token, expiry, auth

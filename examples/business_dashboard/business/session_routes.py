@@ -2,19 +2,21 @@
 
 import re
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .db import record_activity
-from .mfa import verify_admin_code
+from .mfa import verify_account_code
 from .models import Empty, Reauthentication
 from .security import IDLE_SECONDS, SESSION_SECONDS, _live, read_session_token, session_cookie_name, token_hash, verify_password
-from .session_state import current_time, record_verification, require_recent, verification_expiry
+from .session_state import current_time, require_recent, rotate_session, set_rotated_cookie, verification_expiry
 from .work_limits import BoundedWork
 from .security_events import record_event, terminate_own_session
+from .browser_flow import require_bound_session
 
 
 def install_session_routes(app, database, authorized, origin):
+    from .enrollment import requires_mfa
     # Imported at installation to keep authentication primitives independent
     # from route composition. Use the same durable reservation semantics.
     from .auth_routes import (
@@ -49,8 +51,9 @@ def install_session_routes(app, database, authorized, origin):
                 })
             return {"sessions": visible, "verification_expires_at": verification_expiry(connection, hashed)}
 
-    def perform_verification(payload, request):
+    def perform_verification(payload, request, response):
         with authorized(request, csrf=True) as (connection, auth):
+            require_bound_session(connection, token_hash(read_session_token(request, cookie_name)))
             key = _limit_key(database, "reauthentication", auth.user["id"])
             reserved = _reserve(connection, key, current_time())
             if reserved is None:
@@ -63,6 +66,7 @@ def install_session_routes(app, database, authorized, origin):
             metrics.record("reauth_rejected")
             return JSONResponse({"detail": "The verification details are incorrect."}, status_code=403)
         with authorized(request, csrf=True) as (connection, auth):
+            require_bound_session(connection, token_hash(read_session_token(request, cookie_name)))
             if (_identity_state(auth.user) != before
                     or _mfa_generation(connection, auth.user) != generation):
                 metrics.record("reauth_identity_changed")
@@ -72,23 +76,27 @@ def install_session_routes(app, database, authorized, origin):
                 metrics.record("reauth_reservation_expired")
                 return _limit_response("identity-verification")
             method = "password"
-            if auth.user["role"] == "admin":
-                if verify_admin_code(connection, auth.user["id"], payload.otp, database.mfa_secrets) is None:
+            if requires_mfa(connection, auth.user):
+                generation = verify_account_code(connection, auth.user["id"], payload.otp, database.mfa_secrets)
+                if generation is None:
                     metrics.record("reauth_rejected")
                     return JSONResponse({"detail": "The verification details are incorrect."}, status_code=403)
                 method = "totp"
             hashed = token_hash(read_session_token(request, cookie_name))
-            record_verification(connection, hashed, now, method)
+            if method == "totp":
+                connection.execute("INSERT INTO session_mfa VALUES(?,?) ON CONFLICT(token_hash) "
+                                   "DO UPDATE SET generation=excluded.generation", (hashed, generation))
+            token, expiry, result = rotate_session(connection, hashed, now, method, database.identity_key)
             _release_success(connection, key, reserved)
             record_activity(connection, auth.user["name"], "Verified identity", "Own session")
             record_event(connection, "identity_verified", actor=auth.user["principal"], method=method)
-            result = {"ok": True, "verification_expires_at": verification_expiry(connection, hashed)}
         metrics.record("reauth_succeeded")
+        set_rotated_cookie(response, origin, token, expiry)
         return result
 
     @app.post("/api/security/reauthenticate")
-    async def reauthenticate(payload: Reauthentication, request: Request):
-        return await work.run(perform_verification, payload, request)
+    async def reauthenticate(payload: Reauthentication, request: Request, response: Response):
+        return await work.run(perform_verification, payload, request, response)
 
     @app.post("/api/security/sessions/{identifier}/revoke")
     def revoke(identifier: str, payload: Empty, request: Request):

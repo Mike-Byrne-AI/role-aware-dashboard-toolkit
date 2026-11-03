@@ -1,5 +1,7 @@
 """Real AES-GCM, separated key custody and atomic migration using fake accounts."""
 
+from tools.business_login_client import login_post
+
 import importlib.util
 import os
 from pathlib import Path
@@ -14,7 +16,7 @@ import pytest
 pytest.importorskip("cryptography")
 
 from tests.test_business_dashboard import (  # noqa: E402
-    business as business, business_seed as business_seed,
+    business as business, business_seed as business_seed, downgrade_enrollment_schema,
 )
 from business import db  # noqa: E402
 from business.secret_store import SecretStore, create_key_file, default_key_path, key_path  # noqa: E402
@@ -79,15 +81,21 @@ def _cli():
 
 def _enrollment(business):
     with business.db() as connection:
-        return dict(connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone())
+        return dict(connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone())
 
 
 def _legacy_four(business):
     row = _enrollment(business)
     secret = business.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"])
     with business.db() as connection:
+        downgrade_enrollment_schema(connection)
+        # Schema four's ordinary employee sessions were password-only. Model
+        # that historical authority explicitly before taking the baseline.
+        connection.execute("DELETE FROM session_mfa WHERE token_hash IN (SELECT token_hash FROM sessions WHERE user_id<>'admin')")
+        connection.execute("DELETE FROM admin_mfa WHERE user_id<>'admin'")
         for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
             connection.execute(f"DROP TABLE {table}")
+        connection.execute("DROP TABLE session_predecessors")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -101,10 +109,12 @@ def _legacy_four(business):
 
 def _snapshot(business):
     with business.raw_db() as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        table = "account_mfa" if version in (8, 9, 10) else "admin_mfa"
         return (
-            connection.execute("PRAGMA user_version").fetchone()[0],
+            version,
             [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")],
-            [tuple(row) for row in connection.execute("SELECT * FROM admin_mfa")],
+            [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")],
             [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")],
         )
 
@@ -154,7 +164,7 @@ def test_startup_refuses_missing_wrong_or_reused_key_without_repair(business, fa
 
 def test_wrong_key_rejected_even_when_no_admin_is_enrolled(business):
     with business.db() as connection:
-        connection.execute("DELETE FROM admin_mfa")
+        connection.execute("DELETE FROM account_mfa")
     default_key_path(business.directory).write_bytes(secrets.token_bytes(32))
     with pytest.raises(ValueError, match="ciphertext or encryption key"):
         db.Database(business.directory)
@@ -191,7 +201,7 @@ def test_explicit_migration_encrypts_preserves_and_backfills_stale_sessions(busi
     migrated = db.Database(business.directory, migrate=True)
     row = _enrollment(business)
     assert migrated.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"]) == secret
-    assert _snapshot(business)[0] == 6
+    assert _snapshot(business)[0] == 10
     assert _snapshot(business)[3] == before[3]
     with business.db() as connection:
         sessions = connection.execute("SELECT * FROM session_security").fetchall()
@@ -268,7 +278,7 @@ def test_cli_requires_explicit_key_creation_and_migration_without_listening(busi
     assert cli.main(["--data-dir", str(business.directory), "--create-mfa-key"]) == 0
     assert original.is_file()
     assert cli.main(["--data-dir", str(business.directory), "--migrate-storage"]) == 0
-    assert _snapshot(business)[0] == 6
+    assert _snapshot(business)[0] == 10
     out = capsys.readouterr()
     assert "Old backups and SQLite remnants" in out.out
     assert "External MFA encryption key created" in out.out
@@ -294,9 +304,9 @@ def test_cli_loopback_hostname_matches_real_app_host_origin_and_passkey_rp(busin
     with TestClient(application, base_url=origin) as client:
         assert client.get("/healthz").status_code == 200
         assert client.get("/healthz", headers={"Host": f"{other}:8092"}).status_code == 400
-        payload = {"username": "alex", "password": business.credentials["alex"]}
-        assert client.post("/api/login", json=payload, headers={"Origin": f"http://{other}:8092"}).status_code == 403
-        assert client.post("/api/login", json=payload, headers={"Origin": origin}).status_code == 200
+        payload = business.login_payload("alex")
+        assert login_post(client, "/api/login", json=payload, headers={"Origin": f"http://{other}:8092"}).status_code == 403
+        assert login_post(client, "/api/login", json=payload, headers={"Origin": origin}).status_code == 200
         inventory = client.get("/api/security/passkeys")
         assert inventory.status_code == 200
         assert inventory.json()["rp_id"] == selected

@@ -74,15 +74,20 @@ def source_fingerprint(root=None):
     """
     root = Path(root) if root is not None else Path(__file__).resolve().parents[3]
     candidates = []
-    for relative in ("role_aware_dashboard_toolkit", "examples/business_dashboard", ".github/workflows"):
+    for relative in ("role_aware_dashboard_toolkit", "examples/business_dashboard", "examples/security_event_wire",
+                     "examples/security_event_collector", ".github/workflows"):
         base = root / relative
         if base.is_dir():
             candidates.extend(path for path in base.rglob("*") if path.is_file()
                               and not path.is_symlink() and path.suffix in SOURCE_SUFFIXES
                               and not {"__pycache__", ".pytest_cache", ".venv"}.intersection(path.parts))
     for relative in ("pyproject.toml", "tools/business_dashboard_browser.py",
+                     "tools/business_login_client.py", "tools/business_login_flow_browser.py",
+                     "tools/business_enrollment_browser.py",
                      "tools/business_security_demo.py", "tools/business_dashboard_fuzz.py",
-                     "tools/business_recovery_drill.py", "examples/business_dashboard/requirements.txt",
+                     "tools/business_recovery_drill.py", "tools/business_collector_drill.py",
+                     "examples/business_dashboard/requirements.txt", "examples/security_event_collector/requirements.txt",
+                     "examples/security_event_collector/README.md",
                      "examples/business_dashboard/business/password_data/common-passwords.txt.gz",
                      "examples/business_dashboard/business/password_data/SOURCE.txt",
                      "examples/business_dashboard/SECURITY_LAB.md", "examples/business_dashboard/SECURITY_DESIGN.md",
@@ -90,7 +95,7 @@ def source_fingerprint(root=None):
         path = root / relative
         if path.is_file() and not path.is_symlink():
             candidates.append(path)
-    for pattern in ("test_business*.py", "test_api*.py"):
+    for pattern in ("test_business*.py", "test_api*.py", "test_security_event*.py"):
         candidates.extend(path for path in (root / "tests").glob(pattern) if path.is_file() and not path.is_symlink())
     digest = hashlib.sha256()
     paths = sorted(set(candidates), key=lambda path: path.relative_to(root).as_posix())

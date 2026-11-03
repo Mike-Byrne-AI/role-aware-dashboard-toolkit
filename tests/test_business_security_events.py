@@ -1,5 +1,7 @@
 """Transactional security receipts, bounded denial evidence and restart delivery."""
 
+from tools.business_login_client import login_post
+
 import importlib.util
 import hashlib
 import json
@@ -7,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,11 +17,25 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 pytest.importorskip("pyotp")
 
+from tests import test_business_dashboard as dashboard_fixtures  # noqa: E402
 from tests.test_business_dashboard import (  # noqa: E402
-    ORIGIN, business as business, business_seed as business_seed,
+    ORIGIN, business_seed as business_seed, downgrade_enrollment_schema,
     business_admin as business_admin,
 )
 from business import app as business_app, db, security_events as events  # noqa: E402
+
+enrolled_business = dashboard_fixtures.business
+
+
+@pytest.fixture
+def business(enrolled_business):
+    # The shared seed keeps actual enrollment evidence. Isolate this module's
+    # capacity, crash and delivery scenarios from that already-proven setup.
+    with enrolled_business.db() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM account_security WHERE lifecycle='active'").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM enrollment_decisions").fetchone()[0] == 6
+        connection.execute("DELETE FROM security_events")
+    return enrolled_business
 
 
 def _rows(business, table="security_events"):
@@ -28,8 +45,9 @@ def _rows(business, table="security_events"):
 
 
 def _downgrade_five(business):
-    with business.db() as connection:
-        for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
+    with business.raw_db() as connection:
+        downgrade_enrollment_schema(connection)
+        for table in ("session_predecessors", "security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
             connection.execute(f"DROP TABLE {table}")
         connection.execute("PRAGMA user_version=5")
 
@@ -49,7 +67,7 @@ def test_success_event_and_obligation_share_mutation_transaction(business, busin
         assert connection.execute("SELECT frozen,freeze_revision FROM settings").fetchone()[:] == (1, 1)
         event = connection.execute("SELECT * FROM security_events WHERE code='editing_paused'").fetchone()
         assert event["actor"] == connection.execute("SELECT principal FROM users WHERE id='admin'").fetchone()[0]
-        assert connection.execute("SELECT delivered_at FROM security_outbox WHERE event_id=?", (event["id"],)).fetchone()[0] is None
+        assert connection.execute("SELECT acknowledged_at FROM security_delivery_obligations WHERE event_id=?", (event["id"],)).fetchone()[0] is None
 
 
 def test_required_event_failure_rolls_back_business_write_and_activity(business, business_admin, monkeypatch):
@@ -76,7 +94,7 @@ def test_rollback_removes_event_and_delivery_obligation(business):
             events.record_event(connection, "editing_paused")
             connection.execute("UPDATE settings SET frozen=1")
             raise RuntimeError("synthetic rollback")
-    assert _rows(business) == _rows(business, "security_outbox") == []
+    assert _rows(business) == _rows(business, "security_delivery_obligations") == []
     with business.db() as connection:
         assert connection.execute("SELECT frozen FROM settings").fetchone()[0] == 0
 
@@ -103,10 +121,10 @@ def test_crash_after_delivery_before_ack_redelivers_with_idempotent_consumer(bus
     with pytest.raises(RuntimeError, match="termination"):
         events.dispatch_pending(business.app.state.database, after_delivery=crash)
     assert len(_rows(business, "security_sink_receipts")) == 1
-    assert _rows(business, "security_outbox")[0]["delivered_at"] is None
+    assert _rows(business, "security_delivery_obligations")[0]["acknowledged_at"] is None
     assert events.dispatch_pending(db.Database(business.directory))["delivered"] == 1
     assert [row["event_id"] for row in _rows(business, "security_sink_receipts")] == [identifier]
-    assert _rows(business, "security_outbox")[0]["attempts"] == 2
+    assert _rows(business, "security_delivery_obligations")[0]["attempts"] == 2
 
 
 @pytest.mark.parametrize("crash_boundary", ["after_commit", "after_delivery"])
@@ -132,7 +150,7 @@ raise AssertionError("Crash boundary was not reached")
     assert result.returncode == 73, result.stderr
     assert result.stdout == result.stderr == ""
     assert len(_rows(business, "security_sink_receipts")) == (crash_boundary == "after_delivery")
-    assert _rows(business, "security_outbox")[0]["delivered_at"] is None
+    assert _rows(business, "security_delivery_obligations")[0]["acknowledged_at"] is None
     identifier = _rows(business)[0]["id"]
     restarted = db.Database(business.directory)
     assert events.dispatch_pending(restarted) == {"delivered": 1, "failed": 0, "pending": 0}
@@ -151,12 +169,12 @@ def test_delivery_failures_keep_pending_retry_and_do_not_leak_adapter_exception(
 
     result = events.dispatch_pending(business.app.state.database, deliver=unavailable)
     assert result == {"delivered": 0, "failed": 1, "pending": 1}
-    outbox = _rows(business, "security_outbox")[0]
+    outbox = _rows(business, "security_delivery_obligations")[0]
     assert outbox["last_error"] == "delivery_failed" and outbox["attempts"] == 1
     assert "SECRET_ADAPTER" not in caplog.text + json.dumps(outbox)
     assert events.dispatch_pending(business.app.state.database)["delivered"] == 0
     with business.db() as connection:
-        connection.execute("UPDATE security_outbox SET next_attempt_at=0")
+        connection.execute("UPDATE security_delivery_obligations SET next_attempt_at=0")
     assert events.dispatch_pending(db.Database(business.directory))["delivered"] == 1
 
 
@@ -203,13 +221,13 @@ def test_out_of_range_timeline_cursor_returns_422_without_changing_authority_or_
 
 
 def test_internal_timeline_rejects_oversized_cursor_and_accepts_largest_sqlite_integer(business, business_admin):
-    before = _rows(business), _rows(business, "security_outbox")
+    before = _rows(business), _rows(business, "security_delivery_obligations")
     with business.db() as connection:
         with pytest.raises(ValueError, match="Invalid event page"):
             events.timeline(connection, before=2**63)
         result = events.timeline(connection, before=2**63 - 1)
     assert result["events"][0]["code"] == "login_succeeded"
-    assert (_rows(business), _rows(business, "security_outbox")) == before
+    assert (_rows(business), _rows(business, "security_delivery_obligations")) == before
 
 
 def test_dispatch_requires_csrf_admin_and_recent_verification(business, business_admin):
@@ -275,7 +293,7 @@ def test_anonymous_denial_flood_cannot_consume_required_action_capacity(business
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
     rows = _rows(business)
     assert len(rows) == 5 and len([row for row in rows if row["outcome"] == "succeeded"]) == 3
-    assert len(_rows(business, "security_outbox")) == 5  # No pending obligation was discarded.
+    assert len(_rows(business, "security_delivery_obligations")) == 5  # No pending obligation was discarded.
 
 
 def test_delivered_denial_observations_can_rotate_without_dropping_pending(business, monkeypatch):
@@ -287,7 +305,7 @@ def test_delivered_denial_observations_can_rotate_without_dropping_pending(busin
     recorder.record("authorization_denied", "forbidden")
     assert len(_rows(business)) == 1 and _rows(business)[0]["id"] != first
     assert len(_rows(business, "security_sink_receipts")) == 0
-    assert _rows(business, "security_outbox")[0]["delivered_at"] is None
+    assert _rows(business, "security_delivery_obligations")[0]["acknowledged_at"] is None
 
 
 def _fill_normal_capacity(business):
@@ -307,7 +325,7 @@ def test_employee_containment_names_cannot_spend_current_admin_reserve(business,
     assert len(_rows(business)) == 5
     with business.db() as connection:
         events.record_event(connection, code, actor=principals["admin"])
-    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 6
+    assert len(_rows(business)) == len(_rows(business, "security_delivery_obligations")) == 6
 
 
 @pytest.mark.parametrize("role,active", [("employee", 1), ("admin", 0)])
@@ -341,7 +359,7 @@ def test_employee_login_flood_leaves_stale_admin_reauthentication_and_containmen
     assert policy["normal_event_capacity"] == 9 and policy["containment_reserve"] == 3
     assert policy["employee_session_reserve"] == 8
     assert policy["reserve_eligibility"] == "current_active_admin_containment_only"
-    blocked = business.client().post("/api/login", json=business.login_payload("alex"), headers={
+    blocked = login_post(business.client(), "/api/login", json=business.login_payload("alex"), headers={
         "Origin": ORIGIN, "X-Role": "admin", "X-User-ID": "admin",
     })
     assert blocked.status_code == 503 and len(_rows(business)) == 9
@@ -358,12 +376,14 @@ def test_employee_login_flood_leaves_stale_admin_reauthentication_and_containmen
         "current_password": business.credentials["admin"],
     }).status_code == 403
     assert len(_rows(business)) == 10
-    assert business_admin.request("POST", "/api/security/reauthenticate", json={
+    verified = business_admin.request("POST", "/api/security/reauthenticate", json={
         "current_password": business.credentials["admin"], "otp": business.login_payload("admin")["otp"],
-    }).status_code == 200
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 200
+    })
+    assert verified.status_code == 200
+    business_admin.csrf = verified.json()["csrf"]
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": business.user_revision("alex")}).status_code == 200
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
-    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 13
+    assert len(_rows(business)) == len(_rows(business, "security_delivery_obligations")) == 13
     with business.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM sessions WHERE user_id='alex'").fetchone()[0] == 0
         assert connection.execute("SELECT active FROM users WHERE id='alex'").fetchone()[0] == 0
@@ -420,9 +440,9 @@ def test_all_employee_sessions_can_terminate_after_admin_reserve_is_used(busines
         assert actor.request("GET", "/api/messages").status_code == 401
         with business.db() as connection:
             assert connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0] + events._session_reserve(connection) == 12
-    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 12
-    assert all(row["delivered_at"] is None for row in _rows(business, "security_outbox"))
-    assert business.client().post("/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("casey")).status_code == 503
+    assert len(_rows(business)) == len(_rows(business, "security_delivery_obligations")) == 12
+    assert all(row["acknowledged_at"] is None for row in _rows(business, "security_delivery_obligations"))
+    assert login_post(business.client(), "/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("casey")).status_code == 503
 
 
 def test_termination_requires_owned_existing_session_and_rolls_back_failed_event(business, monkeypatch):
@@ -465,7 +485,9 @@ def test_expired_target_cannot_claim_slot_when_unrelated_session_expires_during_
     before = _rows(business), _rows(business, "sessions")
     moments = iter((now, now + 2))
     with monkeypatch.context() as patch:
-        patch.setattr(events.time, "time", lambda: next(moments))
+        # Scope the two event timestamps to this module; the host clock
+        # independently observes time at transaction entry.
+        patch.setattr(events, "time", SimpleNamespace(time=lambda: next(moments)))
         with pytest.raises(events.EventCapacityError), business.db() as connection:
             events.terminate_own_session(connection, "session_revoked", hashed=target, actor=actor)
     assert (_rows(business), _rows(business, "sessions")) == before
@@ -497,7 +519,7 @@ def test_legacy_reservation_deficit_is_visible_and_requires_delivery_without_los
         assert events.timeline(connection)["retention"]["reservation_deficit"] == 1
     assert actor.request("POST", "/api/logout", json={}).status_code == 503
     assert actor.request("GET", "/api/messages").status_code == 200
-    assert len(_rows(business)) == len(_rows(business, "security_outbox")) == 2
+    assert len(_rows(business)) == len(_rows(business, "security_delivery_obligations")) == 2
     assert events.dispatch_pending(business.app.state.database)["delivered"] == 2
     assert actor.request("POST", "/api/logout", json={}).status_code == 200
     assert actor.request("GET", "/api/messages").status_code == 401
@@ -518,7 +540,7 @@ def test_denied_login_never_persists_submitted_credentials_or_account_label(busi
     from business import auth_routes
 
     monkeypatch.setattr(auth_routes, "dummy_password_check", lambda password: None)
-    response = business.client().post("/api/login", headers={"Origin": ORIGIN}, json={
+    response = login_post(business.client(), "/api/login", headers={"Origin": ORIGIN}, json={
         "username": "UNVERIFIED_USERNAME_CANARY", "password": "SUBMITTED_PASSWORD_CANARY",
     })
     assert response.status_code == 401
@@ -546,7 +568,7 @@ def test_retention_trims_delivered_only_and_capacity_recovery_allows_login(busin
         for _ in range(5):
             events.record_event(connection, "editing_paused", actor=principal)
     client = business.client()
-    response = client.post("/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("alex"))
+    response = login_post(client, "/api/login", headers={"Origin": ORIGIN}, json=business.login_payload("alex"))
     assert response.status_code == 503
     assert len(_rows(business)) == 6
     with business.db() as connection:
@@ -580,7 +602,7 @@ def test_offline_dispatch_requires_explicit_maintenance_assertion(business):
 
 def test_schema_five_requires_explicit_atomic_migration_preserving_business(business, monkeypatch):
     _downgrade_five(business)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
     with pytest.raises(ValueError, match="explicit reviewed migration"):
         db.Database(business.directory)
@@ -594,12 +616,12 @@ def test_schema_five_requires_explicit_atomic_migration_preserving_business(busi
         patch.setattr(db, "_apply_event_migration", fail)
         with pytest.raises(ValueError):
             db.Database(business.directory, migrate=True)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert connection.execute("SELECT name FROM sqlite_master WHERE name='security_events'").fetchone() is None
     db.Database(business.directory, migrate=True)
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == before
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     assert _rows(business) == []

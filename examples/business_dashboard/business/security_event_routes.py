@@ -10,6 +10,7 @@ from .security_events import (
     MAX_EVENT_SEQUENCE, DenialRecorder, SecurityEventMiddleware, dispatch_pending, timeline,
 )
 from .session_state import require_recent
+from .event_destinations import destination_status
 
 
 def install_security_event_routes(app, database, authorized, origin):
@@ -25,6 +26,12 @@ def install_security_event_routes(app, database, authorized, origin):
             result = timeline(connection, limit=limit, before=before)
             result["observation"] = recorder.snapshot()
             result["automatic_delivery"] = app.state.security_dispatcher.snapshot()
+            result["remote_delivery"] = {
+                "worker": app.state.remote_security_dispatcher.snapshot(),
+                "destinations": [destination_status(connection, row[0]) for row in connection.execute(
+                    "SELECT destination_id FROM security_destinations WHERE kind='https' ORDER BY enabled_at,destination_id"
+                )],
+            }
             return result
 
     @app.post("/api/admin/security/events/dispatch")

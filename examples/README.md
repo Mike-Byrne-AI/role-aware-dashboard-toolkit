@@ -10,6 +10,12 @@ business workspace with a password-free public board, private employee schedule
 and messages, and admin analytics, outreach, publishing and access controls.
 It runs locally on Windows, Linux and macOS with separate private runtime data.
 
+The [security-event collector](security_event_collector/README.md) extends
+Westbridge with destination-specific event delivery, receiver-owned alerts
+and a separately credentialed local inbox. Its disposable TLS drill establishes
+local process behavior; independently operated retention and human notification
+remain deployment work.
+
 [Cedar & Stone Landscaping](landscaping/README.md) combines real local password
 sign-in with a shared five-person crew schedule and message board. Admins manage
 accounts, jobs, assignments, rescheduling, completion/cancellation and history,

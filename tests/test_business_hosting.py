@@ -1,5 +1,7 @@
 """Fail-closed hosted startup without real credentials or network providers."""
 
+from tools.business_login_client import login_post
+
 from contextlib import contextmanager
 import importlib.util
 import os
@@ -8,6 +10,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -18,6 +21,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from tests.test_business_dashboard import business_seed as business_seed  # noqa: E402
 from business.secret_store import default_key_path, create_key_file  # noqa: E402
+from business.db import create_private_file  # noqa: E402
+from business import mfa  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "examples" / "business_dashboard" / "hosting" / "pilot.py"
@@ -118,7 +123,8 @@ def test_preflight_is_read_only_and_never_calls_the_provider(hosted, monkeypatch
 
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: pytest.fail("Unexpected provider request"))
     before = snapshot(hosted.data_dir)
-    pilot.preflight(hosted)
+    status = pilot.preflight(hosted)
+    assert status["deployment_state"] == "ready" and status["ready"]
     assert snapshot(hosted.data_dir) == before
 
 
@@ -138,10 +144,10 @@ def test_missing_private_file_is_not_recreated(hosted, filename):
     "DELETE FROM settings",
     "UPDATE users SET active=0 WHERE role='admin'",
     "UPDATE users SET principal='wrong' WHERE id='ellis'",
-    "DELETE FROM admin_mfa WHERE user_id='admin'",
-    "UPDATE admin_mfa SET secret_ciphertext='INVALID'",
-    "UPDATE admin_mfa SET generation='invalid'",
-    "UPDATE admin_mfa SET last_counter=1.5",
+    "DELETE FROM account_mfa WHERE user_id='admin'",
+    "UPDATE account_mfa SET secret_ciphertext='INVALID'",
+    "UPDATE account_mfa SET generation='invalid'",
+    "UPDATE account_mfa SET last_counter=1.5",
     "INSERT INTO assignments VALUES('missing-event','alex')",
 ])
 def test_invalid_storage_is_preserved_and_refused_before_create_app(hosted, monkeypatch, statement):
@@ -194,36 +200,47 @@ def test_provision_is_explicit_and_refuses_existing_files(hosted):
     assert snapshot(hosted.data_dir) == before
 
 
-def test_explicit_provision_creates_private_account_and_mfa_sheets(hosted):
+def test_explicit_provision_creates_expiring_enrollment_sheet_without_trusted_factors(hosted):
     target = hosted.data_dir.parent / "new-installation"
     key = create_key_file(target)
     configuration = pilot.Configuration(ORIGIN, "business.example.com", target, 10000, key)
-    accounts, authenticator = pilot.provision(configuration)
-    assert accounts.is_file() and authenticator.is_file()
-    pilot.preflight(configuration)
+    accounts = pilot.provision(configuration)
+    assert accounts.is_file() and "expire after 24 hours" in accounts.read_text()
+    assert not list(target.glob("ADMIN_MFA_SETUP*.md"))
+    status = pilot.preflight(configuration)
+    assert status["deployment_state"] == "enrollment_only" and not status["ready"]
+    with connection(configuration) as database:
+        assert database.execute("SELECT COUNT(*) FROM account_mfa").fetchone()[0] == 0
+        assert database.execute("SELECT COUNT(*) FROM account_security WHERE lifecycle='pending'").fetchone()[0] == 6
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX ownership and file modes")
-@pytest.mark.parametrize("target", ["directory", "business.sqlite3", "identity.key", "ACCOUNTS.md", "ADMIN_MFA_SETUP.md"])
+@pytest.mark.parametrize("target", ["directory", "business.sqlite3", "identity.key", "ACCOUNTS.md",
+                                   "ADMIN_MFA_SETUP.md", "ADMIN_ENROLLMENT-test.md", "ENROLLMENT-test.md"])
 def test_hosted_storage_requires_private_modes(hosted, target):
     path = hosted.data_dir if target == "directory" else hosted.data_dir / target
+    if not path.exists():
+        # Both retained historical sheets and newly issued grants stay private.
+        create_private_file(path, b"Synthetic private enrollment material")
     path.chmod(0o755 if target == "directory" else 0o644)
     with pytest.raises(ValueError, match="mode 0[67]00"):
         pilot.inspect_existing_storage(hosted)
 
 
-def test_hosted_app_secure_cookies_host_origin_and_forwarding_boundary(hosted, business_seed):
+def test_hosted_app_secure_cookies_host_origin_and_forwarding_boundary(hosted, business_seed, monkeypatch):
     application = pilot.create_application(hosted)
     with connection(hosted) as database:
-        ciphertext, generation = database.execute("SELECT secret_ciphertext,generation FROM admin_mfa WHERE user_id='admin'").fetchone()
+        ciphertext, generation, last_counter = database.execute("SELECT secret_ciphertext,generation,last_counter FROM account_mfa WHERE user_id='admin'").fetchone()
         secret = application.state.database.mfa_secrets.decrypt(ciphertext, "admin", generation)
+    current_step = max(time.time(), (last_counter + 1) * 30)
+    monkeypatch.setattr(mfa, "current_time", lambda: current_step)
     with TestClient(application, base_url=ORIGIN) as client:
         assert client.get("/healthz").json() == {"status": "ok"}
         assert client.get("/healthz", headers={"Host": "alternate.onrender.com"}).status_code == 400
         assert client.get("/api/public/posts").status_code == 200
         assert client.get("/api/public/posts", headers={"Host": "alternate.onrender.com"}).status_code == 400
-        payload = {"username": "admin", "password": business_seed.credentials["admin"], "otp": pyotp.TOTP(secret).now()}
-        response = client.post("/api/login", json=payload, headers={
+        payload = {"username": "admin", "password": business_seed.credentials["admin"], "otp": pyotp.TOTP(secret).at(current_step)}
+        response = login_post(client, "/api/login", json=payload, headers={
             "Origin": ORIGIN, "X-Forwarded-Proto": "http", "X-Forwarded-For": "192.0.2.123",
         })
         assert response.status_code == 200

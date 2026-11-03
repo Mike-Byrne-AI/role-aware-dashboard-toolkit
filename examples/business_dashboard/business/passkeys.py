@@ -26,8 +26,10 @@ from .auth_routes import _identity_state
 from .db import record_activity
 from .security_events import record_event
 from .models import Empty, RequestModel
-from .security import IDLE_SECONDS, ROLES, SESSION_SECONDS, authenticate, read_session_token, session_cookie_name, token_hash
-from .session_state import record_verification, require_recent, verification_expiry
+from .security import ROLES, create_session, read_session_token, session_cookie_name, token_hash
+from .browser_flow import admit_login, binding_hash, require_bound_session
+from .login_context_routes import login_proof
+from .session_state import require_recent, rotate_session, set_rotated_cookie
 from .work_limits import BoundedWork
 
 CHALLENGE_SECONDS = 120
@@ -35,7 +37,6 @@ MAX_LOGIN_CHALLENGES = 256
 MAX_SESSION_CHALLENGES = 64
 MAX_CREDENTIALS = 8
 ALGORITHMS = [COSEAlgorithmIdentifier.ECDSA_SHA_256, COSEAlgorithmIdentifier.RSASSA_PKCS1_v1_5_SHA_256]
-_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z", re.ASCII)
 _ID = re.compile(r"[0-9a-f]{32}\Z", re.ASCII)
 # Malformed CBOR arrays can escape the verifier's own exception hierarchy.
 _INVALID = (WebAuthnException, ValueError, TypeError, KeyError, IndexError, AttributeError, RecursionError, OverflowError)
@@ -57,14 +58,6 @@ def current_time():
 def _user_handle(database, user_id):
     # Stable opaque WebAuthn account identifier, not a username or bearer token.
     return hmac.new(database.identity_key, b"westbridge-passkey-user\0" + user_id.encode(), hashlib.sha256).digest()
-
-
-def preauth_cookie_name(origin):
-    return "__Host-westbridge_passkey_preauth" if origin.scheme == "https" else "westbridge_passkey_preauth"
-
-
-def _preauth_csrf(database, token):
-    return hmac.new(database.identity_key, b"westbridge-passkey-preauth\0" + token.encode(), hashlib.sha256).hexdigest()
 
 
 def _failed():
@@ -200,20 +193,18 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
 
     def options(payload, request, response, purpose):
         if purpose == "login":
-            cookie = request.cookies.get(preauth_cookie_name(origin), "")
-            if _TOKEN.fullmatch(cookie) is None:
-                cookie = secrets.token_urlsafe(32)
             with database.transaction() as connection:
-                identifier, challenge = _issue(connection, purpose, token_hash(cookie), metrics=metrics)
+                proof = login_proof(connection, database, request, origin)
+                identifier, challenge = _issue(connection, purpose, binding_hash(proof), metrics=metrics)
             generated = generate_authentication_options(
                 rp_id=rp_id, challenge=challenge, timeout=CHALLENGE_SECONDS * 1000,
                 user_verification=UserVerificationRequirement.REQUIRED,
             )
-            response.set_cookie(preauth_cookie_name(origin), cookie, max_age=CHALLENGE_SECONDS,
-                                httponly=True, secure=origin.scheme == "https", samesite="strict", path="/")
             return {"request_id": identifier, "options": json.loads(options_to_json(generated)),
-                    "expires_in": CHALLENGE_SECONDS, "csrf": _preauth_csrf(database, cookie)}
+                    "expires_in": CHALLENGE_SECONDS, "csrf": request.headers["x-login-csrf"]}
         with authorized(request, csrf=True) as (connection, auth):
+            if purpose == "reauth":
+                require_bound_session(connection, token_hash(read_session_token(request, cookie_name)))
             if purpose == "register":
                 require_recent(connection, token_hash(read_session_token(request, cookie_name)))
             rows = connection.execute("SELECT * FROM passkey_credentials WHERE user_id=?", (auth.user["id"],)).fetchall()
@@ -279,18 +270,15 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
 
     def verify(payload, request, response, purpose):
         if purpose == "login":
-            cookie = request.cookies.get(preauth_cookie_name(origin), "")
-            supplied = request.headers.get("x-passkey-csrf", "")
-            if (_TOKEN.fullmatch(cookie) is None or not supplied.isascii()
-                    or not hmac.compare_digest(supplied, _preauth_csrf(database, cookie))):
-                return failed()
             with database.transaction() as connection:
-                challenge = _take(connection, payload.request_id, purpose, token_hash(cookie))
+                proof = login_proof(connection, database, request, origin)
+                challenge = _take(connection, payload.request_id, purpose, binding_hash(proof))
                 stored = _credential(connection, payload.credential) if challenge else None
                 user = connection.execute("SELECT * FROM users WHERE id=?", (stored["user_id"],)).fetchone() if stored else None
                 before = _identity_state(user) if user else None
         else:
             with authorized(request, csrf=True) as (connection, auth):
+                require_bound_session(connection, token_hash(read_session_token(request, cookie_name)))
                 challenge = _take(connection, payload.request_id, purpose, token_hash(read_session_token(request, cookie_name)))
                 stored = _credential(connection, payload.credential) if challenge else None
                 user, before = auth.user, _identity_state(auth.user)
@@ -305,43 +293,39 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
             return failed()
         if purpose == "reauth":
             with authorized(request, csrf=True) as (connection, auth):
+                require_bound_session(connection, token_hash(read_session_token(request, cookie_name)))
                 if (_identity_state(auth.user) != before or not _challenge_current(challenge)
                         or not _advance(connection, stored, verified)):
                     return failed()
                 hashed = token_hash(read_session_token(request, cookie_name))
                 connection.execute("INSERT INTO session_passkey VALUES(?,?) ON CONFLICT(token_hash) "
                                    "DO UPDATE SET credential_id=excluded.credential_id", (hashed, stored["credential_id"]))
-                record_verification(connection, hashed, current_time(), "passkey")
+                token, expiry, result = rotate_session(connection, hashed, current_time(), "passkey", database.identity_key)
                 record_activity(connection, auth.user["name"], "Verified identity with passkey", "Own session")
                 record_event(connection, "identity_verified", actor=auth.user["principal"], method="passkey")
-                result = {"ok": True, "verification_expires_at": verification_expiry(connection, hashed)}
             metrics.record("passkey_reauth_succeeded")
+            set_rotated_cookie(response, origin, token, expiry)
             return result
         with database.transaction() as connection:
             current = connection.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
-            if (not current or _identity_state(current) != before or not _challenge_current(challenge)
-                    or not _advance(connection, stored, verified)):
+            from .enrollment import account_can_authenticate
+            if (not current or _identity_state(current) != before or not account_can_authenticate(connection, current)
+                    or not _challenge_current(challenge)):
                 return failed()
-            now = current_time()
-            connection.execute("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", (now, now - IDLE_SECONDS))
-            old = read_session_token(request, cookie_name)
-            if old:
-                connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
-            connection.execute("DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions "
-                               "WHERE user_id=? ORDER BY created_at DESC LIMIT -1 OFFSET 7)", (user["id"],))
-            token = secrets.token_urlsafe(32)
-            hashed = token_hash(token)
-            connection.execute("INSERT INTO sessions VALUES(?,?,?,?,?)", (hashed, user["id"], now, now, now + SESSION_SECONDS))
-            connection.execute("INSERT INTO session_passkey VALUES(?,?)", (hashed, stored["credential_id"]))
-            record_verification(connection, hashed, now, "passkey")
-            auth = authenticate(connection, token, database.identity_key)
+            proof = admit_login(connection, login_proof(connection, database, request, origin), current["id"])
+            if not _advance(connection, stored, verified):
+                metrics.record("passkey_rejected")
+                raise HTTPException(403, "Passkey verification failed or expired. Start again.")
+            token, expiry, auth = create_session(
+                connection, current["id"], database.identity_key, flow_proof=proof,
+                method="passkey", passkey_id=stored["credential_id"],
+            )
             auth.authorize("can_view_team")
             result = auth.session_payload()
             record_activity(connection, user["name"], "Signed in with passkey", "Workspace")
             record_event(connection, "login_succeeded", actor=auth.user["principal"], method="passkey")
         metrics.record("passkey_login_succeeded")
-        response.set_cookie(cookie_name, token, max_age=SESSION_SECONDS, httponly=True,
-                            secure=origin.scheme == "https", samesite="strict", path="/")
+        set_rotated_cookie(response, origin, token, expiry)
         return result
 
     @app.get("/api/security/passkeys")
@@ -359,6 +343,16 @@ def install_passkey_routes(app, database, authorized, origin, public_origin):
                                      (identifier, auth.user["id"])).fetchone() if _ID.fullmatch(identifier) else None
             if row is None:
                 raise HTTPException(404, "The passkey was not found.")
+            from .enrollment import requires_mfa
+            remaining = connection.execute(
+                "SELECT 1 FROM passkey_credentials WHERE user_id=? AND credential_id<>? LIMIT 1",
+                (auth.user["id"], row[0]),
+            ).fetchone()
+            confirmed = connection.execute(
+                "SELECT 1 FROM account_mfa WHERE user_id=? AND last_counter>=0", (auth.user["id"],),
+            ).fetchone()
+            if requires_mfa(connection, auth.user) and not remaining and not confirmed:
+                raise HTTPException(409, "Add another sign-in method before removing your last usable passkey.")
             own = connection.execute("SELECT 1 FROM session_passkey WHERE token_hash=? AND credential_id=?", (hashed, row[0])).fetchone() is not None
             connection.execute("DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM session_passkey WHERE credential_id=?)", (row[0],))
             connection.execute("DELETE FROM passkey_credentials WHERE credential_id=?", (row[0],))

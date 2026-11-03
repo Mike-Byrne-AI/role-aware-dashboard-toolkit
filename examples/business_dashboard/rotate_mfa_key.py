@@ -37,11 +37,18 @@ def _new_key_path(directory, selected):
 
 
 def _reencrypt(connection, original, replacement):
-    rows = connection.execute("SELECT * FROM admin_mfa ORDER BY user_id").fetchall()
+    rows = connection.execute("SELECT * FROM account_mfa ORDER BY user_id").fetchall()
     for row in rows:
         secret = original.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
         ciphertext = replacement.encrypt(secret, row["user_id"], row["generation"])
-        connection.execute("UPDATE admin_mfa SET secret_ciphertext=? WHERE user_id=?", (ciphertext, row["user_id"]))
+        connection.execute("UPDATE account_mfa SET secret_ciphertext=? WHERE user_id=?", (ciphertext, row["user_id"]))
+    pending = connection.execute("SELECT * FROM enrollment_sessions ORDER BY user_id").fetchall()
+    for row in pending:
+        context = "enrollment:" + row["user_id"]
+        secret = original.decrypt(row["secret_ciphertext"], context, row["generation"])
+        ciphertext = replacement.encrypt(secret, context, row["generation"])
+        connection.execute("UPDATE enrollment_sessions SET secret_ciphertext=? WHERE token_hash=?",
+                           (ciphertext, row["token_hash"]))
     binding = replacement.create_binding()
     connection.execute("UPDATE mfa_key_binding SET ciphertext=? WHERE id=1", (binding,))
     replacement.validate_database(connection)
@@ -51,7 +58,7 @@ def _reencrypt(connection, original, replacement):
         pass
     else:
         raise RotationError("The replacement key must be independent of the original key.")
-    return len(rows)
+    return len(rows), len(pending)
 
 
 def rotate_mfa_key(data_dir, *, current_mfa_key_file, new_mfa_key_file, maintenance_confirmed=False):
@@ -84,8 +91,8 @@ def rotate_mfa_key(data_dir, *, current_mfa_key_file, new_mfa_key_file, maintena
         # any publication failure aborts before ciphertext changes begin.
         created = create_key_file(database.directory, destination)
         replacement = SecretStore(database.directory, database.identity_key, created)
-        count = _reencrypt(connection, database.mfa_secrets, replacement)
-        record_activity(connection, "Local operator", "Rotated MFA encryption key", "Administrator enrollments")
+        count, pending_count = _reencrypt(connection, database.mfa_secrets, replacement)
+        record_activity(connection, "Local operator", "Rotated MFA encryption key", "Account and pending enrollments")
         record_event(connection, "mfa_key_rotated")
         connection.commit()
     except BaseException:
@@ -94,6 +101,7 @@ def rotate_mfa_key(data_dir, *, current_mfa_key_file, new_mfa_key_file, maintena
     finally:
         connection.close()
     return {"format": "westbridge-mfa-rotation-v1", "enrollments_reencrypted": count,
+            "pending_enrollments_reencrypted": pending_count,
             "original_key_preserved": True, "authority_preserved": True}
 
 

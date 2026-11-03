@@ -1,5 +1,7 @@
 """HTTPS session authority never falls back to a sibling-injectable cookie."""
 
+from tools.business_login_client import login_post
+
 from tests.test_business_dashboard import business as business, business_seed as business_seed
 from tests.test_business_passkeys import Authenticator
 from fastapi.testclient import TestClient
@@ -17,7 +19,7 @@ def https_app(business, monkeypatch):
 
 
 def login(business, client, username):
-    response = client.post("/api/login", json=business.login_payload(username), headers={"Origin": ORIGIN})
+    response = login_post(client, "/api/login", json=business.login_payload(username), headers={"Origin": ORIGIN})
     assert response.status_code == 200
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(HTTPS_COOKIE_NAME + "=")
@@ -69,6 +71,11 @@ def test_https_sessions_fresh_verification_and_logout_use_prefixed_cookie(busine
             "current_password": payload["password"], "otp": payload["otp"],
         }, headers=headers)
         assert response.status_code == 200
+        headers["X-CSRF-Token"] = response.json()["csrf"]
+        cookie = response.headers["set-cookie"]
+        assert cookie.startswith(HTTPS_COOKIE_NAME + "=")
+        assert "Domain=" not in cookie and "Secure" in cookie and "HttpOnly" in cookie
+        assert "SameSite=strict" in cookie and "Path=/" in cookie
         assert owner.post(path, json={}, headers=headers).status_code == 200
         assert other.get("/api/admin/overview").status_code == 401
         assert owner.post("/api/admin/freeze", json={"frozen": True, "revision": 0}, headers=headers).status_code == 200
@@ -95,10 +102,10 @@ def test_https_passkey_registration_reauthentication_login_and_removal(business,
         assert owner.post("/api/security/passkeys/reauth/verify", json={
             "request_id": options["request_id"], "credential": key.assertion(options["options"], counter=1),
         }, headers=headers).status_code == 200
-        options = signed.post("/api/passkeys/login/options", json={}, headers={"Origin": ORIGIN}).json()
+        options = login_post(signed, "/api/passkeys/login/options", json={}, headers={"Origin": ORIGIN}).json()
         response = signed.post("/api/passkeys/login/verify", json={
             "request_id": options["request_id"], "credential": key.assertion(options["options"], counter=2),
-        }, headers={"Origin": ORIGIN, "X-Passkey-CSRF": options["csrf"]})
+        }, headers={"Origin": ORIGIN, "X-Login-CSRF": options["csrf"]})
         assert response.status_code == 200
         assert response.headers["set-cookie"].startswith(HTTPS_COOKIE_NAME + "=")
         assert COOKIE_NAME not in signed.cookies

@@ -1,8 +1,11 @@
 """Administrator sign-in and containment regressions for the source example."""
 
+from tools.business_login_client import login_post
+
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 import io
+import re
 from pathlib import Path
 import sqlite3
 from threading import Barrier
@@ -15,7 +18,7 @@ pyotp = pytest.importorskip("pyotp")
 
 from tests.test_business_dashboard import (  # noqa: E402
     ORIGIN, business as business, business_admin as business_admin,
-    business_seed as business_seed, business_rows, post_body, saved,
+    business_seed as business_seed, business_rows, downgrade_enrollment_schema, post_body, saved,
 )
 from business import db, mfa  # noqa: E402
 from business.app import create_app  # noqa: E402
@@ -23,13 +26,20 @@ from business.security import COOKIE_NAME  # noqa: E402
 
 
 def raw_login(business, payload, client=None):
-    return (client or business.client()).post("/api/login", json=payload, headers={"Origin": ORIGIN})
+    return login_post(client or business.client(), "/api/login", json=payload, headers={"Origin": ORIGIN})
 
 
 def synthetic_secret(business):
     with business.db() as connection:
-        row = connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone()
+        row = connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone()
     return business.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"])
+
+
+def sheet_grant(path):
+    """Read only the one-account synthetic grant in an operator test sheet."""
+    matches = re.findall(r"Enrollment grant: `([A-Za-z0-9_-]{43})`", path.read_text())
+    assert len(matches) == 1, "Expected one disposable operator enrollment"
+    return matches[0]
 
 
 def invalid_code(business):
@@ -70,8 +80,8 @@ def test_simultaneous_admin_logins_consume_code_once(business):
         assert sorted(pool.map(login, clients)) == [200, 401]
 
 
-@pytest.mark.parametrize("offset,accepted", [(-60, False), (-30, True), (0, True), (30, True), (60, False)])
-def test_authenticator_clock_tolerance_is_bounded(business, offset, accepted):
+@pytest.mark.parametrize("offset,accepted", [(-60, False), (-30, False), (0, True), (30, False), (60, False)])
+def test_authenticator_accepts_only_the_current_30_second_step(business, offset, accepted):
     payload = business.login_payload("admin")
     secret = synthetic_secret(business)
     payload["otp"] = pyotp.TOTP(secret).at(business.mfa_time + offset)
@@ -87,10 +97,10 @@ def test_pyotp_matches_rfc6238_sha1_vectors_at_six_digits(business, timestamp, c
     business.mfa_time = timestamp
     with business.db() as connection:
         store = business.app.state.database.mfa_secrets
-        generation = connection.execute("SELECT generation FROM admin_mfa WHERE user_id='admin'").fetchone()[0]
-        connection.execute("UPDATE admin_mfa SET secret_ciphertext=?,last_counter=-1 WHERE user_id='admin'", (store.encrypt(secret, "admin", generation),))
-        assert mfa.verify_admin_code(connection, "admin", code, store) is not None
-        assert mfa.verify_admin_code(connection, "admin", code, store) is None
+        generation = connection.execute("SELECT generation FROM account_mfa WHERE user_id='admin'").fetchone()[0]
+        connection.execute("UPDATE account_mfa SET secret_ciphertext=?,last_counter=-1 WHERE user_id='admin'", (store.encrypt(secret, "admin", generation),))
+        assert mfa.verify_account_code(connection, "admin", code, store) is not None
+        assert mfa.verify_account_code(connection, "admin", code, store) is None
 
 
 def test_invalid_authenticator_attempts_share_password_login_limits(business):
@@ -102,28 +112,37 @@ def test_invalid_authenticator_attempts_share_password_login_limits(business):
     assert response.headers["retry-after"] == "300"
 
 
-def test_staff_session_cannot_be_promoted_into_admin_without_mfa(business):
+def test_transition_password_only_staff_session_cannot_be_promoted_without_mfa(business):
+    # Deliberately model an explicitly migrated legacy account, rather than
+    # weakening the normal fully enrolled strict-policy fixture.
+    with business.db() as connection:
+        connection.execute("UPDATE authentication_policy SET mode='transition'")
+        connection.execute("UPDATE account_security SET lifecycle='legacy' WHERE user_id='alex'")
+        connection.execute("DELETE FROM account_mfa WHERE user_id='alex'")
     employee = business.login("alex")
     with business.db() as connection:
         connection.execute("UPDATE users SET role='admin' WHERE id='alex'")
     assert employee.request("GET", "/api/admin/posts").status_code == 401
     assert raw_login(business, {"username": "alex", "password": business.credentials["alex"]}).status_code == 401
-    assert mfa.setup_admin_mfa(business.directory) is not None
+    sheet = mfa.setup_admin_mfa(business.directory)
+    assert sheet is not None
     assert employee.request("GET", "/api/admin/posts").status_code == 401
+    business.complete_enrollment("alex", sheet_grant(sheet))
     assert business.login("alex").request("GET", "/api/admin/posts").status_code == 200
 
 
-def test_mfa_reset_revokes_sessions_preserves_accounts_and_old_setup_sheet(business, business_admin):
+def test_mfa_recovery_revokes_authority_until_proven_enrollment_and_preserves_old_sheet(business, business_admin):
     employee = business.login("alex")
     before = business_rows(business)[:-1]
-    sheet = business.directory / "ADMIN_MFA_SETUP.md"
+    sheet = business.directory / "ADMIN_ENROLLMENT.md"
+    db.create_private_file(sheet, b"Previously retained private enrollment document.\n")
     original = sheet.read_bytes()
     accounts = (business.directory / "ACCOUNTS.md").read_bytes()
     payload = business.login_payload("admin")
     with business.db() as connection:
-        previous = dict(connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone())
+        previous = dict(connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone())
     assert mfa.setup_admin_mfa(business.directory) is None
-    replacement = mfa.setup_admin_mfa(business.directory, reset=True)
+    replacement = mfa.setup_admin_mfa(business.directory, reset=True, case_reference="CASE-MFA-RECOVERY")
     assert replacement != sheet and replacement.is_file()
     assert sheet.read_bytes() == original
     assert (business.directory / "ACCOUNTS.md").read_bytes() == accounts
@@ -131,7 +150,13 @@ def test_mfa_reset_revokes_sessions_preserves_accounts_and_old_setup_sheet(busin
     assert business_admin.request("GET", "/api/admin/posts").status_code == 401
     assert employee.request("GET", "/api/messages").status_code == 200
     with business.db() as connection:
-        current = dict(connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone())
+        assert connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone() is None
+        assert connection.execute("SELECT lifecycle FROM account_security WHERE user_id='admin'").fetchone()[0] == "pending"
+        assert connection.execute("SELECT case_reference FROM enrollment_grants WHERE user_id='admin'").fetchone()[0] == "CASE-MFA-RECOVERY"
+    assert raw_login(business, payload).status_code == 401
+    business.complete_enrollment("admin", sheet_grant(replacement))
+    with business.db() as connection:
+        current = dict(connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone())
     assert previous["secret_ciphertext"] != current["secret_ciphertext"] and previous["generation"] != current["generation"]
     assert raw_login(business, payload).status_code == 401
     assert business.login("admin").request("GET", "/api/admin/posts").status_code == 200
@@ -139,23 +164,24 @@ def test_mfa_reset_revokes_sessions_preserves_accounts_and_old_setup_sheet(busin
 
 def test_failed_setup_sheet_write_rolls_back_reset_and_session_revocation(business, business_admin, monkeypatch):
     with business.db() as connection:
-        previous = tuple(connection.execute("SELECT * FROM admin_mfa").fetchone())
+        previous = tuple(connection.execute("SELECT * FROM account_mfa").fetchone())
 
     def refuse(*args, **kwargs):
         raise OSError("Simulated private-file failure")
 
     monkeypatch.setattr(mfa, "create_private_file", refuse)
     with pytest.raises(OSError):
-        mfa.setup_admin_mfa(business.directory, reset=True)
+        mfa.setup_admin_mfa(business.directory, reset=True, case_reference="CASE-MFA-RECOVERY")
     with business.db() as connection:
-        assert tuple(connection.execute("SELECT * FROM admin_mfa").fetchone()) == previous
+        assert tuple(connection.execute("SELECT * FROM account_mfa").fetchone()) == previous
     assert business_admin.request("GET", "/api/admin/posts").status_code == 200
 
 
 def test_mfa_secret_never_appears_in_api_assets_or_provision_console(business, business_seed, business_admin):
     secret = synthetic_secret(business)
     assert secret not in business_seed.output
-    assert secret in (business.directory / "ADMIN_MFA_SETUP.md").read_text()
+    assert not (business.directory / "ADMIN_MFA_SETUP.md").exists()
+    assert all(secret not in path.read_text() for path in business.directory.glob("*.md"))
     for path in ("/api/session", "/api/admin/users", "/api/admin/overview", "/api/public/posts", "/", "/static/app.js"):
         response = business_admin.request("GET", path)
         assert response.status_code == 200
@@ -168,19 +194,22 @@ def test_cli_setup_and_reset_report_paths_not_secrets(business):
     spec = importlib.util.spec_from_file_location("business_cli_mfa_test", Path(__file__).resolve().parents[1] / "examples/business_dashboard/run.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    secret = synthetic_secret(business)
     output = io.StringIO()
     with redirect_stdout(output):
         assert module.main(["--data-dir", str(business.directory), "--setup-admin-mfa"]) == 0
-        assert module.main(["--data-dir", str(business.directory), "--reset-admin-mfa"]) == 0
-    secret = synthetic_secret(business)
+        assert module.main(["--data-dir", str(business.directory), "--reset-admin-mfa", "--case-ref", "CASE-CLI-MFA"]) == 0
     assert secret not in output.getvalue() and "otpauth://" not in output.getvalue()
-    assert "ADMIN_MFA_SETUP-" in output.getvalue()
+    assert "ADMIN_ENROLLMENT" in output.getvalue()
+    assert sheet_grant(business.directory / "ADMIN_ENROLLMENT.md") not in output.getvalue()
 
 
 def downgrade_v2(business):
     with business.db() as connection:
+        downgrade_enrollment_schema(connection)
         for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
             connection.execute(f"DROP TABLE {table}")
+        connection.execute("DROP TABLE session_predecessors")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -200,14 +229,16 @@ def test_v2_upgrade_preserves_business_and_staff_revokes_admin_requires_local_en
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
-        assert connection.execute("SELECT COUNT(*) FROM admin_mfa").fetchone()[0] == 0
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("SELECT COUNT(*) FROM account_mfa").fetchone()[0] == 0
     admin = business.client(migrated)
     admin.cookies.set(COOKIE_NAME, business_admin.client.cookies.get(COOKIE_NAME))
     assert admin.get("/api/admin/posts").status_code == 401
     assert employee.request("GET", "/api/messages").status_code == 200
     assert raw_login(business, {"username": "admin", "password": business.credentials["admin"]}).status_code == 401
-    assert mfa.setup_admin_mfa(business.directory).is_file()
+    sheet = mfa.setup_admin_mfa(business.directory)
+    assert sheet.is_file()
+    business.complete_enrollment("admin", sheet_grant(sheet))
     assert business.login("admin").request("GET", "/api/admin/posts").status_code == 200
 
 

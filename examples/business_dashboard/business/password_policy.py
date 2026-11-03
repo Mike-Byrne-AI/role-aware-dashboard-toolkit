@@ -20,7 +20,7 @@ def _common_or_repeated(candidate: str) -> bool:
         return True
     # A common password repeated two or more times is still predictable. Only
     # consider units covering the whole candidate; unrelated phrases containing
-    # a listed word are allowed. At most 33 lookups for the shipped corpus.
+    # a listed word are allowed. At most 39 lookups for the shipped corpus.
     for size in range(1, min(len(candidate) // 2, _MAX_COMMON_LENGTH) + 1):
         if len(candidate) % size:
             continue

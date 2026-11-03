@@ -1,5 +1,7 @@
 """Offline MFA-key cutover, interruption and old-backup recovery with fake data."""
 
+from tools.business_login_client import login_post
+
 from contextlib import closing
 import hashlib
 import os
@@ -17,7 +19,6 @@ from tests.test_business_dashboard import (
 from tests.test_business_backup import backup
 from business.db import Database, RuntimeKeyError, create_private_file
 from business import db as storage
-from business.mfa import enroll_in_transaction
 from business.secret_store import SecretStore, default_key_path
 from business.app import create_app
 import rotate_mfa_key as rotation
@@ -47,12 +48,6 @@ def _fingerprint(business):
         return hashlib.sha256("\n".join(connection.iterdump()).encode()).hexdigest()
 
 
-def _two_enrollments(business):
-    with business.db() as connection:
-        connection.execute("UPDATE users SET role='admin',revision=revision+1 WHERE id='alex'")
-        enroll_in_transaction(connection, business.directory, business.app.state.database.mfa_secrets)
-
-
 @pytest.mark.parametrize("message", [
     "MFA encryption key binding is missing; preserve existing state.",
     "MFA ciphertext or encryption key is invalid; preserve existing state.",
@@ -68,7 +63,6 @@ def test_runtime_key_error_preserves_diagnostic_and_both_catch_contracts(message
 
 @pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
 def test_rotation_preserves_identity_authority_replay_state_and_original_key(business, business_admin, journal_mode):
-    _two_enrollments(business)
     with business.db() as connection:
         connection.execute("UPDATE users SET active=0,revision=revision+1 WHERE id='blair'")
         connection.execute("UPDATE settings SET frozen=1,freeze_revision=freeze_revision+1 WHERE id=1")
@@ -79,17 +73,20 @@ def test_rotation_preserves_identity_authority_replay_state_and_original_key(bus
     identity_digest = hashlib.sha256((business.directory / "identity.key").read_bytes()).hexdigest()
     unchanged = {table: _rows(business, table) for table in (
         "users", "sessions", "session_security", "session_mfa", "settings", "passkey_credentials",
-        "passkey_challenges", "session_passkey", "login_limits", "messages",
+        "passkey_challenges", "session_passkey", "login_limits", "messages", "account_security",
+        "authentication_policy", "enrollment_grants", "enrollment_sessions", "enrollment_decisions",
     )}
-    enrollments = _rows(business, "admin_mfa")
+    enrollments = _rows(business, "account_mfa")
+    assert len(enrollments) == 6 and all(row[3] >= 0 for row in enrollments)
     previous = business.app.state.database.mfa_secrets
     result = _rotate(business)
-    assert result["enrollments_reencrypted"] == 2
+    assert result["enrollments_reencrypted"] == len(enrollments)
+    assert result["pending_enrollments_reencrypted"] == 0
     assert hashlib.sha256(original.read_bytes()).hexdigest() == original_digest
     assert hashlib.sha256((business.directory / "identity.key").read_bytes()).hexdigest() == identity_digest
     assert all(_rows(business, table) == value for table, value in unchanged.items())
     current = Database(business.directory, mfa_key_file=replacement)
-    for old, new in zip(enrollments, _rows(business, "admin_mfa")):
+    for old, new in zip(enrollments, _rows(business, "account_mfa")):
         assert old[0] == new[0] and old[2:] == new[2:] and old[1] != new[1]
         assert previous.decrypt(old[1], old[0], old[2]) == current.mfa_secrets.decrypt(new[1], new[0], new[2])
     with pytest.raises(ValueError, match="ciphertext|encryption key"):
@@ -113,15 +110,15 @@ def test_rotation_preserves_identity_authority_replay_state_and_original_key(bus
     # Exercise real password/TOTP verification against the new ciphertext/key.
     with current.transaction() as connection:
         assert connection.execute("SELECT code FROM security_events ORDER BY sequence DESC LIMIT 1").fetchone()[0] == "mfa_key_rotated"
-        enrollment = dict(connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone())
+        enrollment = dict(connection.execute("SELECT * FROM account_mfa WHERE user_id='admin'").fetchone())
     secret = current.mfa_secrets.decrypt(enrollment["secret_ciphertext"], "admin", enrollment["generation"])
     business.mfa_time = max(business.mfa_time, (enrollment["last_counter"] + 1) * 30)
     otp = pyotp.TOTP(secret).at(business.mfa_time)
     client = business.client(create_app(business.directory, public_origin=ORIGIN, mfa_key_file=replacement))
     payload = {"username": "admin", "password": business.credentials["admin"], "otp": f"{(int(otp) + 1) % 1000000:06d}"}
-    assert client.post("/api/login", json=payload, headers={"Origin": ORIGIN}).status_code == 401
+    assert login_post(client, "/api/login", json=payload, headers={"Origin": ORIGIN}).status_code == 401
     payload["otp"] = otp
-    assert client.post("/api/login", json=payload, headers={"Origin": ORIGIN}).status_code == 200
+    assert login_post(client, "/api/login", json=payload, headers={"Origin": ORIGIN}).status_code == 200
 
 
 def test_confirmation_is_required_before_any_creation_or_mutation(business):
@@ -158,7 +155,7 @@ def test_replacement_path_never_overwrites_or_enters_runtime_backup_or_source(bu
 
 @pytest.mark.parametrize("stage", ["second-row", "final-validation"])
 def test_interruption_rolls_back_all_ciphertext_binding_and_activity(business, monkeypatch, stage):
-    _two_enrollments(business)
+    assert len(_rows(business, "account_mfa")) == 6
     original, replacement = _paths(business)
     before = _fingerprint(business)
     encrypt = SecretStore.encrypt
@@ -174,7 +171,7 @@ def test_interruption_rolls_back_all_ciphertext_binding_and_activity(business, m
 
     def interrupt_validation(store, connection):
         if store.path == replacement and stage == "final-validation":
-            assert len(written) == 2
+            assert len(written) == 6
             raise OSError("Disposable interruption after binding update")
         return validate(store, connection)
 
@@ -211,7 +208,7 @@ rotation.rotate_mfa_key(sys.argv[2], current_mfa_key_file=sys.argv[3],
 """
     result = subprocess.run([sys.executable, "-B", "-c", program, str(SCRIPT.parent), str(business.directory),
                              str(original), str(replacement)], capture_output=True, text=True,
-                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(SCRIPT.parents[2])})
     assert result.returncode == 73
     assert result.stdout == result.stderr == ""
     Database(business.directory, mfa_key_file=original)
@@ -234,7 +231,10 @@ def test_restore_old_backup_uses_preserved_original_and_rotated_current_key(busi
     with recovered.transaction() as connection:
         assert connection.execute("SELECT active FROM users WHERE id='blair'").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
-        assert [tuple(row) for row in connection.execute("SELECT * FROM admin_mfa ORDER BY 1")] == _rows(business, "admin_mfa")
+        for table in ("account_mfa", "account_security", "authentication_policy", "enrollment_decisions"):
+            assert [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")] == _rows(business, table)
+        for table in ("enrollment_grants", "enrollment_sessions"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     with pytest.raises(ValueError, match="ciphertext|encryption key"):
         Database(restored, mfa_key_file=original)
 

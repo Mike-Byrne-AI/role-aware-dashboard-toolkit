@@ -59,6 +59,19 @@ def test_source_fingerprint_includes_password_corpus_and_acceptance_tests(source
     assert len({before, after_corpus, evidence.source_fingerprint(source)["sha256"]}) == 3
 
 
+def test_source_fingerprint_binds_enrollment_browser_runner(source):
+    runner = source / "tools/business_enrollment_browser.py"
+    runner.parent.mkdir()
+    runner.write_text("# synthetic enrollment acceptance\n")
+    receipt = evidence.new_receipt("browser", (), root=source)
+    runner.write_text("# changed enrollment acceptance\n")
+    result = evidence.finish_browser_receipt(receipt, 1, completed=True, root=source,
+                                           browser={"name": "chromium", "version": "1.2.3"})
+    assert result["source_unchanged"] is False
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "source_changed"
+
+
 def test_completed_receipt_round_trips_and_is_detached(source, tmp_path):
     receipt = _completed(source)
     path = tmp_path / "receipt.json"
@@ -67,6 +80,21 @@ def test_completed_receipt_round_trips_and_is_detached(source, tmp_path):
     public = evidence.public_receipt(receipt)
     public["checks"][0]["status"] = "failed"
     assert receipt["checks"][0]["status"] == "passed"
+
+
+@pytest.mark.parametrize("relative", [
+    "examples/security_event_wire/protocol.py", "examples/security_event_wire/transport.py",
+    "examples/security_event_collector/collector/service.py", "examples/security_event_collector/README.md",
+    "examples/security_event_collector/requirements.txt", "tools/business_collector_drill.py",
+    "tests/test_security_event_collector.py", "tests/test_security_event_transport.py",
+])
+def test_source_fingerprint_binds_collector_and_shared_transport(source, relative):
+    target = source / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("synthetic initial content")
+    before = evidence.source_fingerprint(source)["sha256"]
+    target.write_text("synthetic changed content")
+    assert evidence.source_fingerprint(source)["sha256"] != before
 
 
 def test_receipt_writer_is_private_and_never_overwrites_previous_failure(source, tmp_path):

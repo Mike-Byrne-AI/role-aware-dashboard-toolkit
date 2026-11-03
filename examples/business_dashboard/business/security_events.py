@@ -18,6 +18,8 @@ import sqlite3
 import time
 from threading import Lock
 
+from .event_destinations import LOCAL_DESTINATION, MAX_TIME, freeze_new_event, load_event_payload
+
 LOGGER = logging.getLogger(__name__)
 MAX_EVENTS = 10000
 MAX_AGE_SECONDS = 30 * 86400
@@ -34,6 +36,8 @@ CODES = frozenset({
     "session_logged_out", "passkey_registered", "passkey_removed", "editing_paused",
     "editing_resumed", "account_enabled", "account_disabled", "mfa_key_rotated",
     "authentication_denied", "authorization_denied", "request_denied",
+    "enrollment_issued", "enrollment_started", "enrollment_completed", "authentication_policy_activated",
+    "security_destination_enabled",
 })
 REASONS = frozenset({
     "completed", "unauthenticated", "forbidden", "conflict", "throttled",
@@ -88,14 +92,18 @@ def _trim(connection, now, capacity):
     # Never erase an undelivered obligation to make an operation appear audited.
     connection.execute(
         "DELETE FROM security_events WHERE id IN (SELECT e.id FROM security_events e "
-        "JOIN security_outbox o ON o.event_id=e.id WHERE o.delivered_at IS NOT NULL "
-        "AND e.occurred_at<?)", (now - MAX_AGE_SECONDS,),
+        "WHERE e.occurred_at<? AND EXISTS (SELECT 1 FROM security_delivery_obligations o "
+        "WHERE o.event_id=e.id AND o.destination_id='local-v1' AND o.acknowledged_at IS NOT NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM security_delivery_obligations p WHERE p.event_id=e.id AND p.acknowledged_at IS NULL))",
+        (now - MAX_AGE_SECONDS,),
     )
     count = connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0]
     if count >= capacity:
         connection.execute(
             "DELETE FROM security_events WHERE id IN (SELECT e.id FROM security_events e "
-            "JOIN security_outbox o ON o.event_id=e.id WHERE o.delivered_at IS NOT NULL "
+            "WHERE EXISTS (SELECT 1 FROM security_delivery_obligations o "
+            "WHERE o.event_id=e.id AND o.destination_id='local-v1' AND o.acknowledged_at IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM security_delivery_obligations p WHERE p.event_id=e.id AND p.acknowledged_at IS NULL) "
             "ORDER BY e.sequence LIMIT ?)", (count - capacity + 1,),
         )
     if connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0] >= capacity:
@@ -138,7 +146,8 @@ def terminate_own_session(connection, code, *, hashed, actor):
 
 
 def _record_event(connection, code, *, outcome="succeeded", reason="completed", actor=None,
-                  target=None, method="none", now=None, session_terminated=False, reserve_now=None):
+                  target=None, method="none", now=None, session_terminated=False, reserve_now=None,
+                  preserve_retained=False, queued_at=None):
     if not connection.in_transaction:
         raise ValueError("Security events require the action transaction.")
     if (code not in CODES or outcome not in {"succeeded", "denied"} or reason not in REASONS
@@ -147,27 +156,34 @@ def _record_event(connection, code, *, outcome="succeeded", reason="completed", 
                    for value in (actor, target))):
         raise ValueError("Unsupported structured security event.")
     now = time.time() if now is None else now
-    if type(now) not in (int, float) or not math.isfinite(now) or now < 0:
+    if (type(now) not in (int, float) or not math.isfinite(now) or not 0 <= now <= MAX_TIME
+            or now == 0 and math.copysign(1, now) < 0):
         raise ValueError("Invalid security event time.")
+    now = float(now)
     privileged = session_terminated or _can_use_containment_reserve(connection, code, outcome, actor)
     # E + S <= normal capacity for ordinary events; E + S <= MAX_EVENTS for
     # administrator containment. A proven termination lowers S before adding E,
     # so it still fits after an administrator has used part of its reserve.
     capacity = (MAX_EVENTS if privileged else _normal_capacity()) - _session_reserve(connection, now=reserve_now)
-    _trim(connection, now, capacity)
+    if preserve_retained:
+        if connection.execute("SELECT COUNT(*) FROM security_events").fetchone()[0] >= capacity:
+            raise EventCapacityError("Required security event capacity is unavailable without discarding retained history.")
+    else:
+        _trim(connection, now, capacity)
     identifier = secrets.token_hex(16)
     connection.execute(
         "INSERT INTO security_events(id,occurred_at,code,outcome,reason,actor,target,method) "
         "VALUES(?,?,?,?,?,?,?,?)", (identifier, now, code, outcome, reason, actor, target, method),
     )
-    connection.execute("INSERT INTO security_outbox(event_id) VALUES(?)", (identifier,))
+    freeze_new_event(connection, identifier, queued_at=queued_at)
     return identifier
 
 
 def delivery_status(connection):
     row = connection.execute(
-        "SELECT SUM(delivered_at IS NULL),SUM(delivered_at IS NULL AND last_error IS NOT NULL),"
-        "SUM(delivered_at IS NOT NULL) FROM security_outbox"
+        "SELECT SUM(acknowledged_at IS NULL),SUM(acknowledged_at IS NULL AND last_error IS NOT NULL),"
+        "SUM(acknowledged_at IS NOT NULL) FROM security_delivery_obligations WHERE destination_id=?",
+        (LOCAL_DESTINATION,),
     ).fetchone()
     return {"pending": row[0] or 0, "failed": row[1] or 0, "delivered": row[2] or 0,
             "semantics": "at_least_once_idempotent_local_consumer"}
@@ -187,7 +203,9 @@ def _admit_denial(connection):
     if count >= limit:
         connection.execute(
             "DELETE FROM security_events WHERE id IN (SELECT e.id FROM security_events e "
-            "JOIN security_outbox o ON o.event_id=e.id WHERE e.outcome='denied' AND o.delivered_at IS NOT NULL "
+            "WHERE e.outcome='denied' AND EXISTS (SELECT 1 FROM security_delivery_obligations o "
+            "WHERE o.event_id=e.id AND o.destination_id='local-v1' AND o.acknowledged_at IS NOT NULL) "
+            "AND NOT EXISTS (SELECT 1 FROM security_delivery_obligations p WHERE p.event_id=e.id AND p.acknowledged_at IS NULL) "
             "ORDER BY e.sequence LIMIT ?)", (count - limit + 1,),
         )
     return connection.execute("SELECT COUNT(*) FROM security_events WHERE outcome='denied'").fetchone()[0] < limit
@@ -199,9 +217,10 @@ def timeline(connection, *, limit=50, before=None):
     ):
         raise ValueError("Invalid event page.")
     rows = connection.execute(
-        "SELECT e.*,CASE WHEN o.delivered_at IS NULL THEN 'pending' ELSE 'delivered' END AS delivery,"
-        "o.attempts FROM security_events e JOIN security_outbox o ON o.event_id=e.id "
-        "WHERE (? IS NULL OR e.sequence<?) ORDER BY e.sequence DESC LIMIT ?", (before, before, limit + 1),
+        "SELECT e.*,CASE WHEN o.acknowledged_at IS NULL THEN 'pending' ELSE 'delivered' END AS delivery,"
+        "o.attempts FROM security_events e JOIN security_delivery_obligations o ON o.event_id=e.id "
+        "WHERE o.destination_id=? AND (? IS NULL OR e.sequence<?) ORDER BY e.sequence DESC LIMIT ?",
+        (LOCAL_DESTINATION, before, before, limit + 1),
     ).fetchall()
     visible = [dict(row) for row in rows[:limit]]
     session_reserve = _session_reserve(connection)
@@ -248,19 +267,20 @@ def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, t
     snapshot = transaction_factory or database.readonly_snapshot
     with snapshot() as connection:
         rows = connection.execute(
-            "SELECT e.* FROM security_events e JOIN security_outbox o ON o.event_id=e.id "
-            "WHERE o.delivered_at IS NULL AND o.next_attempt_at<=? ORDER BY e.sequence LIMIT ?",
-            (time.time(), limit),
+            "SELECT e.id FROM security_events e JOIN security_delivery_obligations o ON o.event_id=e.id "
+            "WHERE o.destination_id=? AND o.acknowledged_at IS NULL AND o.next_attempt_at<=? ORDER BY e.sequence LIMIT ?",
+            (LOCAL_DESTINATION, time.time(), limit),
         ).fetchall()
+        pending_events = [json.loads(load_event_payload(connection, row["id"]).data)["event"] for row in rows]
     delivered = failed = 0
-    for row in rows:
+    for event in pending_events:
         if stop_requested is not None and stop_requested():
             break
-        event = dict(row)
         with transaction() as connection:
             pending = connection.execute(
-                "UPDATE security_outbox SET attempts=MIN(attempts+1,?) WHERE event_id=? AND delivered_at IS NULL",
-                (MAX_COUNTER, event["id"]),
+                "UPDATE security_delivery_obligations SET attempts=MIN(attempts+1,?) "
+                "WHERE destination_id=? AND event_id=? AND acknowledged_at IS NULL",
+                (MAX_COUNTER, LOCAL_DESTINATION, event["id"]),
             ).rowcount
         if not pending:
             continue
@@ -280,8 +300,9 @@ def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, t
             LOGGER.error("Security event delivery failed; its durable obligation remains pending.")
             with transaction() as connection:
                 connection.execute(
-                    "UPDATE security_outbox SET last_error='delivery_failed',next_attempt_at=? "
-                    "WHERE event_id=? AND delivered_at IS NULL", (time.time() + 30, event["id"]),
+                    "UPDATE security_delivery_obligations SET last_error='delivery_failed',next_attempt_at=? "
+                    "WHERE destination_id=? AND event_id=? AND acknowledged_at IS NULL",
+                    (time.time() + 30, LOCAL_DESTINATION, event["id"]),
                 )
             failed += 1
             continue
@@ -289,8 +310,9 @@ def dispatch_pending(database, *, limit=50, deliver=None, after_delivery=None, t
             after_delivery(event)
         with transaction() as connection:
             connection.execute(
-                "UPDATE security_outbox SET delivered_at=?,last_error=NULL WHERE event_id=? AND delivered_at IS NULL",
-                (time.time(), event["id"]),
+                "UPDATE security_delivery_obligations SET acknowledged_at=?,last_error=NULL "
+                "WHERE destination_id=? AND event_id=? AND acknowledged_at IS NULL",
+                (time.time(), LOCAL_DESTINATION, event["id"]),
             )
         delivered += 1
     with snapshot() as connection:
@@ -381,6 +403,6 @@ class SecurityEventMiddleware:
             from starlette.concurrency import run_in_threadpool
             path = scope.get("path", "")
             code = ("authentication_denied" if path in {"/api/login", "/api/password", "/api/security/reauthenticate"}
-                    or path.startswith(("/api/security/passkeys/", "/api/passkeys/login/")) else
+                    or path.startswith(("/api/security/passkeys/", "/api/passkeys/login/", "/api/enrollment/")) else
                     "authorization_denied" if status in {401, 403} else "request_denied")
             await run_in_threadpool(self.recorder.record, code, reasons[status], actor=scope.get("security_actor"))

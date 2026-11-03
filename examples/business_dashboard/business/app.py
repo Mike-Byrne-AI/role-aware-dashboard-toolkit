@@ -20,6 +20,8 @@ from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeCo
 from .db import Database, record_activity, utc_now
 from .abuse import PUBLIC_RULES, SubmissionGuard
 from .auth_routes import install_auth_routes
+from .login_context_routes import install_login_context_routes
+from .enrollment_routes import install_enrollment_routes
 from .idempotency import reserve_create
 from .message_limits import enforce_message_limits
 from .submission_routes import install_submission_routes
@@ -31,6 +33,7 @@ from .passkeys import install_passkey_routes
 from .session_state import require_recent
 from .security_events import record_event, terminate_own_session
 from .security_delivery import SecurityEventDispatcher
+from .event_remote import RemoteSecurityEventDispatcher
 from .security_event_routes import install_security_event_routes
 from .security_lab import install_security_lab_routes
 
@@ -84,24 +87,30 @@ def _validate_schedule(connection, payload, identifier):
             raise HTTPException(409, "An employee already has an assignment during that time.")
 
 
-def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=None) -> FastAPI:
+def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=None, security_delivery_config=None) -> FastAPI:
     origin = validate_origin(public_origin)
     cookie_name = session_cookie_name(origin)
     submission_guard = SubmissionGuard.from_origin(public_origin)
     database = Database(data_dir, mfa_key_file=mfa_key_file)
     dispatcher = SecurityEventDispatcher(database)
+    remote_dispatcher = RemoteSecurityEventDispatcher(database, config_file=security_delivery_config)
 
     @asynccontextmanager
     async def lifespan(_app):
         dispatcher.start()
         try:
-            yield
+            remote_dispatcher.start()
+            try:
+                yield
+            finally:
+                await run_in_threadpool(remote_dispatcher.stop)
         finally:
             await run_in_threadpool(dispatcher.stop)
 
     app = FastAPI(title="Westbridge", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.database = database
     app.state.security_dispatcher = dispatcher
+    app.state.remote_security_dispatcher = remote_dispatcher
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname], www_redirect=False)
     app.add_middleware(RequestSecurityMiddleware, public_origin=public_origin, challenge_required=submission_guard.required,
                        on_event=lambda event: app.state.security_metrics.record(event))
@@ -140,6 +149,8 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             yield connection, auth
 
     install_auth_routes(app, database, authorized, origin)
+    install_login_context_routes(app, database, origin)
+    install_enrollment_routes(app, database, origin)
     install_session_routes(app, database, authorized, origin)
     install_passkey_routes(app, database, authorized, origin, public_origin)
     install_submission_routes(app, database, submission_guard)

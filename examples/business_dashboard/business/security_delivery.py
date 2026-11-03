@@ -6,7 +6,7 @@ import logging
 from threading import Event, Lock, Thread
 import time
 
-from .security_events import MAX_COUNTER, dispatch_pending
+from .security_events import MAX_COUNTER, delivery_status, dispatch_pending
 
 LOGGER = logging.getLogger(__name__)
 
@@ -85,7 +85,13 @@ class SecurityEventDispatcher:
             try:
                 result = dispatch_pending(self.database, limit=self.batch_limit,
                                           stop_requested=stopping.is_set)
-                failed = result["failed"] > 0
+                # A retry-deferred cycle can attempt nothing while a previous
+                # failed obligation remains. Only the durable acknowledgement
+                # clears that failure; an empty batch is not recovery. Read
+                # outside the state lock so protected status stays nonblocking.
+                with self.database.readonly_snapshot() as connection:
+                    unresolved = delivery_status(connection)["failed"] > 0
+                failed = result["failed"] > 0 or unresolved
             except Exception:
                 failed = True
             now = time.time()

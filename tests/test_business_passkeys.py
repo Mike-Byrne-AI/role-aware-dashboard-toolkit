@@ -1,5 +1,7 @@
 """Real signed WebAuthn responses against disposable host state, never hardware claims."""
 
+from tools.business_login_client import login_post
+
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
@@ -104,7 +106,7 @@ def enroll(actor, key=None):
 
 
 def login_options(client):
-    response = client.post("/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={})
+    response = login_post(client, "/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={})
     assert response.status_code == 200
     result = response.json()
     assert result["options"]["userVerification"] == "required"
@@ -115,7 +117,7 @@ def login_options(client):
 def finish_login(client, ceremony, credential, **headers):
     return client.post("/api/passkeys/login/verify", json={
         "request_id": ceremony["request_id"], "credential": credential,
-    }, headers={"Origin": ORIGIN, "X-Passkey-CSRF": ceremony["csrf"], **headers})
+    }, headers={"Origin": ORIGIN, "X-Login-CSRF": ceremony["csrf"], **headers})
 
 
 @pytest.mark.parametrize("username", ["alex", "admin"])
@@ -145,10 +147,10 @@ def test_password_guess_lockout_does_not_spend_or_block_passkey_login(business, 
     monkeypatch.setattr(auth_routes, "verify_password", lambda *args: False)
     attacker = business.client()
     for _ in range(auth_routes.ATTEMPT_LIMIT):
-        assert attacker.post("/api/login", headers={"Origin": ORIGIN}, json={
+        assert login_post(attacker, "/api/login", headers={"Origin": ORIGIN}, json={
             "username": "admin", "password": "wrong-disposable-password",
         }).status_code == 401
-    assert attacker.post("/api/login", headers={"Origin": ORIGIN}, json={
+    assert login_post(attacker, "/api/login", headers={"Origin": ORIGIN}, json={
         "username": "admin", "password": "wrong-disposable-password",
     }).status_code == 429
     client = business.client()
@@ -175,10 +177,10 @@ def test_foreign_cookie_and_missing_csrf_cannot_consume_legitimate_login(busines
     owner, foreign = business.client(), business.client()
     ceremony = login_options(owner)
     signed = key.assertion(ceremony["options"])
-    assert finish_login(foreign, ceremony, signed).status_code == 403
-    assert finish_login(owner, ceremony, signed, **{"X-Passkey-CSRF": "invalid"}).status_code == 403
+    assert finish_login(foreign, ceremony, signed).status_code == 409
+    assert finish_login(owner, ceremony, signed, **{"X-Login-CSRF": "invalid"}).status_code == 409
     assert finish_login(owner, ceremony, signed).status_code == 200
-    assert finish_login(owner, ceremony, signed).status_code == 403
+    assert finish_login(owner, ceremony, signed).status_code == 409
 
 
 def test_registration_requires_csrf_freshness_and_original_session(business):
@@ -200,7 +202,7 @@ def test_expired_challenges_and_bounded_pending_storage(business, monkeypatch):
     monkeypatch.setattr(passkeys, "MAX_LOGIN_CHALLENGES", 1)
     first, second = business.client(), business.client()
     ceremony = login_options(first)
-    assert second.post("/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={}).status_code == 429
+    assert login_post(second, "/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={}).status_code == 429
     moment = passkeys.current_time()
     monkeypatch.setattr(passkeys, "current_time", lambda: moment + passkeys.CHALLENGE_SECONDS + 1)
     assert finish_login(first, ceremony, key.assertion(ceremony["options"])).status_code == 403
@@ -235,9 +237,154 @@ def test_passkey_reverification_refreshes_only_its_session_and_removal_of_curren
         "request_id": ceremony["request_id"], "credential": key.assertion(ceremony["options"]),
     })
     assert response.status_code == 200 and response.json()["verification_expires_at"] > passkeys.current_time()
+    owner.csrf = response.json()["csrf"]
     response = owner.request("POST", f"/api/security/passkeys/{registered['id']}/remove", json={})
     assert response.status_code == 200 and response.json()["current_session_revoked"] is True
     assert owner.request("GET", "/api/messages").status_code == 401
+
+
+@pytest.mark.parametrize("username", ["alex", "admin"])
+def test_passkey_reverification_rotates_bearer_and_csrf_without_extending_session_or_touching_other_login(business, username):
+    owner = business.login(username)
+    other = business.login(username)
+    key, _ = enroll(owner)
+    old_token, old_csrf = owner.client.cookies[COOKIE_NAME], owner.csrf
+    other_hash = token_hash(other.client.cookies[COOKIE_NAME])
+    old_hash = token_hash(old_token)
+    with business.db() as connection:
+        connection.execute("UPDATE session_security SET verified_at=0 WHERE token_hash=?", (old_hash,))
+        original = dict(connection.execute("SELECT * FROM sessions WHERE token_hash=?", (old_hash,)).fetchone())
+        original_security = dict(connection.execute("SELECT * FROM session_security WHERE token_hash=?", (old_hash,)).fetchone())
+        other_session = dict(connection.execute("SELECT * FROM sessions WHERE token_hash=?", (other_hash,)).fetchone())
+        other_security = dict(connection.execute("SELECT * FROM session_security WHERE token_hash=?", (other_hash,)).fetchone())
+    ceremony = owner.request("POST", "/api/security/passkeys/reauth/options", json={}).json()
+    response = owner.request("POST", "/api/security/passkeys/reauth/verify", json={
+        "request_id": ceremony["request_id"], "credential": key.assertion(ceremony["options"]),
+    })
+    assert response.status_code == 200
+    assert "set-cookie" in response.headers
+    new_token = owner.client.cookies[COOKIE_NAME]
+    assert new_token != old_token
+    assert response.json()["csrf"] != old_csrf
+    owner.csrf = response.json()["csrf"]
+    new_hash = token_hash(new_token)
+    with business.db() as connection:
+        assert connection.execute("SELECT 1 FROM sessions WHERE token_hash=?", (old_hash,)).fetchone() is None
+        replacement = connection.execute("SELECT * FROM sessions WHERE token_hash=?", (new_hash,)).fetchone()
+        assert replacement["created_at"] == original["created_at"]
+        assert replacement["expires_at"] == original["expires_at"]
+        assert replacement["user_id"] == username
+        verified = connection.execute("SELECT * FROM session_security WHERE token_hash=?", (new_hash,)).fetchone()
+        assert verified["public_id"] == original_security["public_id"]
+        assert verified["method"] == "passkey"
+        assert verified["verified_at"] > original_security["verified_at"]
+        assert connection.execute("SELECT credential_id FROM session_passkey WHERE token_hash=?", (new_hash,)).fetchone()[0] == key.identifier
+        assert dict(connection.execute("SELECT * FROM sessions WHERE token_hash=?", (other_hash,)).fetchone()) == other_session
+        assert dict(connection.execute("SELECT * FROM session_security WHERE token_hash=?", (other_hash,)).fetchone()) == other_security
+        assert connection.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (username,)).fetchone()[0] == 2
+    copied_cookie = business.client()
+    assert copied_cookie.get("/api/messages", headers={"Cookie": f"{COOKIE_NAME}={old_token}"}).status_code == 401
+    assert owner.request("POST", "/api/security/passkeys/reauth/options", json={},
+                         headers={"X-CSRF-Token": old_csrf}).status_code == 403
+    assert owner.request("POST", "/api/security/passkeys/reauth/options", json={}).status_code == 200
+    assert owner.request("GET", "/api/messages").status_code == 200
+    assert other.request("GET", "/api/messages").status_code == 200
+
+
+@pytest.mark.parametrize("username", ["alex", "admin"])
+def test_passkey_binding_survives_password_reverification_and_removal_revokes_rotated_descendant(business, username):
+    owner = business.login(username)
+    keeper = business.login(username)
+    key, registered = enroll(owner)
+    initial_hash = token_hash(owner.client.cookies[COOKIE_NAME])
+    with business.db() as connection:
+        original_mfa = connection.execute("SELECT generation FROM session_mfa WHERE token_hash=?", (initial_hash,)).fetchone()
+    ceremony = owner.request("POST", "/api/security/passkeys/reauth/options", json={}).json()
+    response = owner.request("POST", "/api/security/passkeys/reauth/verify", json={
+        "request_id": ceremony["request_id"], "credential": key.assertion(ceremony["options"]),
+    })
+    assert response.status_code == 200
+    owner.csrf = response.json()["csrf"]
+    passkey_token = owner.client.cookies[COOKIE_NAME]
+    credentials = business.login_payload(username)
+    payload = {"current_password": credentials["password"]}
+    if "otp" in credentials:
+        payload["otp"] = credentials["otp"]
+    response = owner.request("POST", "/api/security/reauthenticate", json=payload)
+    assert response.status_code == 200
+    owner.csrf = response.json()["csrf"]
+    replacement_token = owner.client.cookies[COOKIE_NAME]
+    assert replacement_token != passkey_token
+    with business.db() as connection:
+        hashed = token_hash(replacement_token)
+        assert connection.execute("SELECT credential_id FROM session_passkey WHERE token_hash=?", (hashed,)).fetchone()[0] == key.identifier
+        mfa = connection.execute("SELECT generation FROM session_mfa WHERE token_hash=?", (hashed,)).fetchone()
+        assert (mfa[0] if mfa else None) == (original_mfa[0] if original_mfa else None)
+        assert connection.execute("SELECT method FROM session_security WHERE token_hash=?", (hashed,)).fetchone()[0] == "totp"
+    assert owner.request("GET", "/api/messages").status_code == 200
+    response = keeper.request("POST", f"/api/security/passkeys/{registered['id']}/remove", json={})
+    assert response.status_code == 200 and response.json()["current_session_revoked"] is False
+    assert owner.request("GET", "/api/messages").status_code == 401
+    assert keeper.request("GET", "/api/messages").status_code == 200
+
+
+def test_passkey_reverification_revoked_during_signature_work_cannot_create_replacement(business, monkeypatch):
+    owner = business.login("admin")
+    keeper = business.login("admin")
+    key, _ = enroll(owner)
+    identifier = next(row["id"] for row in owner.request("GET", "/api/security/sessions").json()["sessions"] if row["current"])
+    ceremony = owner.request("POST", "/api/security/passkeys/reauth/options", json={}).json()
+    signed = key.assertion(ceremony["options"])
+    original = passkeys._assertion
+    arrived, release = Event(), Event()
+
+    def held_assertion(*args, **kwargs):
+        result = original(*args, **kwargs)
+        arrived.set()
+        assert release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(passkeys, "_assertion", held_assertion)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(owner.request, "POST", "/api/security/passkeys/reauth/verify", json={
+            "request_id": ceremony["request_id"], "credential": signed,
+        })
+        try:
+            assert arrived.wait(timeout=5)
+            assert keeper.request("POST", f"/api/security/sessions/{identifier}/revoke", json={}).status_code == 200
+        finally:
+            release.set()
+        response = pending.result(timeout=5)
+    assert response.status_code == 401
+    assert "set-cookie" not in response.headers
+    assert owner.request("GET", "/api/admin/overview").status_code == 401
+    assert keeper.request("GET", "/api/admin/overview").status_code == 200
+    with business.db() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions WHERE user_id='admin'").fetchone()[0] == 1
+        assert connection.execute("SELECT 1 FROM session_security WHERE public_id=?", (identifier,)).fetchone() is None
+        assert connection.execute("SELECT COUNT(*) FROM session_passkey").fetchone()[0] == 0
+        assert connection.execute("SELECT sign_count FROM passkey_credentials").fetchone()[0] == 0
+
+
+def test_lost_passkey_reverification_response_leaves_old_cookie_revoked_and_requires_sign_in(business):
+    owner = business.login("alex")
+    keeper = business.login("alex")
+    key, _ = enroll(owner)
+    old_token = owner.client.cookies[COOKIE_NAME]
+    ceremony = owner.request("POST", "/api/security/passkeys/reauth/options", json={}).json()
+    payload = {"request_id": ceremony["request_id"], "credential": key.assertion(ceremony["options"])}
+    # Send through a separate transport and discard its response cookie: the
+    # original browser retains only the cookie it had before the lost response.
+    transport = business.client()
+    response = transport.post("/api/security/passkeys/reauth/verify", json=payload, headers={
+        "Origin": ORIGIN, "X-CSRF-Token": owner.csrf, "Cookie": f"{COOKIE_NAME}={old_token}",
+    })
+    assert response.status_code == 200
+    assert owner.client.cookies[COOKIE_NAME] == old_token
+    assert owner.request("GET", "/api/messages").status_code == 401
+    assert owner.request("POST", "/api/security/passkeys/reauth/verify", json=payload).status_code == 401
+    assert keeper.request("GET", "/api/messages").status_code == 200
+    assert business.login("alex").request("GET", "/api/messages").status_code == 200
 
 
 def test_another_accounts_valid_key_cannot_reverify_a_stolen_session(business):
@@ -429,7 +576,7 @@ def test_passkey_option_work_and_verification_work_are_bounded_and_observable(bu
         pending = [executor.submit(login_options, client) for client in clients[:2]]
         try:
             arrived.wait(timeout=5)
-            response = clients[2].post("/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={})
+            response = login_post(clients[2], "/api/passkeys/login/options", headers={"Origin": ORIGIN}, json={})
             assert response.status_code == 429 and response.headers["retry-after"] == "1"
             assert business.client().get("/healthz").status_code == 200
         finally:

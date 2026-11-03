@@ -1,5 +1,7 @@
 """Bounded authentication admission and identifier-free local decision counters."""
 
+from tools.business_login_client import login_post
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -23,9 +25,8 @@ from business.telemetry import SecurityMetrics  # noqa: E402
 
 
 def _login(business, username, password="DISPOSABLE_PASSWORD_CANARY"):
-    return business.client().post("/api/login", headers={"Origin": ORIGIN}, json={
-        "username": username, "password": password,
-    })
+    return login_post(business.client(), "/api/login", headers={"Origin": ORIGIN},
+                                  json=business.login_payload(username, password))
 
 
 def test_lookup_admission_is_bounded_and_existing_sessions_keep_independent_capacity(business, monkeypatch):

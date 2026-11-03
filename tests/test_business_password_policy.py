@@ -42,17 +42,42 @@ def _account_state(business):
         }
 
 
-def test_bundled_common_password_corpus_is_the_documented_unmodified_snapshot():
+def test_bundled_corpus_preserves_django_and_pins_the_documented_expansion():
     folder = Path(password_policy.__file__).with_name("password_data")
     data = (folder / "common-passwords.txt.gz").read_bytes()
-    assert hashlib.sha256(data).hexdigest() == "3c1baed62596de36860824eb3f436d5932d37ca8b06e59df78f5a44ec175afe4"
+    assert hashlib.sha256(data).hexdigest() == "899df167ec4bba726c8fdd146172c2af19a3f9d5b8bfe0d8cd2214e2eed9f746"
     corpus = gzip.decompress(data).decode("utf-8").splitlines()
-    assert len(corpus) == len(set(corpus)) == 19640
-    assert len(password_policy._COMMON_PASSWORDS) == 19640
+    assert len(corpus) == len(set(corpus)) == 30517
+    assert len(password_policy._COMMON_PASSWORDS) == 30517
+    original = ("\n".join(corpus[:19640]) + "\n").encode("utf-8")
+    assert hashlib.sha256(original).hexdigest() == (
+        "29ca0fa5303165f012f3e9775e3e95a3071cdd59f219973ec1cbb308d0214a6f"
+    )
     assert hashlib.sha256((folder / "DJANGO_LICENSE.txt").read_bytes()).hexdigest() == (
         "b846415d1b514e9c1dff14a22deb906d794bc546ca6129f950a18cd091e2a669"
     )
-    assert "Django 5.2.7" in (folder / "SOURCE.txt").read_text(encoding="utf-8")
+    provenance = (folder / "SOURCE.txt").read_text(encoding="utf-8")
+    assert "Django 5.2.7" in provenance
+    assert "9648611ec745e6201b532978119384b23f3a175a" in provenance
+    assert "Copyright (c) 2018 Daniel Miessler" in provenance
+    assert "Permission is hereby granted, free of charge" in provenance
+
+
+def test_actual_policy_rejects_at_least_3000_direct_eligible_upstream_entries():
+    folder = Path(password_policy.__file__).with_name("password_data")
+    corpus = gzip.decompress((folder / "common-passwords.txt.gz").read_bytes()).decode("utf-8").splitlines()
+    # Independently pinned from the source transformation recorded in SOURCE.txt.
+    # This digest identifies actual source members, not locally generated repeats
+    # or arbitrary values selected from the implementation's in-memory set.
+    added = corpus[19640:]
+    assert hashlib.sha256(("\n".join(added) + "\n").encode("utf-8")).hexdigest() == (
+        "6c5eb34662428fe70b34346d70ca55ae11b9c244c21af650841d74ffd9a5fa87"
+    )
+    assert len(added) == len(set(added)) == 10877
+    assert all(value == value.strip().casefold() and 15 <= len(value) <= 128 for value in added)
+    results = [_error(value) for value in added]
+    assert sum(result is not None for result in results) >= 3000
+    assert all(result is not None and result.startswith("Choose a less common password.") for result in results)
 
 
 def test_vendored_license_survives_fresh_autocrlf_checkout():

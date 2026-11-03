@@ -330,12 +330,15 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
     assert {name[len(prefix):] for name in members if name.startswith(prefix)} == {
         "README.md", "HOSTING.md", "RECOVERY.md", "SECURITY_LAB.md", "requirements.txt", "run.py", "recovery.py",
         "SECURITY_DESIGN.md", "rotate_mfa_key.py", "dispatch_security_events.py",
+        "configure_security_delivery.py", "business/event_wire.py", "business/event_destinations.py",
+        "business/event_dispatch.py", "business/event_config.py", "business/event_remote.py",
         "business/evidence.py", "business/security_lab.py", "business/security_events.py", "business/security_event_routes.py",
         "business/security_delivery.py",
         "business/static/security-lab.js", "business/static/security-lab.css",
         "hosting/pilot.py", "business/__init__.py",
         "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
         "business/auth_routes.py", "business/submission_routes.py", "business/work_limits.py",
+        "business/enrollment.py", "business/enrollment_routes.py",
         "business/idempotency.py",
         "business/message_limits.py",
         "business/password_policy.py",
@@ -344,12 +347,15 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
         "business/password_data/SOURCE.txt",
         "business/secret_store.py",
         "business/session_state.py",
+        "business/browser_flow.py", "business/login_context_routes.py",
         "business/session_routes.py",
         "business/passkeys.py",
         "business/telemetry.py",
         "backup.py",
         "business/models.py", "business/request_security.py", "business/mfa.py", "business/abuse.py",
         "business/static/index.html", "business/static/app.js", "business/static/styles.css",
+        "business/static/enrollment.js",
+        "business/static/login-flow.js",
     }
     assert not any(name.startswith(prefix) for name in _logical_members(built_release_artifacts["wheel"]))
     for artifact in (built_release_artifacts["wheel"], built_release_artifacts["sdist"]):

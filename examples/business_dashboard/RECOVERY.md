@@ -1,13 +1,24 @@
-# Protect a Westbridge recovery sheet
+# Protect a Westbridge private recovery file
 
 `recovery.py` makes a passphrase-encrypted copy of a small private recovery file,
-such as `ADMIN_MFA_SETUP.md`. It uses the external [age encryption tool](https://github.com/FiloSottile/age)
+such as authenticator recovery material or an independent MFA encryption key.
+It uses the external [age encryption tool](https://github.com/FiloSottile/age)
 and Python's standard library. It does not change accounts, reset MFA, open the
 runtime database, or manage a password vault.
 
 Keep the passphrase separately from the encrypted file. Losing the passphrase
 means this tool cannot recover the contents. Keep the original sheet until
 encryption and recovery verification succeed and you have saved the passphrase.
+
+Schema-eight provisioning creates `ACCOUNTS.md` with single-use, 24-hour
+enrollment grants. It no longer creates an `ADMIN_MFA_SETUP.md` seed sheet.
+Offline issuance creates a new `ENROLLMENT-...md` or `ADMIN_ENROLLMENT...md`
+grant sheet. Encrypting and restoring these files neither extends expiry nor
+makes a claimed code usable again; they are temporary setup authority, not
+long-term authenticator recovery. A historical seed sheet is relevant only to
+the unchanged authenticator it originally configured. For a lost factor, use
+the [account-specific offline recovery procedure](README.md#enrollment-migration-and-recovery)
+after external identity proofing and a durable operator case reference.
 
 ## Find the guide in the dashboard
 
@@ -64,18 +75,22 @@ It refuses existing outputs instead of overwriting them.
 ## Encrypt and verify on Windows
 
 Run from the repository root with the development Python environment available.
-For the default, already provisioned local workspace:
+Choose an existing small recovery file in a private directory. The paths below
+are placeholders for material you already retained securely; the application
+does not create `authenticator-recovery.txt`. Substitute the actual file and a
+new output path, and verify the directory permissions first:
 
 ```powershell
-$recoveryDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'radt-business-demo'
-$originalSheet = Join-Path $recoveryDir 'ADMIN_MFA_SETUP.md'
-$encryptedSheet = Join-Path $recoveryDir 'ADMIN_MFA_SETUP.md.age'
+$recoveryDir = 'C:\Private\WestbridgeRecovery'
+$originalSheet = Join-Path $recoveryDir 'authenticator-recovery.txt'
+$encryptedSheet = Join-Path $recoveryDir 'authenticator-recovery.txt.age'
 .\.venv\Scripts\python.exe -B examples/business_dashboard/recovery.py encrypt $originalSheet --output $encryptedSheet
 ```
 
-If you provisioned another directory or reset MFA, use the actual private sheet
-path printed by that successful operation. A reset can produce a suffixed file
-name; an older sheet does not recover the replacement authenticator.
+If protecting a newly issued enrollment sheet, use the exact path printed by
+the successful issuing command. A failed transaction can leave an unusable
+sheet. Reissue or recovery invalidates earlier grants; an old encrypted copy
+cannot recover the replacement authority. Never include secrets in filenames.
 
 Age asks for the encryption passphrase and confirmation, then asks for the
 passphrase again to decrypt the candidate. The wrapper compares the recovered
@@ -95,9 +110,10 @@ You can repeat the comparison without writing a plaintext file:
 Store the encrypted copy in your chosen private backup location, with the
 passphrase kept separately. Verify the copy you intend to retain against the
 original before removing that original. This tool never deletes source files.
-After successful verification, saved-passphrase confirmation and authenticator
-enrollment, you may manually remove the plaintext setup sheet according to
-your storage policy. File deletion is not a promise of secure erasure; backups,
+After successful verification, saved-passphrase confirmation and confirmed
+recovery, you may retire an unneeded plaintext recovery copy according to
+your storage policy. **Do not remove the live identity key or MFA encryption
+key:** the running application still needs them. File deletion is not a promise of secure erasure; backups,
 filesystem history and other copies may still contain it.
 
 ## Restore when needed
@@ -105,7 +121,7 @@ filesystem history and other copies may still contain it.
 Choose a new file name inside a private existing directory:
 
 ```powershell
-$restoredSheet = Join-Path $recoveryDir 'ADMIN_MFA_SETUP.restored.md'
+$restoredSheet = Join-Path $recoveryDir 'authenticator-recovery.restored.txt'
 .\.venv\Scripts\python.exe -B examples/business_dashboard/recovery.py restore $encryptedSheet --output $restoredSheet
 ```
 
@@ -113,8 +129,10 @@ The tool decrypts and authenticates the complete file in memory before creating
 the plaintext output. It does not display the recovered contents. Open the
 restored sheet only in your trusted private operator session, then protect or
 remove that extra plaintext copy when finished. Restoration does not enroll or
-reset an authenticator by itself. If MFA was reset after this backup, use the
-current setup sheet or the [trusted operator reset procedure](README.md).
+reset an authenticator by itself. If the factor changed after this copy was
+created, recover the current factor through its trusted backup process or use
+the [offline account recovery procedure](README.md#enrollment-migration-and-recovery).
+An old grant or seed must not override current account state.
 
 ## Hosted recovery and limits
 
@@ -128,6 +146,13 @@ The plaintext limit is 1 MiB. This helper is for small recovery sheets, not
 database backups. It does not back up SQLite, reconcile sessions, or establish
 that a restored database and identity key belong together. Follow the hosting
 guide's separate application backup and restore acceptance checks.
+
+For the independent MFA encryption key, preserve its version and database/backup
+dependencies and keep its encrypted recovery copy separately from database
+bundles. Decrypt into a new private path, compare the unchanged bytes and validate
+the matched database/key pair offline before any cutover. Do not replace a lost
+key with a new random key to force startup. A restored key decrypts the records
+bound to it; it does not reverse revoked access or restore expired enrollment.
 
 File contents exist in Python and age process memory during the operation.
 This workflow does not guarantee memory erasure or protect against an already

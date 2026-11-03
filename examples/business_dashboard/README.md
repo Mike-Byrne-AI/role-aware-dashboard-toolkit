@@ -1,8 +1,8 @@
 # Westbridge business dashboard
 
-A reusable fictional business workspace with a public notice board, password
-sign-in for one administrator and five employees, administrator authenticator
-codes, a shared staff schedule and
+A reusable fictional business workspace with a public notice board, account
+enrollment and password-plus-authenticator or passkey sign-in for one
+administrator and five employees, a shared staff schedule and
 message board, and private administration and outreach pages.
 
 The application uses the toolkit's `AccessPolicy`, live grants, role definitions,
@@ -23,24 +23,36 @@ $env:PYTHONDONTWRITEBYTECODE = "1"
 ```
 
 Open **http://127.0.0.1:8091**. Provisioning prints the location of a private
-`ACCOUNTS.md` file, never passwords. Read that file locally to sign in as `admin`
-or one of `alex`, `blair`, `casey`, `drew` and `ellis`. Each account receives a
-different randomly generated password. Guest access needs no account.
+`ACCOUNTS.md` file, never its secrets. Read that file locally for `admin` or one
+of `alex`, `blair`, `casey`, `drew` and `ellis`. Each account has a different
+single-use enrollment code that expires after 24 hours. It cannot sign in or
+access staff data. Fresh storage starts in strict authentication mode with all
+accounts pending. Guest access needs no account.
 
-Administrators also need a six-digit code from an authenticator app. Open the
-private `ADMIN_MFA_SETUP.md` file created beside `ACCOUNTS.md` and add its manual
-setup key to your authenticator. Never paste the key or setup URI into chat, a
-ticket, a screenshot or an online QR generator. Follow the
-[recovery-sheet guide](RECOVERY.md) to create and verify an encrypted copy.
-Keep its passphrase separately; remove the host's setup sheet only after
-successful enrollment and recovery verification.
-Employees leave the authenticator field empty. Each administrator code can be
-used only once; wait for the next code if signing in again immediately.
+Open account setup from the sign-in dialog and enter the username and enrollment
+code. Starting setup consumes that code and gives you at most ten minutes to
+choose a new password and prove the current six-digit code from a newly configured
+authenticator. Both administrators and employees complete this step. Keep the
+displayed authenticator setup key private; never paste it or its setup URI into
+chat, a ticket, a screenshot or an online QR generator. Use your authenticator's
+protected backup process or the [private-file recovery guide](RECOVERY.md) when
+appropriate. An encrypted expired enrollment code cannot restore access.
+
+Completion signs out existing sessions and returns you to sign-in; it does not
+log you in automatically. Sign in with the chosen password and a **new**
+authenticator code: setup already consumed the current time step. Only the
+current 30-second code is accepted, once. After signing in, you can register a
+user-verified passkey as an alternative. Password fallback still requires TOTP.
+Closing or reloading setup after it starts, losing the start response, or letting it
+expire requires an explicit offline reissue. See [enrollment and recovery](#enrollment-migration-and-recovery).
+If the final completion response is lost, try sign-in with the chosen password
+and a new authenticator code to check whether it committed; do not replay setup
+automatically or assume the old credentials still work.
 
 The default storage directory on Windows is `%LOCALAPPDATA%/radt-business-demo`.
 Fresh provisioning also creates an independent encryption key at
 `%LOCALAPPDATA%/radt-business-demo.secrets/mfa.key`. Preserve that key separately
-from database backups; it is required to decrypt administrator MFA enrollment.
+from database backups; it decrypts account MFA and pending enrollment secrets.
 Keep that directory private to your Windows account using its directory ACL;
 POSIX file modes do not establish Windows access protection. This Windows entry
 point is for a loopback demonstration, not public Windows hosting.
@@ -66,6 +78,44 @@ Provisioning creates owner-only directories and files. The complete database,
 original identity key and account sheet belong outside the entire source tree.
 Use `--data-dir` for an alternate private directory and `--port` for a different
 loopback port. Preserve the full `examples/business_dashboard` layout.
+
+## Browser sign-in window and HTTP protocol
+
+Each browser sign-in flow has a fixed eight-hour window. Repeated sign-ins in
+that flow share its deadline; signing in near the end gives a shorter session.
+The interface displays that deadline. Thirty minutes of inactivity can end the
+session earlier. Reverification never extends the absolute deadline. After the
+window ends, a deliberate new sign-in establishes a new window.
+
+Nonbrowser clients must follow the same protocol as the interface:
+
+1. Retain cookies and read `GET /api/session`. If it returns a current session,
+   use its `csrf` as `X-CSRF-Token` on the next request.
+2. Send `POST /api/login/context` with exactly `{}` and the configured `Origin`.
+   Retain its HttpOnly flow cookie. Its response contains `csrf` (a short-lived
+   login context), `expires_at` (the context deadline), and `flow_expires_at`
+   (the fixed browser deadline). A current session requires its ordinary CSRF;
+   a stale authenticated claim is rejected without anonymous fallback.
+3. Supply that context as `X-Login-CSRF` on `POST /api/login`, or on both
+   `/api/passkeys/login/options` and `/api/passkeys/login/verify`. The password
+   body is unchanged. Passkey options echo the context in `csrf`; the old
+   passkey pre-auth cookie and `X-Passkey-CSRF` are no longer accepted.
+4. After success, read `/api/session` using the installed cookie and compare
+   `session_id`, `csrf`, and user ID before displaying the result. A 409 requires
+   a deliberate new attempt; never automatically replay credentials or a save.
+
+The first successful commit wins each captured context generation. A later
+deliberately fetched generation can replace the current session. Delayed earlier
+cookies then fail at protected endpoints, although they can leave the browser
+needing to sign in again. Only requests sharing a valid flow are correlated:
+cleared cookies and genuinely independent first requests can form separate
+sessions. Web Locks coordinate cooperating tabs; they are not authorization.
+The flow cookie alone cannot authenticate, but its theft plus valid credentials
+can replace the flow's current session. Protect the complete cookie jar.
+
+Existing migrated sessions can continue ordinary use. Before password or
+passkey reverification, bootstrap a context with the live session's ordinary
+CSRF to bind it to a flow. Logout remains available without this bootstrap.
 
 ## Try passkeys locally
 
@@ -153,7 +203,7 @@ as narrow containment operations with current administrator authorization.
 
 Known accounts have a persistent login budget of eight failed or in-flight
 attempts per five-minute window, shared by wrong passwords and wrong or missing
-administrator codes. Password changes have a separate equivalent account budget
+authenticator codes when required. Password changes have a separate equivalent account budget
 shared across that account's sessions. Each operation reserves its attempt before
 password hashing; a success removes only its own reservation, leaving prior failures charged until
 the window expires. Unknown usernames do not create persistent limiter rows, and
@@ -188,10 +238,28 @@ Use a password manager or a unique phrase of unrelated words. Correctable
 policy rejections keep the current session and do not charge a failed guess
 when the current password was correct.
 
-Schema four added private receipts for safe create retries. Schema five adds
+## Enrollment migration and recovery
+
+Schema four added private receipts for safe create retries. Schema five added
 independently keyed MFA encryption and session verification state. Schema six
-adds structured security events and a durable local delivery outbox. Version-three
-upgrades preserve accounts, passwords, sessions, MFA, quotas and business records.
+added structured security events and a durable local delivery outbox. Schema
+seven added session-rotation revocation lineage. Schema eight adds explicit
+account lifecycle and authentication policy, expiring enrollment grants, pending
+setup sessions and durable operator decision references. Existing MFA rows move
+from `admin_mfa` to `account_mfa` without changing their encryption context.
+Schema nine adds immutable source event bytes, destination-specific delivery
+obligations and a durable heartbeat counter. It preserves local delivery as
+`local-v1`; remote delivery needs separate explicit activation. See the
+[local collector and alert reference](../security_event_collector/README.md).
+Schema ten adds purpose-bound browser flows, a persisted signing epoch, a
+durable clock rejection floor, and one current session binding per flow. It
+discards pending passkey challenges while preserving existing sessions. Stop
+all old writers before migration; versions nine and ten must not write the same
+storage. Clock rollback below a committed observation refuses authentication;
+there is no automatic floor reset. Restore rotates the epoch, clears transient
+authority and preserves the current authority's clock floor.
+Upgrades from version three onward preserve existing accounts, passwords,
+sessions, MFA, quotas and business records.
 Version-one and version-two upgrades also revoke old administrator sessions
 because those sessions did not establish MFA. All upgrade steps share one
 transaction; unexpected schema objects cause refusal rather than repair.
@@ -207,29 +275,72 @@ validates and upgrades existing storage, prints no credentials, and opens no
 listener. For pre-five storage without an encryption key, explicitly create the
 independent MFA key first with `--create-mfa-key`. For an existing schema-five
 workspace, preserve its original MFA key. Use the same data and key paths for
-migration. Local startup and hosted preflight require schema six and never
+migration. Local startup and hosted preflight require schema ten and never
 migrate automatically.
 Do not reprovision.
-Existing account login budgets retain their original namespace.
-Enroll missing administrator authenticators once, using the same private store:
+Existing account login budgets retain their original namespace. Only upgrades
+from versions before eight mark existing accounts `legacy` and select
+`transition` mode; they do not silently enroll accounts or end their access.
+Upgrades from eight or nine preserve the current policy and account lifecycle,
+including completed strict activation.
+Legacy employees temporarily retain password-only access in transition mode;
+legacy administrators retain their existing MFA/passkey requirements. This is
+unfinished migration, not the final policy. Inspect the remaining work and issue
+an account-specific migration grant, using the same data and key paths:
 
 ```powershell
-.\.venv\Scripts\python.exe examples/business_dashboard/run.py --setup-admin-mfa
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --data-dir 'C:\Private\Westbridge' --auth-readiness
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --data-dir 'C:\Private\Westbridge' --issue-enrollment alex --purpose migration
 ```
 
-Use `--data-dir` if the workspace is not at the default location. Keep the database
-together with its original identity key; do not reprovision it for this update.
-If an authenticator is lost, a trusted local operator can use
-`--reset-admin-mfa` to replace administrator enrollment and revoke their sessions.
-This explicit command preserves prior setup sheets and prints the location of a
-new private sheet. Use it only after a successful command; a failed transaction
-may leave an unused sheet. There is no password-only web reset route.
+Deliver each private grant through a trusted channel. Issuing a migration grant
+preserves legacy access until completion; completing it installs the chosen
+password and confirmed authenticator, marks the account active and revokes its
+old sessions. Complete each active account, verify a working administrator, then
+explicitly close transition:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --data-dir 'C:\Private\Westbridge' --activate-auth-policy
+```
+
+Activation refuses unresolved accounts or accounts without a confirmed TOTP
+factor or passkey, and requires an enrolled active administrator. Successful
+activation revokes existing sessions. The read-only readiness report checks
+stored enrollment/factor state; it does not prove a real device works.
+
+For an uncompleted initial account whose code expired, use
+`--issue-enrollment alex --purpose initial`. For lost credentials, a trusted offline operator first
+verifies the person's identity outside the app and records that decision in the
+operator's case system. Then issue account-specific recovery:
+
+```powershell
+.\.venv\Scripts\python.exe examples/business_dashboard/run.py --data-dir 'C:\Private\Westbridge' --issue-enrollment alex --purpose recovery --case-ref CASE-2026-001
+```
+
+The opaque case reference is required, limited to 1-80 ASCII letters, digits,
+periods, underscores, colons or hyphens, and durably recorded with issuance.
+It is a reference to external proofing, **not proof of identity**. Do not put
+identity documents or personal evidence in it. Possession of the grant permits
+replacement of the account's credentials; proving a new TOTP code alone cannot
+prove who the recipient is. Recovery immediately makes the account pending and
+revokes its password, MFA, passkeys, sessions and challenges. It cannot enable
+a disabled account. Reissue invalidates earlier grants and pending setup.
+
+The compatibility command `--setup-admin-mfa` issues migration grants only for
+legacy administrators missing a factor. `--reset-admin-mfa --case-ref CASE-...`
+issues recovery for **all active administrators**, removing their current access;
+prefer account-specific recovery and preserve a separately working administrator.
+There is no password-only web reset. Commands preserve previous sheets and print
+only the new private path. Use a sheet only after its command succeeds; a failed
+transaction may leave an unused file. Initial, migration and recovery grants
+all expire after 24 hours and start one setup attempt.
 
 Schedule changes check revisions and reject overlapping employee assignments.
 Dates are stored as UTC instants; the interface identifies the display time zone.
 Pausing writes preserves reads, and the administrator can resume writes.
 Disabling an employee invalidates their sessions. Password changes also sign out
-existing sessions. The account sheet records initial passwords, not later changes.
+existing sessions. The original account sheet contains temporary enrollment
+codes, not permanent passwords or a usable long-term recovery credential.
 
 Form fields are temporarily disabled while a save is in progress. You can close
 an editor, but closing it does not cancel the submitted save; refresh the page
@@ -319,6 +430,21 @@ fictional accounts, data and a loopback server; it does not open your saved demo
 workspace. Its output includes screenshots and a secret-free result summary.
 The API regressions use isolated storage and exercise permission denials, CSRF,
 session invalidation, freeze, stale edits, overlaps and persistence.
+For the enrollment lifecycle, use the focused checks and separate local browser
+runner:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_business_enrollment_policy.py tests/test_business_enrollment_http.py tests/test_business_lifecycle_operator.py tests/test_business_lifecycle_custody.py
+$enrollmentEvidence = Join-Path ([System.IO.Path]::GetTempPath()) ("radt-enrollment-browser-" + [guid]::NewGuid())
+.\.venv\Scripts\python.exe tools/business_enrollment_browser.py --browser-channel chrome --output-dir $enrollmentEvidence
+```
+
+The [enrollment runner](../../tools/business_enrollment_browser.py) uses actual
+local HTTP and browser forms with fictional accounts and programmatically
+generated TOTP codes. Review its receipt and retained failures; the command is
+not a passing result. It does not establish physical-authenticator possession,
+external identity proofing, secure grant delivery or deployed acceptance.
+
 The browser runner also checks delayed saves, dismissal and newer-draft protection,
 validation recovery, and navigation during a pending save. Use `--save-only` with
 the same browser command to run just these checks against intercepted fictional

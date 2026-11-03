@@ -14,11 +14,13 @@ from contextlib import closing
 from dataclasses import dataclass
 import hmac
 import ipaddress
+import math
 import os
 from pathlib import Path
 import re
 import sqlite3
 import sys
+import time
 from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
@@ -37,6 +39,7 @@ class Configuration:
     data_dir: Path
     port: int
     mfa_key_file: Path | None = None
+    security_delivery_config: Path | None = None
 
 
 def _require_posix() -> None:
@@ -92,14 +95,45 @@ def load_configuration(environ: Mapping[str, str] | None = None) -> Configuratio
     raw_mfa_key = values.get("BUSINESS_MFA_KEY_FILE", "")
     if raw_mfa_key and not Path(raw_mfa_key).is_absolute():
         raise ValueError("BUSINESS_MFA_KEY_FILE must be an absolute external private key path.")
-    return Configuration(origin, hostname, directory, int(raw_port), Path(raw_mfa_key) if raw_mfa_key else None)
+    raw_delivery = values.get("BUSINESS_SECURITY_DELIVERY_CONFIG", "")
+    if raw_delivery and not Path(raw_delivery).is_absolute():
+        raise ValueError("BUSINESS_SECURITY_DELIVERY_CONFIG must be an absolute private configuration path.")
+    return Configuration(origin, hostname, directory, int(raw_port), Path(raw_mfa_key) if raw_mfa_key else None,
+                         Path(raw_delivery) if raw_delivery else None)
 
 
-def inspect_existing_storage(configuration: Configuration) -> None:
+def _pending_enrollment_available(connection, user, security, now):
+    """Diagnostic only: either an unused grant or its current setup can proceed."""
+    from business.enrollment import ENROLLMENT_SECONDS, GRANT_SECONDS
+
+    def current_window(row, lifetime):
+        return row is not None and all(
+            type(row[key]) in (int, float) and math.isfinite(row[key]) and row[key] >= 0
+            for key in ("created_at", "expires_at")
+        ) and row["created_at"] <= now < row["expires_at"] <= row["created_at"] + lifetime
+
+    grant = connection.execute("SELECT * FROM enrollment_grants WHERE user_id=?", (user["id"],)).fetchone()
+    if (not current_window(grant, GRANT_SECONDS) or grant["purpose"] not in {"initial", "recovery"}
+            or grant["user_revision"] != user["revision"] or grant["security_revision"] != security["revision"]):
+        return False
+    if grant["claimed_at"] is None:
+        return True
+    pending = connection.execute("SELECT * FROM enrollment_sessions WHERE user_id=?", (user["id"],)).fetchone()
+    return (current_window(pending, ENROLLMENT_SECONDS)
+            and type(grant["claimed_at"]) in (int, float) and math.isfinite(grant["claimed_at"])
+            and grant["claimed_at"] == pending["created_at"] and pending["grant_hash"] == grant["secret_hash"]
+            and pending["user_revision"] == user["revision"] and pending["security_revision"] == security["revision"]
+            and pending["expires_at"] <= grant["expires_at"])
+
+
+def inspect_existing_storage(configuration: Configuration) -> dict:
     """Read-only validation; incomplete/old storage is never initialized."""
     from business.db import _require_schema, check_private_file, validate_data_dir
     from business.security import TransactionAccessStore, principal_for_user
     from business.secret_store import SecretStore
+    from business.enrollment import account_can_authenticate, readiness
+    from business.event_destinations import validate_delivery_state
+    from business.browser_flow import clock_valid, validate_state
     from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
     directory = validate_data_dir(configuration.data_dir)
@@ -113,6 +147,7 @@ def inspect_existing_storage(configuration: Configuration) -> None:
         check_private_file(database_path)
         check_private_file(key_path)
         for path in (directory / "ACCOUNTS.md", *directory.glob("ADMIN_MFA_SETUP*.md"),
+                     *directory.glob("ADMIN_ENROLLMENT*.md"), *directory.glob("ENROLLMENT*.md"),
                      *(Path(str(database_path) + suffix) for suffix in ("-journal", "-wal", "-shm"))):
             if path.exists() or path.is_symlink():
                 check_private_file(path)
@@ -128,12 +163,17 @@ def inspect_existing_storage(configuration: Configuration) -> None:
             connection.execute("BEGIN")
             if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
                 raise ValueError("The existing database failed its integrity check.")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != 6:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 10:
                 raise ValueError("The existing schema needs an explicit reviewed migration before hosting.")
-            _require_schema(connection, 6)
+            _require_schema(connection, 10)
+            validate_delivery_state(connection)
+            validate_state(connection)
+            now = time.time()
+            if not clock_valid(connection, now=now):
+                raise ValueError("The browser login clock is invalid or behind its durable rejection boundary; preserve state.")
             secret_store.validate_database(connection)
             TransactionAccessStore(connection).read_freeze()
-            users = connection.execute("SELECT id,principal FROM users").fetchall()
+            users = connection.execute("SELECT * FROM users").fetchall()
             if not users:
                 raise ValueError("The existing database has no accounts; refusing to initialize it.")
             for row in users:
@@ -143,32 +183,66 @@ def inspect_existing_storage(configuration: Configuration) -> None:
                     and hmac.compare_digest(row["principal"], principal_for_user(row["id"], identity_key))
                 ):
                     raise ValueError("The database and identity key do not match every saved account.")
-            admins = connection.execute("SELECT id FROM users WHERE role='admin' AND active=1").fetchall()
+            admins = [user for user in users if user["role"] == "admin" and user["active"] == 1]
             if not admins:
                 raise ValueError("The existing database has no active administrator; repair it explicitly.")
-            enrollments = {row["user_id"]: row for row in connection.execute("SELECT * FROM admin_mfa")}
-            if any(row["id"] not in enrollments for row in admins):
-                raise ValueError("Enroll every active administrator's authenticator before hosting.")
-            for row in enrollments.values():
-                if not (
-                    isinstance(row["generation"], str)
-                    and re.fullmatch(r"[0-9a-f]{32}", row["generation"])
-                    and type(row["last_counter"]) is int and row["last_counter"] >= -1
-                ):
-                    raise ValueError("An administrator authenticator is invalid; repair it explicitly.")
+            status = readiness(connection)
+            policy = connection.execute("SELECT * FROM authentication_policy WHERE id=1").fetchone()
+            if type(policy["revision"]) is not int or policy["revision"] < 0:
+                raise ValueError("Authentication policy revision is invalid.")
+            enrollments = {row["user_id"]: row for row in connection.execute("SELECT * FROM account_mfa")}
+            active, pending, usable, unavailable_grants = 0, 0, 0, 0
+            for user in users:
+                security = connection.execute("SELECT * FROM account_security WHERE user_id=?", (user["id"],)).fetchone()
+                if (security is None or type(security["revision"]) is not int or security["revision"] < 0
+                        or security["lifecycle"] not in {"legacy", "pending", "active"}):
+                    raise ValueError("An account lifecycle record is missing or invalid.")
+                completed = security["completed_at"]
+                if (security["lifecycle"] == "active" and
+                        (type(completed) not in (int, float) or not math.isfinite(completed) or completed < 0)):
+                    raise ValueError("An active account has no valid enrollment completion.")
+                if user["active"] != 1:
+                    continue
+                active += 1
+                if security["lifecycle"] == "pending":
+                    pending += 1
+                    unavailable_grants += int(not _pending_enrollment_available(connection, user, security, now))
+                    continue
+                if status["mode"] == "strict" and security["lifecycle"] != "active":
+                    raise ValueError("Strict authentication cannot serve unresolved legacy accounts; finish the reviewed migration.")
+                factor = enrollments.get(user["id"])
+                passkey = connection.execute("SELECT 1 FROM passkey_credentials WHERE user_id=?", (user["id"],)).fetchone()
+                if security["lifecycle"] == "active":
+                    if not (passkey or factor is not None and factor["last_counter"] >= 0):
+                        raise ValueError("An active enrolled account has no confirmed authenticator.")
+                elif user["role"] == "admin" and factor is None and passkey is None:
+                    raise ValueError("A legacy administrator has no authenticator; issue reviewed migration enrollment.")
+                usable += int(account_can_authenticate(connection, user))
+            if status["mode"] == "transition":
+                deployment = "transition"
+            elif pending == active:
+                deployment = "enrollment_only"
+            elif pending:
+                deployment = "enrollment_incomplete"
+            else:
+                deployment = "ready"
+            return {"deployment_state": deployment, "mode": status["mode"], "ready": status["ready"],
+                    "active_accounts": active, "ordinary_sign_in_accounts": usable,
+                    "pending_enrollments": pending, "pending_grants_unavailable": unavailable_grants,
+                    "ready_administrators": status["ready_administrators"]}
     except (sqlite3.Error, AccessStoreError):
         raise ValueError("The existing database could not be validated; preserve it and investigate.") from None
 
 
-def preflight(configuration: Configuration) -> None:
+def preflight(configuration: Configuration) -> dict:
     """Validate local state and challenge configuration without a provider call."""
     from business.abuse import SubmissionGuard
 
     SubmissionGuard.from_origin(configuration.public_origin)
-    inspect_existing_storage(configuration)
+    return inspect_existing_storage(configuration)
 
 
-def provision(configuration: Configuration) -> tuple[Path, Path]:
+def provision(configuration: Configuration) -> Path:
     """Explicit one-time creation; never overwrite an existing installation."""
     from business.seed import provision as seed
 
@@ -176,15 +250,32 @@ def provision(configuration: Configuration) -> tuple[Path, Path]:
         raise ValueError("Set BUSINESS_MFA_KEY_FILE to a precreated external key before hosted provisioning.")
     seed(configuration.data_dir, mfa_key_file=configuration.mfa_key_file)
     inspect_existing_storage(configuration)
-    return configuration.data_dir / "ACCOUNTS.md", configuration.data_dir / "ADMIN_MFA_SETUP.md"
+    return configuration.data_dir / "ACCOUNTS.md"
 
 
 def create_application(configuration: Configuration):
-    """Create an application only after verifying existing schema-v6 state."""
+    """Create an application only after verifying existing schema-v10 state."""
     from business.app import create_app
 
-    preflight(configuration)
-    return create_app(configuration.data_dir, public_origin=configuration.public_origin, mfa_key_file=configuration.mfa_key_file)
+    status = preflight(configuration)
+    application = create_app(configuration.data_dir, public_origin=configuration.public_origin,
+                             mfa_key_file=configuration.mfa_key_file, security_delivery_config=configuration.security_delivery_config)
+    application.state.startup_authentication_status = status
+    return application
+
+
+def _report_authentication_status(status):
+    state = status["deployment_state"]
+    if state == "enrollment_only":
+        print("Authentication state: enrollment only; ordinary account sign-in is unavailable until enrollment completes.")
+    elif state == "enrollment_incomplete":
+        print("Authentication state: enrollment incomplete; pending accounts cannot sign in. Enrolled accounts retain access.")
+    elif state == "transition":
+        print("Authentication state: legacy transition; strict authentication has not been activated.")
+    else:
+        print("Authentication state: strict policy with enrolled accounts. Actual-host/device acceptance remains separate.")
+    if status["pending_grants_unavailable"]:
+        print("Some pending accounts need a fresh offline enrollment grant; expired or missing grants do not activate access.")
 
 
 class BootstrapApplication:
@@ -236,16 +327,19 @@ def main(argv: list[str] | None = None) -> None:
     try:
         configuration = load_configuration()
         if arguments.command == "provision":
-            accounts, authenticator = provision(configuration)
-            print(f"Fictional pilot provisioned. Private account sheet: {accounts}")
-            print(f"Private authenticator setup sheet: {authenticator}")
+            accounts = provision(configuration)
+            print(f"Fictional pilot provisioned. Private expiring enrollment sheet: {accounts}")
+            print("Ordinary account sign-in remains unavailable until enrollment completes.")
         elif arguments.command == "preflight":
-            preflight(configuration)
+            status = preflight(configuration)
             print("Existing pilot storage and configuration passed preflight; no listener started.")
+            _report_authentication_status(status)
         else:
             import uvicorn
 
             application = BootstrapApplication() if arguments.command == "bootstrap" else create_application(configuration)
+            if arguments.command == "serve":
+                _report_authentication_status(application.state.startup_authentication_status)
             print("Starting maintenance-only bootstrap." if arguments.command == "bootstrap" else
                   "Starting the existing pilot behind the configured HTTPS-only ingress.", flush=True)
             uvicorn.run(

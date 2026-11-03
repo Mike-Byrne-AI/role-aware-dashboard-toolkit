@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "https://business-fuzz.invalid"
 FAMILIES = ("cookie", "role", "csrf", "origin", "authority", "schema", "body", "login", "challenge")
 TABLES = ("users", "settings", "submissions", "posts", "events", "assignments",
-          "messages", "contacts", "activity", "revenue", "admin_mfa", "session_mfa")
+          "messages", "contacts", "activity", "revenue", "account_mfa", "session_mfa",
+          "account_security", "authentication_policy", "enrollment_grants", "enrollment_sessions",
+          "enrollment_decisions", "passkey_credentials", "passkey_challenges", "session_passkey",
+          "session_security", "session_predecessors", "browser_login_flows", "session_browser_flow")
 TEXT = ("Ordinary notice", "<svg onload=alert(1)>", "' OR 1=1 --", "[link](javascript:alert(1))",
         "\u202eReversed text", "\x00Embedded null", "雪 café", "a" * 120)
 
@@ -69,7 +72,11 @@ class Campaign:
         elif payload is not None:
             # ensure_ascii deliberately permits raw JSON surrogate mutations.
             kwargs["content"] = json.dumps(payload, ensure_ascii=True, allow_nan=False).encode()
-        response = self.clients[actor].request(method, path, **kwargs)
+        if method == "POST" and path == "/api/login":
+            from tools.business_login_client import login_post
+            response = login_post(self.clients[actor], path, **kwargs)
+        else:
+            response = self.clients[actor].request(method, path, **kwargs)
         allowed = expected if isinstance(expected, tuple) else (expected,)
         self.require(response.status_code in allowed, "unexpected_status", method=method,
                      route=path, expected=expected, actual=response.status_code)
@@ -89,6 +96,11 @@ class Campaign:
         result = self.request(actor, method, path, expected, **kwargs)
         self.require(self.snapshot() == before, "denied_request_changed_persisted_state", route=path)
         return result
+
+    def revision(self, table, identifier):
+        with self.app.state.database.transaction() as connection:
+            column = "freeze_revision" if table == "settings" else "revision"
+            return connection.execute(f"SELECT {column} FROM {table} WHERE id=?", (identifier,)).fetchone()[0]
 
     def controls(self):
         self.request("guest", "GET", "/healthz", 200)
@@ -122,9 +134,9 @@ class Campaign:
             method, path, body = rng.choice((
                 ("GET", "/api/admin/overview", None), ("GET", "/api/admin/submissions", None),
                 ("POST", "/api/admin/posts", self.post()),
-                ("POST", "/api/admin/freeze", {"frozen": True, "revision": 0}),
-                ("PUT", "/api/admin/users/blair", {"active": False, "revision": 0}),
-                ("POST", "/api/admin/posts/post-1/unpublish", {"revision": 0}),
+                ("POST", "/api/admin/freeze", {"frozen": True, "revision": self.revision("settings", 1)}),
+                ("PUT", "/api/admin/users/blair", {"active": False, "revision": self.revision("users", "blair")}),
+                ("POST", "/api/admin/posts/post-1/unpublish", {"revision": self.revision("posts", "post-1")}),
             ))
             actor = rng.choice(("guest", "employee"))
             self.denied(actor, method, path, 401 if actor == "guest" else 403, payload=body, headers=role_headers)
@@ -218,10 +230,12 @@ class Campaign:
             self.controls()
 
         self.family = "freeze_sequence"
-        self.request("admin", "POST", "/api/admin/freeze", 200, payload={"frozen": True, "revision": 0})
+        self.request("admin", "POST", "/api/admin/freeze", 200,
+                     payload={"frozen": True, "revision": self.revision("settings", 1)})
         self.denied("employee", "POST", "/api/messages", 403, payload={"body": "Frozen message"})
         self.denied("guest", "POST", "/api/public/submissions", 503, payload=self.submission())
-        self.request("admin", "POST", "/api/admin/freeze", 200, payload={"frozen": False, "revision": 1})
+        self.request("admin", "POST", "/api/admin/freeze", 200,
+                     payload={"frozen": False, "revision": self.revision("settings", 1)})
         self.request("employee", "POST", "/api/messages", 201, payload={"body": "Valid message after resume"})
 
         self.family = "session_sequence"
@@ -260,22 +274,20 @@ class Campaign:
         self.verification_clock[0] += ATTEMPT_WINDOW_SECONDS + 1
 
     def login(self, actor, username, otp=None):
-        payload = {"username": username, "password": self.credentials[username]}
-        if otp is not None:
-            payload["otp"] = otp
+        payload = {"username": username, "password": self.credentials[username],
+                   "otp": self.code(username) if otp is None else otp}
         response = self.request(actor, "POST", "/api/login", 200, payload=payload)
         self.csrf[actor] = response.json()["csrf"]
 
     def execute(self):
         import sys
+        sys.path.insert(0, str(ROOT))
         sys.path.insert(0, str(ROOT / "examples" / "business_dashboard"))
         import httpx
-        import pyotp
         from fastapi.testclient import TestClient
-        from business import abuse, mfa, submission_routes
-        from business.app import create_app
+        from business import abuse, submission_routes
         from business.security import COOKIE_NAME
-        from business.seed import provision
+        from tools.business_dashboard_browser import prepare_fixture, synthetic_mfa_clock
 
         real_client = httpx.Client
 
@@ -293,8 +305,6 @@ class Campaign:
         with tempfile.TemporaryDirectory(prefix="radt-business-fuzz-data-") as temporary, ExitStack() as stack:
             directory = Path(temporary).resolve()
             self.require(not directory.is_relative_to(ROOT), "temporary_data_inside_checkout")
-            with redirect_stdout(io.StringIO()):
-                self.credentials = provision(directory / "private")
             stack.enter_context(patch.dict("os.environ", {
                 "BUSINESS_TURNSTILE_SITE_KEY": "fictional-fuzz-site-key",
                 "BUSINESS_TURNSTILE_SECRET_KEY": "fictional-fuzz-secret-key",
@@ -302,23 +312,22 @@ class Campaign:
             stack.enter_context(patch.object(abuse.httpx, "Client", provider_client))
             self.verification_clock = [submission_routes.current_time()]
             stack.enter_context(patch.object(submission_routes, "current_time", lambda: self.verification_clock[0]))
-            self.app = create_app(directory / "private", public_origin=ORIGIN)
+            with redirect_stdout(io.StringIO()):
+                self.credentials, self.app = prepare_fixture(directory / "private", ORIGIN)
+            self.code = stack.enter_context(synthetic_mfa_clock(self.app.state.database))
             self.clients = {actor: stack.enter_context(TestClient(self.app, base_url=ORIGIN, raise_server_exceptions=False))
                             for actor in ("guest", "employee", "admin")}
             self.csrf, self.cookie_name = {}, COOKIE_NAME
             self.rules_version = abuse.PUBLIC_RULES["version"]
-            with self.app.state.database.transaction() as connection:
-                enrollment = connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone()
-                secret = self.app.state.database.mfa_secrets.decrypt(enrollment["secret_ciphertext"], "admin", enrollment["generation"])
-            moment = mfa.current_time()
-            stack.enter_context(patch.object(mfa, "current_time", lambda: moment))
-            otp = pyotp.TOTP(secret).at(moment)
-            self.denied("guest", "POST", "/api/login", 401,
-                        payload={"username": "admin", "password": self.credentials["admin"]})
-            self.login("admin", "admin", otp)
-            self.denied("guest", "POST", "/api/login", 401,
-                        payload={"username": "admin", "password": self.credentials["admin"], "otp": otp})
-            self.login("employee", "alex")
+            # Both privilege levels prove real factor enforcement and replay
+            # rejection before malformed fuzz inputs can mask a broken guard.
+            for actor, username in (("admin", "admin"), ("employee", "alex")):
+                self.denied("guest", "POST", "/api/login", 401,
+                            payload={"username": username, "password": self.credentials[username]})
+                otp = self.code(username)
+                self.login(actor, username, otp)
+                self.denied("guest", "POST", "/api/login", 401,
+                            payload={"username": username, "password": self.credentials[username], "otp": otp})
             self.public_ids = {"post-1", "post-2", "post-3"}
             self.controls()
             for offset in range(0, self.cases, len(FAMILIES)):
@@ -341,9 +350,11 @@ def run_campaign(*, seed=20261019, cases=500):
         raise ValueError("cases must be an integer between 9 and 10000")
     campaign = Campaign(seed, cases)
     source = hashlib.sha256()
-    source_files = [Path(__file__).resolve()]
+    source_files = [Path(__file__).resolve(), ROOT / "tools" / "business_dashboard_browser.py"]
     for directory in (ROOT / "role_aware_dashboard_toolkit", ROOT / "examples" / "business_dashboard" / "business"):
         source_files.extend(directory.rglob("*.py"))
+    source_files.extend(path for path in (ROOT / "examples" / "business_dashboard" / "business" / "password_data").rglob("*")
+                        if path.is_file())
     for path in sorted(source_files):
         source.update(path.relative_to(ROOT).as_posix().encode() + b"\0")
         source.update(path.read_bytes() + b"\0")

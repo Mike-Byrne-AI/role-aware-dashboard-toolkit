@@ -65,9 +65,12 @@ Administrators can load the durable timeline in **Security lab**. Its endpoint
 is `/api/admin/security/events`; current authorization is checked for every
 read. Delivery uses a local idempotent consumer and a stable event ID. It is
 at least once: a crash after delivery but before acknowledgment can repeat
-delivery, while the consumer applies that event only once. No external service
-receives these events. This local record does not protect against a host
-administrator rewriting storage, and it is not an off-host alert service.
+delivery, while the consumer applies that event only once. The default
+`local-v1` destination stays local. Schema nine additionally supports an
+explicitly activated [HTTPS collector and separate alert inbox](../security_event_collector/README.md).
+Local acknowledgement cannot satisfy a remote obligation. The local record
+does not protect against a host administrator rewriting storage; a local
+three-process drill does not establish off-host custody.
 
 Application startup starts one local delivery worker per app, shared across
 overlapping lifespans and stopped after the final lifespan exits. It attempts
@@ -78,6 +81,12 @@ diagnostics. Pending/failed event counts are durable. Failure logs contain fixed
 messages rather than consumer exceptions or credentials. A stalled or failing
 worker needs operator attention; successful local delivery is not off-host
 retention. Manual delivery remains available for recovery.
+
+The remote worker uses separate event and heartbeat schedules. Its protected
+`remote_delivery` status distinguishes destinations, pending backfill and fixed
+configuration/transport failures from local delivery. Missing configuration
+retains obligations. Only a validated destination-bound receipt acknowledges
+an event; heartbeat success alone does not clear a delivery failure.
 
 Retention is bounded at 10,000 events. Delivered events become eligible for
 pruning after 30 days and are pruned when a new event is recorded; this is not
@@ -132,6 +141,51 @@ Do not remove that transaction to make a performance test pass.
 Run `tests/test_business_public_reads.py` for held-writer, snapshot consistency,
 read-only enforcement and damaged-storage cases.
 
+## Enrollment, migration and offline recovery
+
+Use a fresh disposable workspace for these checks. Provisioning starts strict
+with pending accounts and private, distinct 24-hour enrollment grants. A grant
+cannot sign in or authorize a staff read. Starting account setup claims it once
+and creates one purpose-bound setup session lasting at most ten minutes. Its
+bearer/CSRF are separate from normal sessions; the pending TOTP seed is encrypted.
+Completing setup chooses a compliant new password, proves the current code from
+the new authenticator and atomically activates the account. Existing sessions
+and challenges are revoked. Completion does not log in; use a fresh TOTP code at
+the sign-in screen because the setup time step has already been consumed.
+
+Exercise both roles, expiry, reused grants, wrong CSRF, an old grant after
+reissue, deleted claimed grants, stale revisions, disabled accounts and wrong
+codes. Verify that failed or in-flight attempts remain charged across retries
+and restart, while a legitimate account can still complete. Check no password
+policy feedback is given before authenticating the setup context. Losing the
+start response requires offline reissue. If a completion response is lost,
+attempt sign-in with the chosen password and a new code to determine whether
+it committed; never automatically replay the setup or claim it rolled back.
+
+On a protected legacy copy, explicitly migrate to schema ten. Existing access
+remains `legacy` under `transition`: employee password-only access persists until
+each account completes migration enrollment. Issuing a migration grant preserves
+that account's access; completion revokes old sessions and requires MFA from
+then on. `--auth-readiness` reports unresolved accounts. Only after every active
+account is enrolled with a confirmed TOTP factor or passkey, including an
+administrator, may `--activate-auth-policy` succeed and revoke existing sessions.
+Reject a false claim of completion based only on successful schema migration.
+
+Recovery is an offline operation requiring external identity proofing and an
+opaque `--case-ref`. The durable reference is a pointer to the operator's
+decision, not evidence that identity was checked. Treat delivery of a recovery
+grant as delivery of account takeover authority. It immediately revokes that
+account's password, MFA, passkeys and sessions and makes the account pending.
+It cannot enable a disabled user. Reissue replaces any earlier grant/setup.
+Prefer `--issue-enrollment USERNAME --purpose recovery` for one account;
+`--reset-admin-mfa` affects **all active administrators** and can remove the
+operator's last working application access. The operator shell remains a
+separate trusted authority. See [the full commands and case-reference limits](README.md#enrollment-migration-and-recovery).
+
+Run `tests/test_business_enrollment_policy.py` for the transactional lifecycle
+boundaries. Browser setup, a real authenticator, grant delivery and the actual
+host each require their own verification; a policy test is not proof of them.
+
 ## Sessions and fresh verification
 
 A session cookie is a bearer credential: possession can authorize requests
@@ -140,7 +194,8 @@ from reading a cookie; it does not make a stolen cookie harmless.
 
 Administrative business writes and resuming edits require identity verification
 within five minutes. Sign-in establishes that window. Reverification uses the
-current password and, for an administrator, a new authenticator code. Ordinary
+current password and a new authenticator code for enrolled accounts of either
+role (or the passkey alternative). Ordinary
 reads update idle activity but never renew verification freshness. Pausing
 edits, removing a public post and disabling an account remain available as
 containment actions.
@@ -155,10 +210,54 @@ When a save requires verification, its draft remains intact. Verification does
 not replay the save automatically: review the draft and submit it deliberately.
 Closing a verification dialog clears its password and authenticator fields.
 
+Successful password/TOTP or passkey reverification replaces the bearer cookie
+and CSRF token in the same transaction as its security event. The old bearer
+immediately fails protected requests. The session's public identifier, original
+absolute expiry and MFA/passkey revocation bindings survive rotation. A lost
+response does not authorize retrying with the old cookie: sign in again if the
+replacement was not received. Cancelling a browser dialog cannot undo an already
+committed verification; a late reply must never replay a business action.
+
+Schema ten replaces the earlier predecessor-based login lookup with a dedicated
+signed HttpOnly browser flow. A retired bearer alone cannot select a current
+session for replacement. A short-lived `X-Login-CSRF` context captures the flow
+generation; one successful commit wins it, while a deliberate later generation
+replaces its current session. Password and passkey sign-ins share this rule.
+Every bound session expires by the same fixed eight-hour flow deadline. A login
+near that deadline receives only the remaining time, which the interface shows.
+The flow never authorizes business actions. Independent cookie jars remain
+independent, and theft of a flow plus valid credentials can evict its current
+session. See the [HTTP protocol](README.md#browser-sign-in-window-and-http-protocol).
+
+Logout and other session deletion close the exact bound flow through a SQLite
+cascade trigger. Closed rows remain until expiry; a durable clock floor prevents
+purged signed flows or expired sessions from reviving after backward time.
+An outer transaction retains SQLite's writer lock while a savepoint contains
+the operation's mutations. On denial, those mutations roll back while the
+maximum checked clock observation commits before the denial is returned. This
+also covers expiry reached after the first clock check and fresh-verification
+expiry. Credential changes, generation advancement, session replacement and
+required security events still commit together. If storage cannot commit the
+clock boundary, the request reports storage failure instead of a committed
+expiry denial. Investigate uncertain storage recovery offline; durability is
+not claimed for an observation the storage layer could not commit.
+Restore clears all transient authority, rotates the signing epoch
+and retains the current authority's floor; backward time keeps restore offline.
+UTC correctness remains an operational prerequisite, not a trusted-clock claim.
+
+Retained rotation lineage remains bounded at 32 predecessors per session and
+10,000 per workspace, with no authentication aliases. Browser-flow retention is
+bounded at 64 per immutable creator and 10,000 globally, including closed rows
+until expiry. Capacity refusal does not consume a factor or evict live authority.
+
 Run `tests/test_business_sessions.py` and the browser runner's `--security-only`
 mode. Test stale verification, wrong credentials, reused codes, another user's
 session identifier, revocation during password work, and a delayed response
 arriving after a newer sign-in.
+The `test_business_browser_flow_*.py` suites cover protocol, transaction and
+custody boundaries. `tools/business_login_flow_browser.py` exercises disposable
+local browser response ordering with a virtual authenticator; it does not prove
+physical-device or hosted acceptance.
 
 ## Passkeys and phishing resistance
 
@@ -188,7 +287,8 @@ there to work at the production domain. The runner's `--passkeys-only` mode uses
 Chromium's virtual authenticator with actual WebAuthn signatures. It does not
 prove a particular physical device, sync provider or deployed HTTPS origin.
 
-Password sign-in remains available, with TOTP required for administrators.
+Password sign-in remains available, with TOTP required for both enrolled roles.
+Only legacy employees in explicit transition retain password-only access.
 That fallback and trusted-operator recovery have lower phishing resistance;
 adding passkeys does not turn every path into a phishing-resistant one. Losing
 all devices requires the reviewed recovery process, not a new public bypass.
@@ -199,7 +299,10 @@ handle, expired/reused challenges, credential removal and concurrent revocation.
 
 ## MFA secret custody
 
-Schema five stores authenticated ciphertext in `admin_mfa.secret_ciphertext`.
+Schema five introduced authenticated ciphertext in `admin_mfa.secret_ciphertext`;
+schema eight renames that table to `account_mfa` for both roles without changing
+old account/generation encryption contexts. Pending setup ciphertext in
+`enrollment_sessions` uses a distinct `enrollment:` account context and generation.
 Each encryption uses a fresh nonce and binds the value to its account and
 enrollment generation. A separate 32-byte key is required; the identity key
 is not an encryption key. Wrong or missing keys fail closed.
@@ -334,14 +437,23 @@ current credentials, permissions and MFA state replace historical authority.
 Keep the original service stopped throughout reconciliation and cutover so
 later revocations cannot be lost.
 
-Preserved schema-five archives need the explicit `restore --upgrade-backup-schema`
+Preserved schema-five through schema-nine archives need the explicit `restore --upgrade-backup-schema`
 option. It verifies the archive's checksums, exact schema, original identity and
-MFA key, then upgrades only its private staging copy to six. Reconciliation uses
-the reviewed current schema-six security source, including current event delivery
-acknowledgments. The original archive and authority source remain unchanged.
+MFA key, then upgrades only its private staging copy to ten. Reconciliation uses
+the reviewed current schema-ten security source, including current event delivery
+acknowledgments. Source identity, destinations, frozen payload bytes, pending
+obligations and heartbeat/event sequence high-water marks are preserved together.
+The original archive and authority source remain unchanged. Collector backups
+have a separate quarantine and accepted-ledger continuity requirement described
+in the [collector guide](../security_event_collector/README.md#backups-and-continuity).
 Without current authority, the upgraded result remains quarantined. Other
 legacy archive versions are refused; ordinary startup and backup creation stay
-schema-six-only. `restore.json` records original and resulting schema versions.
+schema-ten-only. Current policy, account lifecycle, MFA and durable enrollment
+decisions replace historical state. A retired password hash is preserved only
+to reject reuse during recovery; it cannot authenticate. Restored sessions,
+challenges, predecessor mappings, enrollment grants and pending setup sessions
+are cleared. Pending accounts remain pending and need a new offline grant.
+`restore.json` records original and resulting schema versions.
 Run `tests/test_business_backup_schema_upgrade.py` for this migration boundary.
 
 The small recovery-sheet tool and whole-application backup are separate. The

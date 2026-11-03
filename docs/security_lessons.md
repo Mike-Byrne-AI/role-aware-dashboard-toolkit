@@ -96,7 +96,7 @@ to its original window so an old completion cannot reduce a new window's count.
 
 The example budgets eight failed or in-flight attempts per known account per
 five-minute window for login and uses a separate equivalent budget for password
-changes. Wrong passwords and wrong or missing administrator codes share the login budget. Unknown usernames
+changes. Wrong passwords and wrong or missing required authenticator codes share the login budget. Unknown usernames
 do not create persistent per-name records. Login no longer treats a socket
 peer's failure history as authority to lock out unrelated accounts. A targeted
 attacker can still exhaust a particular account's budget; this availability
@@ -157,12 +157,57 @@ growth. Budget events and activity records are useful diagnostics; they do not
 constitute a complete security audit trail, alerting system or incident-response
 process. Check host retention and operator visibility separately.
 
+## Separate enrollment authority from ordinary authentication
+
+An initial secret must not become a non-expiring password. Give it a distinct
+purpose, short expiry and one-use claim, store only its hash, and refuse it on
+normal sign-in and staff-data routes. Account setup needs a separate opaque
+bearer and CSRF proof with a bounded lifetime, not a partially privileged normal
+session. Encrypt pending authenticator seeds and bind them to account and
+generation. Charge failed attempts durably before work so rollback or an error
+response cannot restore the attacker's budget.
+
+Westbridge uses 24-hour grants and at most one ten-minute pending setup per
+account. Completion authenticates that context before password-policy feedback,
+then rechecks the claim, expiry, account state and revisions after expensive
+password work. A chosen password, proof of the current TOTP step, lifecycle
+promotion, credential revocation and required security event commit together.
+Completion does not automatically sign in; it already consumed that TOTP step.
+A lost start response needs offline reissue. A lost completion response is an
+uncertain credential change, not proof of rollback. Test both with actual state.
+
+Migration needs an explicit end condition. Preserve existing access as legacy
+under a visible transition policy, migrate accounts individually and refuse
+strict activation until every active account has completed enrollment and has
+a confirmed factor, with a usable administrator remaining. Do not call a schema
+upgrade or factor row alone proof of completed user enrollment. Westbridge's
+strict policy requires password plus TOTP or a user-verified passkey for both
+roles; a legacy employee's temporary password-only path is unfinished rollout.
+Stored readiness and real-device acceptance are separate observations.
+
+An offline recovery grant is account takeover authority. The operator must
+verify identity outside the app before issuing and delivering it. A required,
+durable opaque case reference points to that decision; neither the reference
+nor proof of a newly created TOTP seed proves the recipient's original identity.
+Keep personal evidence out of app logs and case-reference fields. Recovery must
+revoke old credentials, passkeys and sessions, preserve disabled status, and
+invalidate earlier grants and pending setup. Prefer one-account recovery to an
+all-administrator reset that removes the last working application access.
+
+Reconcile lifecycle, policy and durable recovery decisions from current
+authority during restore. Discard grants and pending setup sessions so an old
+backup cannot revive setup authority or reverse a strict-policy cutover.
+Retaining a retired password hash solely to reject reuse must never make that
+hash acceptable for authentication. See [the enrollment implementation](../examples/business_dashboard/business/enrollment.py)
+and [operator procedure](../examples/business_dashboard/README.md#enrollment-migration-and-recovery).
+
 ## Make stronger login affect existing sessions
 
-Requiring an authenticator code only on a login form leaves old administrator
+Requiring an authenticator code only on a login form leaves old
 sessions untouched. Track the authentication generation on the server and revoke
 older sessions during enrollment, reset and migration. Consume each accepted
-TOTP time step transactionally to reject replay and simultaneous use. Limit
+TOTP time step transactionally to reject replay and simultaneous use. Accepting
+only the current step also makes clock synchronization an operator concern. Limit
 attempts for wrong codes as well as wrong passwords. Keep recovery as a trusted
 operator action; do not expose a password-only MFA reset endpoint.
 
@@ -343,6 +388,29 @@ must expose opaque display identifiers, never bearer tokens or their hashes,
 and enforce ownership for every revocation. Recheck authority after expensive
 verification so a concurrent revocation cannot revive a session.
 
+Successful reverification must replace the bearer and its CSRF proof, not just
+refresh a timestamp shared with a copied cookie. Rotate within the transaction
+that records the required event; preserve the original absolute expiry and
+credential-removal bindings. Reject the old bearer immediately, including after
+a lost response. Test both password/MFA and passkey paths with a copied cookie.
+
+Browser callback guards cannot prevent a delayed HTTP response from setting a
+cookie. Correlate supported sign-ins using a purpose-bound browser flow rather
+than granting a retired bearer replacement authority. A generation-bound context
+allows one successful commit, then a deliberate later generation can replace its
+current session. Move the binding before deletion can close it through cascades.
+Factor advancement, replacement and required events must commit together.
+
+Correlation must cover the lifetime of every session it issues. The business
+example caps all bound sessions at the flow's fixed eight-hour horizon, visibly
+shortening late sign-ins. Retain closed flows until expiry and preserve a durable
+clock rejection floor before purging them; also enforce that floor on protected
+session use. Preserve observed expiry across authorization rollback. Restore
+must rotate signing epochs without lowering current clock authority. These rules
+do not establish trusted time, correlate cold cookie jars, or remove the eviction
+risk from a stolen flow plus valid credentials. A delayed cookie may still force
+another sign-in; distinguish that availability failure from restored authority.
+
 Preserve the user's draft when verification is required, clear credential fields
 promptly, and require deliberate resubmission after verification. Tie delayed
 responses to the originating session so they cannot clear a newer sign-in.
@@ -448,6 +516,9 @@ Retain pending obligations through delivery failure and restart. A previously
 overfull database needs draining before new reservation guarantees apply; report
 that deficit instead of deleting evidence. Local consumer delivery remains local
 evidence, not off-host retention or protection from a compromised host.
+An empty delivery cycle is not recovery: retries may be deferred while a durable
+failure remains pending. Keep the incident open until acknowledgements clear
+those failures, including when a worker restarts before the next retry is due.
 
 ## Make a replacement key reachable before committing its dependents
 
@@ -461,6 +532,7 @@ See the [Linux fsync contract](https://man7.org/linux/man-pages/man2/fsync.2.htm
 ## Executable references
 
 - Business authorization and moderation: `tests/test_business_dashboard.py`
+- Account enrollment and strict-policy migration: `tests/test_business_enrollment_policy.py`
 - Administrator MFA and containment: `tests/test_business_admin_mfa.py`
 - Challenge and posting-policy checks: `tests/test_business_abuse.py`
 - Persistent authentication budgets: `tests/test_business_auth_limits.py`

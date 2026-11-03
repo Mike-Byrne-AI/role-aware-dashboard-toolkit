@@ -1,5 +1,7 @@
 """Adversarial request streams and provider failures against disposable local state."""
 
+from tools.business_login_client import login_post
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -136,7 +138,7 @@ def test_provider_invalid_response_is_rejected_without_queue_mutation(business, 
 def test_streamed_json_with_escaped_secret_is_not_echoed_in_schema_errors(business):
     canary = "DISPOSABLE_INVALID_PASSWORD_CANARY"
     body = json.dumps({"username": "alex", "password": canary, "role": "admin"}).encode()
-    response = business.client().post("/api/login", content=iter([body[:3], body[3:]]), headers={
+    response = login_post(business.client(), "/api/login", content=iter([body[:3], body[3:]]), headers={
         "Origin": "http://127.0.0.1:8091", "Content-Type": "application/json",
     })
     assert response.status_code == 422
@@ -145,6 +147,8 @@ def test_streamed_json_with_escaped_secret_is_not_echoed_in_schema_errors(busine
 
 def test_unknown_identity_work_has_bounded_capacity_independent_of_real_signin(business, monkeypatch):
     actor = business.login("casey")
+    # Prepare the current employee factor before any background work stalls.
+    valid_login = business.login_payload("alex")
     entered, release = Event(), Event()
 
     def held_dummy_check(password):
@@ -153,19 +157,17 @@ def test_unknown_identity_work_has_bounded_capacity_independent_of_real_signin(b
 
     monkeypatch.setattr(auth_routes, "dummy_password_check", held_dummy_check)
 
-    def attempt(username, password):
-        return business.client().post("/api/login", headers={"Origin": "http://127.0.0.1:8091"}, json={
-            "username": username, "password": password,
-        })
+    def attempt(payload):
+        return login_post(business.client(), "/api/login", headers={"Origin": "http://127.0.0.1:8091"}, json=payload)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(attempt, "absent-one", "synthetic-password")
+        pending = pool.submit(attempt, {"username": "absent-one", "password": "synthetic-password"})
         try:
             assert entered.wait(timeout=5)
             assert business.client().get("/healthz").status_code == 200
             assert actor.request("GET", "/api/messages").status_code == 200
-            assert attempt("alex", business.credentials["alex"]).status_code == 200
-            response = attempt("absent-two", "synthetic-password")
+            assert attempt(valid_login).status_code == 200
+            response = attempt({"username": "absent-two", "password": "synthetic-password"})
             assert response.status_code == 429
             assert response.headers["Retry-After"] == "1"
             with business.db() as connection:
@@ -173,7 +175,7 @@ def test_unknown_identity_work_has_bounded_capacity_independent_of_real_signin(b
         finally:
             release.set()
         assert pending.result(timeout=5).status_code == 401
-    assert attempt("alex", business.credentials["alex"]).status_code == 200
+    assert attempt(business.login_payload("alex")).status_code == 200
 
 
 class IntakeProbe:

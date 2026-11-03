@@ -16,7 +16,7 @@ pytest.importorskip("pyotp")
 
 from tests.test_business_dashboard import (  # noqa: E402
     ORIGIN, business as business, business_admin as business_admin,
-    business_seed as business_seed,
+    business_seed as business_seed, downgrade_enrollment_schema,
 )
 from business import db  # noqa: E402
 from business.app import create_app  # noqa: E402
@@ -172,6 +172,9 @@ def test_connect_rejects_a_real_hardlinked_auxiliary(business):
 
 def _downgrade_v3(trial):
     with trial.db() as connection:
+        downgrade_enrollment_schema(connection)
+        connection.execute("DELETE FROM session_mfa WHERE token_hash IN (SELECT token_hash FROM sessions WHERE user_id<>'admin')")
+        connection.execute("DELETE FROM admin_mfa WHERE user_id<>'admin'")
         rows = connection.execute("SELECT * FROM admin_mfa").fetchall()
         for row in rows:
             secret = trial.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
@@ -179,6 +182,7 @@ def _downgrade_v3(trial):
         connection.execute("ALTER TABLE admin_mfa RENAME COLUMN secret_ciphertext TO secret")
         for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
             connection.execute(f"DROP TABLE {table}")
+        connection.execute("DROP TABLE session_predecessors")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -190,6 +194,8 @@ def _downgrade_v3(trial):
 
 def _snapshot(trial):
     with trial.raw_db() as connection:
+        renamed = connection.execute("SELECT name FROM sqlite_master WHERE name='account_mfa'").fetchone()
+        mfa_table = "account_mfa" if renamed else "admin_mfa"
         # Only fixed internal table names; secret material never enters assertion output.
         data = {
             table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")]
@@ -198,13 +204,13 @@ def _snapshot(trial):
                           "session_mfa")
         }
         data["admin_mfa"] = []
-        for row in connection.execute("SELECT * FROM admin_mfa ORDER BY user_id"):
+        for row in connection.execute(f"SELECT * FROM {mfa_table} ORDER BY user_id"):
             secret = (trial.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
                       if "secret_ciphertext" in row.keys() else row["secret"])
             data["admin_mfa"].append((row["user_id"], secret, row["generation"], row["last_counter"]))
     files = {
         name: hashlib.sha256((trial.directory / name).read_bytes()).hexdigest()
-        for name in ("identity.key", "ACCOUNTS.md", "ADMIN_MFA_SETUP.md")
+        for name in ("identity.key", "ACCOUNTS.md")
     }
     return hashlib.sha256(json.dumps({"data": data, "files": files}, sort_keys=True).encode()).hexdigest()
 
@@ -226,7 +232,7 @@ def test_v3_upgrade_preserves_data_admin_and_employee_sessions_and_identity(busi
     replacement = create_app(business.directory, public_origin=ORIGIN)
     assert _snapshot(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
         assert connection.execute("SELECT COUNT(*) FROM create_receipts").fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     admin_client = business.client(replacement)
@@ -274,7 +280,7 @@ def test_v3_upgrade_ddl_and_version_roll_back_together_on_storage_failure(busine
     assert _schema(business) == schema_before
     assert _snapshot(business) == data_before
     db.Database(business.directory, migrate=True)
-    assert _schema(business)[0] == 6
+    assert _schema(business)[0] == 10
     assert _snapshot(business) == data_before
 
 
@@ -300,9 +306,13 @@ def test_explicit_upgrade_cli_exits_without_listener_provisioning_or_secret_outp
     before = _snapshot(business)
     assert _cli().main(["--data-dir", str(business.directory), "--migrate-storage"]) == 0
     captured = capsys.readouterr()
-    assert captured.out == "Existing storage validated and upgraded to schema six. Old backups and SQLite remnants may still contain plaintext MFA seeds.\n"
+    assert captured.out == (
+        "Existing storage validated and upgraded to schema ten. Keep all older writers stopped; mixed schema versions are unsupported. "
+        "Existing sessions remain usable, but reverification requires browser-flow bootstrap. Legacy access remains in transition until "
+        "reviewed enrollment and explicit strict activation. Old backups and SQLite remnants may still contain plaintext MFA seeds. Remote security-event delivery requires separate explicit activation.\n"
+    )
     assert captured.err == ""
-    assert _schema(business)[0] == 6
+    assert _schema(business)[0] == 10
     assert _snapshot(business) == before
 
 

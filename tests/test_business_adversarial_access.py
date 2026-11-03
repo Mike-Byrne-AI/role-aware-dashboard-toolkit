@@ -10,13 +10,13 @@ import pytest
 
 pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx")
-pytest.importorskip("pyotp")
+pyotp = pytest.importorskip("pyotp")
 
 from tests.test_business_dashboard import (  # noqa: E402
     NEW_PASSWORD, ORIGIN, business as business, business_admin as business_admin,
     business_seed as business_seed, contact_body, event_body, post_body,
 )
-from business import auth_routes  # noqa: E402
+from business import auth_routes, enrollment  # noqa: E402
 from business.security import COOKIE_NAME, verify_password  # noqa: E402
 
 
@@ -41,7 +41,8 @@ def _state_digest(trial):
             for table in (
                 "users", "settings", "events", "assignments", "messages", "contacts",
                 "posts", "submissions", "submission_limits", "revenue", "activity",
-                "admin_mfa", "session_mfa",
+                "account_mfa", "session_mfa", "account_security", "authentication_policy",
+                "enrollment_grants", "enrollment_sessions", "enrollment_decisions",
             )
         ]
         # Authorized reads may touch last_seen. Attempt reservations deliberately
@@ -86,6 +87,13 @@ def _object_path(template, *, exists=True):
     return template.replace("{identifier}", identifier if exists else "absent-object-'OR-1=1--")
 
 
+def _enrollment_operations():
+    return [
+        ("POST", "/api/enrollment/start", {"username": "alex", "enrollment_secret": "A" * 43}),
+        ("POST", "/api/enrollment/complete", {"new_password": NEW_PASSWORD, "otp": "000000"}),
+    ]
+
+
 def test_route_inventory_keeps_admin_adversarial_matrix_complete(business):
     actual = {
         (method, route.path) for route in business.app.routes
@@ -93,7 +101,7 @@ def test_route_inventory_keeps_admin_adversarial_matrix_complete(business):
         for method in route.methods
     }
     other = {
-        ("POST", "/api/login"), ("POST", "/api/password"), ("POST", "/api/logout"),
+        ("POST", "/api/login"), ("POST", "/api/login/context"), ("POST", "/api/password"), ("POST", "/api/logout"),
         ("GET", "/api/session"), ("GET", "/api/schedule"), ("GET", "/api/messages"),
         ("GET", "/api/security-lab"),
         ("POST", "/api/messages"), ("GET", "/api/public/posts"), ("POST", "/api/public/submissions"),
@@ -105,7 +113,50 @@ def test_route_inventory_keeps_admin_adversarial_matrix_complete(business):
         ("POST", "/api/security/passkeys/reauth/options"), ("POST", "/api/security/passkeys/reauth/verify"),
         ("POST", "/api/passkeys/login/options"), ("POST", "/api/passkeys/login/verify"),
     }
-    assert actual == other | {(method, path) for method, path, _ in _admin_operations()}
+    restricted = {(method, path) for method, path, _ in _enrollment_operations()}
+    assert actual == other | restricted | {(method, path) for method, path, _ in _admin_operations()}
+
+
+@pytest.mark.parametrize("actor_kind", ["guest", "employee", "admin"])
+def test_enrollment_requires_separate_capabilities_even_with_an_application_session(business, monkeypatch, actor_kind):
+    actor = None if actor_kind == "guest" else business.login("admin" if actor_kind == "admin" else "blair")
+    client = actor.client if actor else business.client()
+    monkeypatch.setattr(enrollment, "current_time", lambda: business.mfa_time)
+    with business.db() as connection:
+        grant = enrollment.issue_grant(connection, "alex", purpose="recovery", case_reference="case-adversarial-001")
+    before = _state_digest(business)
+    headers = {
+        "Origin": ORIGIN, "X-CSRF-Token": actor.csrf if actor else "forged",
+        "X-Enrollment-CSRF": actor.csrf if actor else "forged",
+        "X-Role": "admin", "X-User-ID": "alex", "Authorization": "Bearer admin",
+    }
+    for method, path, body in _enrollment_operations():
+        assert client.request(method, path, json=body, headers=headers).status_code == 403
+        assert _state_digest(business) == before
+    assert client.get("/api/messages").status_code == (401 if actor is None else 200)
+    # A real recovery grant works, but its cookie confers no application access.
+    pending = business.client()
+    started = pending.post("/api/enrollment/start", headers={"Origin": ORIGIN}, json={
+        "username": "alex", "enrollment_secret": grant,
+    })
+    assert started.status_code == 200 and "westbridge_enrollment" in pending.cookies
+    assert COOKIE_NAME not in pending.cookies
+    assert pending.get("/api/session").json() == {"user": None}
+    assert pending.get("/api/messages").status_code == 401
+    assert pending.get("/api/admin/users").status_code == 401
+    assert pending.post("/api/messages", headers={"Origin": ORIGIN, "X-CSRF-Token": started.json()["csrf"]},
+                        json={"body": "An enrollment capability cannot post"}).status_code == 401
+    setup = started.json()
+    completion = {"new_password": NEW_PASSWORD, "otp": pyotp.TOTP(setup["secret"]).at(business.mfa_time)}
+    before = _state_digest(business)
+    assert pending.post("/api/enrollment/complete", headers=headers, json=completion).status_code == 403
+    assert _state_digest(business) == before
+    assert pending.post("/api/enrollment/complete", headers={"Origin": ORIGIN, "X-Enrollment-CSRF": setup["csrf"]},
+                        json=completion).status_code == 200
+    assert COOKIE_NAME not in pending.cookies
+    assert pending.get("/api/messages").status_code == 401
+    business.credentials["alex"] = NEW_PASSWORD
+    assert business.login("alex").request("GET", "/api/messages").status_code == 200
 
 
 @pytest.mark.parametrize("actor_kind", ["guest", "employee", "demoted-admin"])
@@ -141,7 +192,7 @@ def test_every_admin_route_denies_untrusted_roles_before_object_lookup(business,
 @pytest.mark.parametrize("extra", [{"role": "admin"}, {"user_id": "admin"}, {"author_id": "admin"}, {"approved": True}])
 def test_extra_authority_fields_cannot_be_smuggled_into_any_staff_write(business, business_admin, extra):
     before = _state_digest(business)
-    operations = [item for item in _admin_operations() if item[0] != "GET"] + [
+    operations = [item for item in _admin_operations() if item[0] != "GET"] + _enrollment_operations() + [
         ("POST", "/api/messages", {"body": "No forged ownership"}),
         ("POST", "/api/password", {"current_password": business.credentials["admin"], "new_password": NEW_PASSWORD}),
         ("POST", "/api/logout", {}),
@@ -246,7 +297,7 @@ def test_request_waiting_for_transaction_sees_completed_access_change(business, 
                 "freeze": "UPDATE settings SET frozen=1,freeze_revision=freeze_revision+1",
                 "downgrade": "UPDATE users SET role='employee' WHERE id='admin'",
                 "disable": "UPDATE users SET active=0 WHERE id='admin'",
-                "mfa-generation": "UPDATE admin_mfa SET generation='replacement' WHERE user_id='admin'",
+                "mfa-generation": "UPDATE account_mfa SET generation='replacement' WHERE user_id='admin'",
             }[change])
             pending = pool.submit(business_admin.request, "POST", "/api/admin/posts", json=post_body())
             assert attempted.wait(timeout=5)
@@ -278,7 +329,7 @@ def test_admin_password_change_rechecks_role_and_mfa_after_hash_work(business, b
             with business.db() as connection:
                 connection.execute({
                     "downgrade": "UPDATE users SET role='employee' WHERE id='admin'",
-                    "mfa-generation": "UPDATE admin_mfa SET generation='replacement' WHERE user_id='admin'",
+                    "mfa-generation": "UPDATE account_mfa SET generation='replacement' WHERE user_id='admin'",
                 }[change])
             before = _state_digest(business)
         finally:

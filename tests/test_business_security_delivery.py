@@ -1,6 +1,7 @@
 """Automatic outbox delivery with real lifespan, retry and shutdown boundaries."""
 
 import json
+import logging
 from pathlib import Path
 import shutil
 import tempfile
@@ -28,6 +29,11 @@ def delivery_app(business_seed):
         shutil.copytree(business_seed.directory, directory)
         shutil.copytree(default_key_path(business_seed.directory).parent, default_key_path(directory).parent)
         app = create_app(directory, public_origin=ORIGIN)
+        # Keep the shared enrollment evidence intact; this copied database
+        # starts an isolated worker-delivery scenario with an empty event queue.
+        with app.state.database.transaction() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM account_security WHERE lifecycle='active'").fetchone()[0] == 6
+            connection.execute("DELETE FROM security_events")
         app.state.security_dispatcher.interval = 0.02
         try:
             yield app
@@ -105,15 +111,82 @@ def test_consumer_failure_preserves_obligation_and_reports_redacted_retry(delive
         wait_for(lambda: dispatcher.snapshot()["failed_cycles_since_start"] >= 1)
         assert pending(database) == 1
         with database.readonly_snapshot() as connection:
-            row = dict(connection.execute("SELECT * FROM security_outbox").fetchone())
-        assert row["last_error"] == "delivery_failed" and row["delivered_at"] is None
+            row = dict(connection.execute("SELECT * FROM security_delivery_obligations").fetchone())
+        assert row["last_error"] == "delivery_failed" and row["acknowledged_at"] is None
         assert "CANARY" not in caplog.text + json.dumps(dispatcher.snapshot()) + json.dumps(row)
         monkeypatch.setattr(security_events, "consume_local", original)
         with database.transaction() as connection:
-            connection.execute("UPDATE security_outbox SET next_attempt_at=0")
+            connection.execute("UPDATE security_delivery_obligations SET next_attempt_at=0")
         wait_for(lambda: pending(database) == 0)
         wait_for(lambda: dispatcher.snapshot()["last_delivery_at"] is not None)
     assert dispatcher.snapshot()["failed_cycles_since_start"] >= 1
+
+
+def test_deferred_failed_delivery_stays_unhealthy_until_acknowledged(delivery_app, monkeypatch, caplog):
+    database, dispatcher = delivery_app.state.database, delivery_app.state.security_dispatcher
+    original = security_events.consume_local
+    caplog.set_level(logging.INFO, logger=security_delivery.__name__)
+    with database.transaction() as connection:
+        security_events.record_event(connection, "editing_paused")
+
+    def fail(connection, event):
+        raise RuntimeError("PRIVATE_ADAPTER_SECRET_CANARY")
+
+    monkeypatch.setattr(security_events, "consume_local", fail)
+    with TestClient(delivery_app, base_url=ORIGIN):
+        wait_for(lambda: dispatcher.snapshot()["failed_cycles_since_start"] >= 1)
+        deferred_result = {"delivered": 0, "failed": 0, "pending": 1}
+        wait_for(lambda: dispatcher.snapshot()["last_result"] == deferred_result)
+        deferred_cycle = dispatcher.snapshot()["last_cycle_at"]
+        wait_for(lambda: dispatcher.snapshot()["last_cycle_at"] != deferred_cycle)
+        state = dispatcher.snapshot()
+        assert state["last_result"] == deferred_result
+        assert state["consecutive_failed_cycles"] > 0
+        assert state["last_delivery_at"] is None
+        assert "Automatic security-event delivery resumed" not in caplog.text
+        assert caplog.text.count("Automatic security-event delivery failed") == 1
+        with database.readonly_snapshot() as connection:
+            row = dict(connection.execute("SELECT * FROM security_delivery_obligations").fetchone())
+        assert row["attempts"] == 1 and row["last_error"] == "delivery_failed"
+        assert row["acknowledged_at"] is None
+
+        monkeypatch.setattr(security_events, "consume_local", original)
+        with database.transaction() as connection:
+            connection.execute("UPDATE security_delivery_obligations SET next_attempt_at=0")
+        wait_for(lambda: pending(database) == 0)
+        wait_for(lambda: dispatcher.snapshot()["consecutive_failed_cycles"] == 0)
+        wait_for(lambda: "Automatic security-event delivery resumed" in caplog.text)
+        recovered_cycle = dispatcher.snapshot()["last_cycle_at"]
+        wait_for(lambda: dispatcher.snapshot()["last_cycle_at"] != recovered_cycle)
+        assert dispatcher.snapshot()["last_delivery_at"] is not None
+    assert caplog.text.count("Automatic security-event delivery resumed") == 1
+    assert "CANARY" not in caplog.text
+
+
+def test_new_worker_detects_persisted_failure_before_retry_is_due(delivery_app, monkeypatch, caplog):
+    database = delivery_app.state.database
+    with database.transaction() as connection:
+        security_events.record_event(connection, "editing_paused")
+
+    def fail(connection, event):
+        raise RuntimeError("PRIVATE_ADAPTER_SECRET_CANARY")
+
+    monkeypatch.setattr(security_events, "consume_local", fail)
+    assert security_events.dispatch_pending(database) == {"delivered": 0, "failed": 1, "pending": 1}
+    worker = security_delivery.SecurityEventDispatcher(database, interval=0.01)
+    worker.start()
+    try:
+        wait_for(lambda: worker.snapshot()["last_cycle_at"] is not None)
+        state = worker.snapshot()
+        assert state["last_result"] == {"delivered": 0, "failed": 0, "pending": 1}
+        assert state["consecutive_failed_cycles"] > 0
+        assert state["last_delivery_at"] is None
+    finally:
+        worker.stop()
+    with database.readonly_snapshot() as connection:
+        assert connection.execute("SELECT attempts FROM security_delivery_obligations").fetchone()[0] == 1
+    assert caplog.text.count("Automatic security-event delivery failed") == 1
+    assert "Automatic security-event delivery resumed" not in caplog.text
 
 
 def test_worker_failure_is_visible_without_exception_content_or_repeated_logs(delivery_app, monkeypatch, caplog):
@@ -175,7 +248,7 @@ def test_dispatch_stops_between_events_and_preserves_untouched_obligations(deliv
     result = security_events.dispatch_pending(database, deliver=deliver, stop_requested=stopping.is_set)
     assert result == {"delivered": 1, "failed": 0, "pending": 2}
     with database.readonly_snapshot() as connection:
-        assert sorted(row[0] for row in connection.execute("SELECT attempts FROM security_outbox")) == [0, 0, 1]
+        assert sorted(row[0] for row in connection.execute("SELECT attempts FROM security_delivery_obligations")) == [0, 0, 1]
 
 
 def test_worker_passes_bounded_batch_and_shutdown_signal(delivery_app, monkeypatch):
