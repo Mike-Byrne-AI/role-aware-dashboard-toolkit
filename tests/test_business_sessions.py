@@ -11,7 +11,7 @@ from tests.test_business_dashboard import (
     business as business, business_admin as business_admin, business_seed as business_seed,
     post_body,
 )
-from business import session_routes, session_state
+from business import browser_flow, session_routes, session_state
 from business.security import COOKIE_NAME, token_hash
 
 
@@ -156,11 +156,15 @@ def test_current_session_revocation_needs_no_fresh_password_and_preserves_other_
 @pytest.mark.parametrize("offset,allowed", [(299, True), (300, False), (-1, False)])
 def test_verification_window_boundary_and_future_timestamp_fail_closed(business, business_admin, monkeypatch, offset, allowed):
     now = session_state.current_time()
-    monkeypatch.setattr(session_state, "current_time", lambda: now)
+    # Freshness and transactions must share one clock; pinning only freshness
+    # would manufacture rollback when the live flow clock crosses a second.
+    monkeypatch.setattr(browser_flow, "current_time", lambda: now)
     with business.db() as connection:
         connection.execute("UPDATE session_security SET verified_at=?", (now - offset,))
     response = business_admin.request("POST", "/api/admin/posts", json=post_body())
     assert response.status_code == (201 if allowed else 403)
+    if not allowed:
+        assert response.headers["x-reauthentication-required"] == "true"
 
 
 def test_revoked_session_during_password_work_cannot_regain_verification(business, business_admin, monkeypatch):
