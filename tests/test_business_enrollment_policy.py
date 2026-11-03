@@ -26,7 +26,8 @@ SEED = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 @contextmanager
 def workspace(version=10):
     with tempfile.TemporaryDirectory(prefix="radt-enrollment-policy-") as temporary:
-        directory = Path(temporary) / "private"
+        # Resolve the owned temp root before creating private child paths.
+        directory = Path(temporary).resolve(strict=True) / "private"
         db.validate_data_dir(directory, create=True)
         identity = secrets.token_bytes(32)
         create_key_file(directory)

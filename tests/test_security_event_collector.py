@@ -38,7 +38,8 @@ def tmp_path():
     # This repository's global tmp_path is inside its managed source scratch.
     # Collector credentials and databases deliberately reject that location.
     with tempfile.TemporaryDirectory(prefix="security-collector-test-") as temporary:
-        yield Path(temporary)
+        # Resolve the owned root before descendants reach strict custody checks.
+        yield Path(temporary).resolve(strict=True)
 
 
 @pytest.fixture(autouse=True)

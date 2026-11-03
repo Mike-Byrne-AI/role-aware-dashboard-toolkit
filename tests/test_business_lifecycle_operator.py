@@ -49,7 +49,8 @@ def fresh(monkeypatch):
     monkeypatch.setenv("BUSINESS_TURNSTILE_SITE_KEY", "synthetic-site-key")
     monkeypatch.setenv("BUSINESS_TURNSTILE_SECRET_KEY", "synthetic-secret-key")
     with tempfile.TemporaryDirectory(prefix="radt-lifecycle-operator-") as temporary:
-        root = Path(temporary)
+        # macOS temp paths traverse /var; only this owned root is canonicalized.
+        root = Path(temporary).resolve(strict=True)
         directory = root / "runtime"
         key = create_key_file(directory, root / "keys" / "mfa.key")
         configuration = pilot.Configuration(ORIGIN, "business.example.com", directory, 10000, key)

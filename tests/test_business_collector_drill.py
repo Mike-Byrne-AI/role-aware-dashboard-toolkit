@@ -17,9 +17,11 @@ def private_parent():
     # The standard repository basetemp deliberately lives inside source, where
     # runtime creation must remain refused even in a test.
     with tempfile.TemporaryDirectory(prefix="westbridge-collector-harness-") as path:
+        # Canonicalize only this owned root (macOS temp paths traverse /var).
+        root = Path(path).resolve(strict=True)
         if os.name != "nt":
-            Path(path).chmod(0o700)
-        yield Path(path)
+            root.chmod(0o700)
+        yield root
 
 
 def test_environment_cannot_inherit_hosted_credentials_or_ambient_transport():

@@ -33,7 +33,8 @@ def flow(monkeypatch):
     monkeypatch.setattr(SecurityEventDispatcher, "start", lambda _: None)
     monkeypatch.setattr(SecurityEventDispatcher, "stop", lambda _: None)
     with tempfile.TemporaryDirectory(prefix="radt-enrollment-http-") as temporary, ExitStack() as stack:
-        directory = Path(temporary) / "private"
+        # Resolve the owned temp root before creating private child paths.
+        directory = Path(temporary).resolve(strict=True) / "private"
         grants = provision(directory)
         app = create_app(directory, public_origin=ORIGIN)
         result = SimpleNamespace(app=app, grants=grants, now=time.time(), directory=directory)

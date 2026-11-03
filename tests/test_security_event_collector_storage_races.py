@@ -68,20 +68,22 @@ def test_byte_accounting_uses_one_validated_metadata_snapshot_if_sidecar_is_unli
     sidecar = sidecar_for(store)
     sidecar.write_bytes(b"sidecar")
     database_size = store.path.stat().st_size
-    original = Path.stat
+    original = Path.lstat
     observed = []
 
-    def disappear(path, *, follow_symlinks=True):
+    def disappear(path):
         if path == sidecar:
-            observed.append(follow_symlinks)
-            result = original(path, follow_symlinks=follow_symlinks)
+            observed.append(path)
+            result = original(path)
             path.unlink()
             return result
-        return original(path, follow_symlinks=follow_symlinks)
+        return original(path)
 
-    monkeypatch.setattr(Path, "stat", disappear)
+    # Patch the metadata boundary itself: lstat need not delegate to Path.stat.
+    monkeypatch.setattr(Path, "lstat", disappear)
     assert store.disk_bytes() == database_size + len(b"sidecar")
-    assert observed == [False]
+    assert observed == [sidecar]
+    assert not sidecar.exists()
 
 
 @pytest.mark.parametrize("operation", ["connect", "bytes"])

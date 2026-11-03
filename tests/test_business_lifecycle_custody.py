@@ -45,7 +45,8 @@ class Custody:
 @pytest.fixture
 def custody():
     with tempfile.TemporaryDirectory(prefix="radt-lifecycle-custody-") as temporary:
-        root = Path(temporary)
+        # macOS temp paths traverse /var; only this owned root is canonicalized.
+        root = Path(temporary).resolve(strict=True)
         directory = root / "runtime"
         directory.mkdir(mode=0o700)
         identity = secrets.token_bytes(32)

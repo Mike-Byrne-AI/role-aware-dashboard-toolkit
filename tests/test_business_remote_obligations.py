@@ -33,7 +33,8 @@ DESCRIPTOR = destinations.DestinationDescriptor(REMOTE, COLLECTOR, "https://coll
 @pytest.fixture
 def sources():
     with tempfile.TemporaryDirectory(prefix="radt-source-obligations-") as temporary:
-        root, created = Path(temporary), []
+        # macOS temp paths traverse /var; only this owned root is canonicalized.
+        root, created = Path(temporary).resolve(strict=True), []
 
         def create(version=10):
             directory = root / f"source-{len(created)}"
