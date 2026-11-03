@@ -1,6 +1,6 @@
 """Westbridge HTTP application: host operations protected by toolkit policies."""
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.concurrency import run_in_threadpool
 from role_aware_dashboard_toolkit import __version__
 from role_aware_dashboard_toolkit.access import AccessDenied
 from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeConflict
@@ -19,15 +20,22 @@ from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeCo
 from .db import Database, record_activity, utc_now
 from .abuse import PUBLIC_RULES, SubmissionGuard
 from .auth_routes import install_auth_routes
+from .login_context_routes import install_login_context_routes
+from .enrollment_routes import install_enrollment_routes
 from .idempotency import reserve_create
 from .message_limits import enforce_message_limits
 from .submission_routes import install_submission_routes
 from .models import Contact, ContactUpdate, Empty, Freeze, Message, Post, PostUpdate, RevisionRequest, Schedule, ScheduleUpdate, SubmissionReview, UserUpdate
 from .request_security import RequestSecurityMiddleware, validate_origin
-from .security import COOKIE_NAME, ROLES, TransactionAccessStore, authenticate, token_hash
+from .security import ROLES, TransactionAccessStore, authenticate, read_session_token, session_cookie_name, token_hash
 from .session_routes import install_session_routes
 from .passkeys import install_passkey_routes
 from .session_state import require_recent
+from .security_events import record_event, terminate_own_session
+from .security_delivery import SecurityEventDispatcher
+from .event_remote import RemoteSecurityEventDispatcher
+from .security_event_routes import install_security_event_routes
+from .security_lab import install_security_lab_routes
 
 LOGGER = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
@@ -79,12 +87,30 @@ def _validate_schedule(connection, payload, identifier):
             raise HTTPException(409, "An employee already has an assignment during that time.")
 
 
-def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=None) -> FastAPI:
+def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=None, security_delivery_config=None) -> FastAPI:
     origin = validate_origin(public_origin)
+    cookie_name = session_cookie_name(origin)
     submission_guard = SubmissionGuard.from_origin(public_origin)
     database = Database(data_dir, mfa_key_file=mfa_key_file)
-    app = FastAPI(title="Westbridge", docs_url=None, redoc_url=None, openapi_url=None)
+    dispatcher = SecurityEventDispatcher(database)
+    remote_dispatcher = RemoteSecurityEventDispatcher(database, config_file=security_delivery_config)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        dispatcher.start()
+        try:
+            remote_dispatcher.start()
+            try:
+                yield
+            finally:
+                await run_in_threadpool(remote_dispatcher.stop)
+        finally:
+            await run_in_threadpool(dispatcher.stop)
+
+    app = FastAPI(title="Westbridge", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.database = database
+    app.state.security_dispatcher = dispatcher
+    app.state.remote_security_dispatcher = remote_dispatcher
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[origin.hostname], www_redirect=False)
     app.add_middleware(RequestSecurityMiddleware, public_origin=public_origin, challenge_required=submission_guard.required,
                        on_event=lambda event: app.state.security_metrics.record(event))
@@ -111,24 +137,31 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
     @contextmanager
     def authorized(request, permission="can_view_team", *, write=False, csrf=False):
         with database.transaction() as connection:
-            auth = authenticate(connection, request.cookies.get(COOKIE_NAME), database.identity_key)
+            auth = authenticate(connection, read_session_token(request, cookie_name), database.identity_key)
+            # Authentication establishes attribution even when CSRF or permission
+            # checks subsequently deny the action. Never trust a request label.
+            request.scope["security_actor"] = auth.user["principal"]
             if write or csrf:
                 auth.check_csrf(request.headers.get("x-csrf-token"))
             auth.authorize(permission, write=write)
             if write and permission in ("can_manage_business", "can_manage_freeze"):
-                require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
+                require_recent(connection, token_hash(read_session_token(request, cookie_name)))
             yield connection, auth
 
     install_auth_routes(app, database, authorized, origin)
-    install_session_routes(app, database, authorized)
+    install_login_context_routes(app, database, origin)
+    install_enrollment_routes(app, database, origin)
+    install_session_routes(app, database, authorized, origin)
     install_passkey_routes(app, database, authorized, origin, public_origin)
     install_submission_routes(app, database, submission_guard)
+    install_security_event_routes(app, database, authorized, origin)
+    install_security_lab_routes(app, database, authorized)
 
     @app.get("/api/session")
     def session(request: Request):
         with database.transaction() as connection:
             try:
-                auth = authenticate(connection, request.cookies.get(COOKIE_NAME), database.identity_key)
+                auth = authenticate(connection, read_session_token(request, cookie_name), database.identity_key)
                 auth.authorize("can_view_team")
             except HTTPException as error:
                 if error.status_code == 401:
@@ -139,7 +172,9 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
     @app.post("/api/logout")
     def logout(payload: Empty, request: Request):
         with authorized(request, csrf=True) as (connection, auth):
-            connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(request.cookies[COOKIE_NAME]),))
+            terminate_own_session(connection, "session_logged_out",
+                                  hashed=token_hash(read_session_token(request, cookie_name)),
+                                  actor=auth.user["principal"])
         # The token is revoked in storage. Expiring it in a delayed response
         # could erase a newer login that has already replaced the browser cookie.
         return {"ok": True}
@@ -314,12 +349,13 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
     def freeze(payload: Freeze, request: Request):
         with authorized(request, "can_manage_freeze", csrf=True) as (connection, auth):
             if not payload.frozen:
-                require_recent(connection, token_hash(request.cookies[COOKIE_NAME]))
+                require_recent(connection, token_hash(read_session_token(request, cookie_name)))
             try:
                 state = auth.policy.change_freeze(auth.user["principal"], auth.user["role"], payload.frozen, payload.revision, ROLES)
             except FreezeConflict:
                 raise HTTPException(409, "Editing status changed. Refresh before trying again.") from None
             record_activity(connection, auth.user["name"], "Paused editing" if state.frozen else "Resumed editing", "Workspace")
+            record_event(connection, "editing_paused" if state.frozen else "editing_resumed", actor=auth.user["principal"])
             return {"frozen": state.frozen, "freeze_revision": state.revision}
 
     @app.get("/api/admin/security-metrics")
@@ -348,6 +384,8 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             if not payload.active:
                 connection.execute("DELETE FROM sessions WHERE user_id=?", (identifier,))
             record_activity(connection, auth.user["name"], "Enabled account" if payload.active else "Disabled account", user["name"])
+            record_event(connection, "account_enabled" if payload.active else "account_disabled",
+                         actor=auth.user["principal"], target=user["principal"])
             return {"ok": True}
 
     @app.get("/healthz")

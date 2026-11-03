@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
+from copy import deepcopy
+from contextlib import AsyncExitStack, asynccontextmanager, closing, contextmanager
 from datetime import datetime, timedelta
 import json
+import hashlib
 import logging
+import os
 from pathlib import Path
+import secrets
 import socket
 import sqlite3
 import sys
@@ -37,25 +41,152 @@ def synthetic_database(data_dir):
 
 
 def prepare_fixture(data_dir, public_origin):
-    """Provision one disposable workspace with its own explicit MFA key."""
+    """Provision and actually enroll disposable accounts with a separate key."""
     from business.app import create_app
     from business.secret_store import create_key_file, default_key_path
     from business.seed import provision
 
     key = default_key_path(data_dir)
     create_key_file(data_dir, key)
-    credentials = provision(data_dir, mfa_key_file=key)
+    grants = provision(data_dir, mfa_key_file=key)
     application = create_app(data_dir, public_origin=public_origin, mfa_key_file=key)
+    credentials = complete_fixture_enrollment(application, grants, public_origin)
     return credentials, application
 
 
-def synthetic_admin_enrollment(data_dir):
+def complete_fixture_enrollment(application, grants, public_origin):
+    """Use real HTTP enrollment, only with this runner's newly issued secrets.
+
+    Freeze the enrollment clock to avoid a 30-second code boundary during
+    password hashing. Login helpers must advance their separate synthetic MFA
+    clock or wait for the next real step; enrollment consumes the current code.
+    No login, authentication policy, factor or audit enforcement is bypassed.
+    """
+    from unittest.mock import patch
+
+    import pyotp
+    from fastapi.testclient import TestClient
+    from business import enrollment
+
+    chosen = {}
+    with patch.object(enrollment, "current_time", return_value=time.time()):
+        with TestClient(application, base_url=public_origin) as client:
+            for username, grant in grants.items():
+                begun = client.post("/api/enrollment/start", json={
+                    "username": username, "enrollment_secret": grant,
+                }, headers={"Origin": public_origin})
+                assert begun.status_code == 200, "Disposable account enrollment could not begin"
+                pending = begun.json()
+                password = secrets.token_urlsafe(32)
+                finished = client.post("/api/enrollment/complete", json={
+                    "new_password": password,
+                    "otp": pyotp.TOTP(pending["secret"]).at(enrollment.current_time()),
+                }, headers={"Origin": public_origin, "X-Enrollment-CSRF": pending["csrf"]})
+                assert finished.status_code == 200, "Disposable account enrollment could not complete"
+                assert finished.json()["sign_in_required"] is True
+                assert client.get("/api/session").json()["user"] is None
+                chosen[username] = password
+    return chosen
+
+
+class LabFixture:
+    """Runner-owned app switch; no HTTP endpoint can change its target."""
+
+    def __init__(self, data_dir, public_origin, output):
+        from starlette.routing import Router
+        from business.app import create_app
+        from business.secret_store import default_key_path
+        from business.evidence import write_receipt
+        from tools.business_security_demo import run_demo
+
+        self.path = data_dir.parent / "lab-receipt.json"
+        previous = os.environ.pop("BUSINESS_SECURITY_EVIDENCE_FILE", None)
+        try:
+            self.receipt = run_demo()
+            write_receipt(output / "scenario-receipt.json", self.receipt)
+            assert self.receipt["status"] == "passed", "Disposable scenarios did not pass; preserve their receipt"
+            self.credentials, self.application = prepare_fixture(data_dir, public_origin)
+            self.absent = self.application
+            os.environ["BUSINESS_SECURITY_EVIDENCE_FILE"] = str(self.path)
+            self.configured = create_app(data_dir, public_origin=public_origin, mfa_key_file=default_key_path(data_dir))
+        finally:
+            if previous is None:
+                os.environ.pop("BUSINESS_SECURITY_EVIDENCE_FILE", None)
+            else:
+                os.environ["BUSINESS_SECURITY_EVIDENCE_FILE"] = previous
+        self._lifespan_handler = Router(lifespan=self._lifespan)
+
+    @asynccontextmanager
+    async def _lifespan(self, _app):
+        # Requests can switch targets, but both apps keep their actual startup
+        # and shutdown contracts. Partial startup also unwinds entered contexts.
+        async with AsyncExitStack() as stack:
+            for app in (self.absent, self.configured):
+                await stack.enter_async_context(app.router.lifespan_context(app))
+            yield
+
+    async def __call__(self, scope, receive, send):
+        target = self._lifespan_handler if scope["type"] == "lifespan" else self.application
+        await target(scope, receive, send)
+
+    def select_evidence(self):
+        from business.evidence import write_receipt
+
+        write_receipt(self.path, self.receipt)
+        self.application = self.configured
+
+    def replace_test_receipt(self, value):
+        # This is a runner-owned temporary input, never the retained original
+        # genuine scenario receipt. Replacement preserves private file mode.
+        self.path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def synthetic_account_enrollment(data_dir, username):
     """Decrypt only this runner's newly generated disposable enrollment."""
     database = synthetic_database(data_dir)
     with database.transaction() as connection:
-        row = connection.execute("SELECT * FROM admin_mfa WHERE user_id='admin'").fetchone()
-        assert row is not None, "Disposable administrator enrollment is missing"
-        return database.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"]), row["last_counter"]
+        row = connection.execute("SELECT * FROM account_mfa WHERE user_id=?", (username,)).fetchone()
+        assert row is not None, "Disposable account enrollment is missing"
+        return database.mfa_secrets.decrypt(row["secret_ciphertext"], username, row["generation"]), row["last_counter"]
+
+
+def synthetic_admin_enrollment(data_dir):
+    return synthetic_account_enrollment(data_dir, "admin")
+
+
+@contextmanager
+def synthetic_mfa_clock(database):
+    """Advance real verification only for an explicitly supplied test database."""
+    from unittest.mock import patch
+
+    import pyotp
+    from business import mfa
+
+    clock = {"now": time.time()}
+
+    def code(username):
+        with database.transaction() as connection:
+            row = connection.execute("SELECT * FROM account_mfa WHERE user_id=?", (username,)).fetchone()
+        assert row is not None, "Disposable account enrollment is missing"
+        clock["now"] = max(clock["now"], (row["last_counter"] + 1) * mfa.INTERVAL)
+        secret = database.mfa_secrets.decrypt(row["secret_ciphertext"], username, row["generation"])
+        return pyotp.TOTP(secret).at(clock["now"])
+
+    with patch.object(mfa, "current_time", side_effect=lambda: clock["now"]):
+        yield code
+
+
+def browser_login_post(request, origin, payload):
+    """Explicit bootstrap and one credential POST through Playwright's API jar."""
+    headers = {"Origin": origin}
+    observed = request.get(origin + "/api/session")
+    if observed.status == 200 and observed.json().get("user"):
+        headers["X-CSRF-Token"] = observed.json()["csrf"]
+    context = request.post(origin + "/api/login/context", data={}, headers=headers)
+    if context.status != 200:
+        return context
+    return request.post(origin + "/api/login", data=payload,
+                        headers={"Origin": origin, "X-Login-CSRF": context.json()["csrf"]})
 
 
 class PublicBoardObserver:
@@ -581,7 +712,11 @@ def exercise_pending_saves(browser, output, checks, *, static_dir=None):
     def intercept(route):
         path = urlsplit(route.request.url).path
         assets = {"/": ("index.html", "text/html"), "/static/app.js": ("app.js", "application/javascript"),
-                  "/static/styles.css": ("styles.css", "text/css")}
+                  "/static/login-flow.js": ("login-flow.js", "application/javascript"),
+                  "/static/enrollment.js": ("enrollment.js", "application/javascript"),
+                  "/static/styles.css": ("styles.css", "text/css"),
+                  "/static/security-lab.js": ("security-lab.js", "application/javascript"),
+                  "/static/security-lab.css": ("security-lab.css", "text/css")}
         if not route.request.url.startswith(origin + "/"):
             route.abort()
             return
@@ -765,7 +900,11 @@ def exercise_admin_tools(browser, output, checks):
         requests.append((route.request.method, path))
         assets = {"/": ("index.html", "text/html"), "/board": ("index.html", "text/html"),
                   "/static/app.js": ("app.js", "application/javascript"),
-                  "/static/styles.css": ("styles.css", "text/css")}
+                  "/static/login-flow.js": ("login-flow.js", "application/javascript"),
+                  "/static/enrollment.js": ("enrollment.js", "application/javascript"),
+                  "/static/styles.css": ("styles.css", "text/css"),
+                  "/static/security-lab.js": ("security-lab.js", "application/javascript"),
+                  "/static/security-lab.css": ("security-lab.css", "text/css")}
         if not route.request.url.startswith(origin + "/"):
             unexpected.append("external request")
             route.abort()
@@ -986,7 +1125,7 @@ def exercise_admin_tools(browser, output, checks):
         context.close()
 
 
-def exercise_password_faults(browser, url, output, credentials, checks):
+def exercise_password_faults(browser, url, output, credentials, checks, data_dir):
     """Drop or delay real local password requests using disposable accounts only."""
     from playwright.sync_api import expect
 
@@ -1000,8 +1139,10 @@ def exercise_password_faults(browser, url, output, credentials, checks):
     def sign_in(page, supplied):
         page.get_by_label("Username", exact=True).fill("blair")
         page.get_by_label("Password", exact=True).fill(supplied)
-        page.get_by_role("button", name="Sign in", exact=True).click()
-        expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
+        with synthetic_mfa_clock(synthetic_database(data_dir)) as code:
+            page.get_by_label("Authenticator code", exact=True).fill(code("blair"))
+            page.get_by_role("button", name="Sign in", exact=True).click()
+            expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
 
     for case in ("dropped-before-server", "dropped-after-commit", "gateway-error-after-commit",
                  "unreadable-response-after-commit", "unconfirmed-success-without-commit",
@@ -1136,12 +1277,13 @@ def exercise_password_faults(browser, url, output, credentials, checks):
                 # without relying on the text shown in the affected browser tab.
                 probe = browser.new_context()
                 try:
-                    accepted = probe.request.post(url + "/api/login", headers={"Origin": url},
-                                                  data={"username": "blair", "password": password})
-                    assert accepted.status == 200
-                    rejected = probe.request.post(url + "/api/login", headers={"Origin": url},
-                                                  data={"username": "blair", "password":
-                                                        next_password if password == old_password else old_password})
+                    with synthetic_mfa_clock(synthetic_database(data_dir)) as code:
+                        accepted = browser_login_post(probe.request, url,
+                                                      {"username": "blair", "password": password, "otp": code("blair")})
+                        assert accepted.status == 200
+                        rejected = browser_login_post(probe.request, url,
+                                                      {"username": "blair", "otp": code("blair"), "password":
+                                                       next_password if password == old_password else old_password})
                     assert rejected.status == 401
                     probe.clear_cookies()
                     probe.add_cookies([cookie])
@@ -1372,8 +1514,10 @@ def exercise_safe_saves(browser, url, output, credentials, checks, data_dir):
     def sign_in(page, username="ellis"):
         page.get_by_label("Username", exact=True).fill(username)
         page.get_by_label("Password", exact=True).fill(credentials[username])
-        page.get_by_role("button", name="Sign in", exact=True).click()
-        expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
+        with synthetic_mfa_clock(synthetic_database(data_dir)) as code:
+            page.get_by_label("Authenticator code", exact=True).fill(code(username))
+            page.get_by_role("button", name="Sign in", exact=True).click()
+            expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
 
     for case in ("lost-before-send", "lost-after-commit-refresh", "changed-content", "expired-key",
                  "storage-unavailable", "new-login-before-old-create", "identical-inflight-success",
@@ -1628,8 +1772,8 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
     original_clock = mfa.current_time
     mfa.current_time = lambda: clock["now"]
 
-    def code():
-        secret, counter = synthetic_admin_enrollment(data_dir)
+    def code(username="admin"):
+        secret, counter = synthetic_account_enrollment(data_dir, username)
         clock["now"] = max(clock["now"], (counter + 1) * 30)
         return pyotp.TOTP(secret).at(clock["now"])
 
@@ -1637,13 +1781,27 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         context = browser.new_context(viewport={"width": 1440, "height": 1050})
         contexts.append(context)
         context.set_default_timeout(10000)
+        context.add_init_script("""(() => {
+          const original = window.fetch.bind(window);
+          let settled = 0;
+          window.fetch = async (...args) => {
+            const response = await original(...args);
+            if (args[0] === '/api/security/reauthenticate') {
+              const json = response.json.bind(response);
+              response.json = async () => {
+                try { return await json(); }
+                finally { setTimeout(() => document.documentElement.setAttribute('data-verification-settled', String(++settled)), 0); }
+              };
+            }
+            return response;
+          };
+        })();""")
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(type(error).__name__))
         page.goto(url)
         page.get_by_label("Username", exact=True).fill(username)
         page.get_by_label("Password", exact=True).fill(credentials[username])
-        if username == "admin":
-            page.get_by_label("Authenticator code", exact=True).fill(code())
+        page.get_by_label("Authenticator code", exact=True).fill(code(username))
         page.get_by_role("button", name="Sign in", exact=True).click()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
         return context, page
@@ -1659,6 +1817,14 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         editor.get_by_label("Title", exact=True).fill(title)
         editor.get_by_label("Announcement", exact=True).fill("A preserved fictional announcement.")
         return editor
+
+    def wait_for_route(page, held):
+        # Playwright's request event precedes asynchronous route delivery.
+        # Wait for that one observed request, without retrying the action.
+        deadline = time.monotonic() + 5
+        while not held and time.monotonic() < deadline:
+            page.wait_for_timeout(20)
+        assert len(held) == 1, "Expected exactly one held verification request"
 
     def count_posts(title):
         with database.transaction() as connection:
@@ -1689,15 +1855,23 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         expect(verification.get_by_label("Authenticator code", exact=True)).to_have_value("")
         verification.get_by_label("Current password", exact=True).fill(credentials["admin"])
         verification.get_by_label("Authenticator code", exact=True).fill(code())
-        verification.get_by_role("button", name="Verify identity", exact=True).click()
+        copied = browser.new_context()
+        contexts.append(copied)
+        copied.add_cookies(context.cookies())
+        assert copied.request.get(url + "/api/messages").status == 200
+        before_rotation = context.request.get(url + "/api/session").json()["csrf"]
+        with page.expect_response(url + "/api/security/reauthenticate") as rotated:
+            verification.get_by_role("button", name="Verify identity", exact=True).click()
+        assert rotated.value.status == 200 and rotated.value.json()["csrf"] != before_rotation
         expect(verification).not_to_be_visible()
+        assert copied.request.get(url + "/api/messages").status == 401
         expect(editor.get_by_label("Title", exact=True)).to_have_value(title)
         expect(editor.get_by_label("Announcement", exact=True)).to_have_value("A preserved fictional announcement.")
         assert count_posts(title) == 0, "Verification automatically replayed an administrator write"
         editor.get_by_role("button", name="Save post", exact=True).click()
         expect(editor).not_to_be_visible()
         assert count_posts(title) == 1
-        checks.append("real stale administrator save is denied; password plus fresh TOTP preserves the draft and deliberate retry creates exactly one record")
+        checks.append("password plus fresh TOTP rotates the session and rejects a copied old cookie; the draft survives and a deliberate retry with new CSRF creates exactly one record")
 
         page.get_by_role("button", name="Security & recovery", exact=True).click()
         metric_reads = []
@@ -1722,12 +1896,22 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
         assert inventory.evaluate("element => {const box=element.getBoundingClientRect();return box.left>=0 && box.right<=innerWidth && box.top>=0 && box.bottom<=innerHeight;}")
         page.screenshot(path=str(output / "security-sessions-mobile.png"))
+        expire_verification()
+        inventory.get_by_role("button", name="Sign out other session", exact=True).click()
+        expect(verification).to_be_visible()
+        verification.get_by_label("Current password", exact=True).fill(credentials["admin"])
+        verification.get_by_label("Authenticator code", exact=True).fill(code())
+        verification.get_by_role("button", name="Verify identity", exact=True).click()
+        expect(verification).not_to_be_visible()
+        expect(inventory).to_be_visible()
+        expect(inventory.locator(".session-card")).to_have_count(2)
+        assert second_context.request.get(url + "/api/messages").status == 200
         inventory.get_by_role("button", name="Sign out other session", exact=True).click()
         expect(inventory.locator(".session-card")).to_have_count(1)
         assert second_context.request.get(url + "/api/messages").status == 401
         second_page.get_by_role("button", name="Team board", exact=True).click()
         expect(second_page.get_by_role("heading", name="Welcome back.", exact=True)).to_be_visible()
-        checks.append("desktop and mobile session inventory revokes the selected other session and the other browser loses access")
+        checks.append("desktop and mobile session inventory reopens after rotation without replaying revocation; deliberate retry signs out the selected other session")
         inventory.get_by_role("button", name="Done", exact=True).click()
         page.set_viewport_size({"width": 1440, "height": 1050})
 
@@ -1749,6 +1933,34 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         checks.append("employee profile exposes only its own sessions; a foreign opaque identifier cannot revoke another account; current-session revocation signs out")
 
         expire_verification()
+        title = "Cancelled verification keeps this draft"
+        editor = draft(page, title)
+        editor.get_by_role("button", name="Save post", exact=True).click()
+        expect(verification).to_be_visible()
+        held = []
+        page.route("**/api/security/reauthenticate", lambda route: held.append(route))
+        verification.get_by_label("Current password", exact=True).fill(credentials["admin"])
+        verification.get_by_label("Authenticator code", exact=True).fill(code())
+        with page.expect_request(url + "/api/security/reauthenticate"):
+            verification.get_by_role("button", name="Verify identity", exact=True).click()
+        wait_for_route(page, held)
+        committed = held[0].fetch()
+        assert committed.status == 200
+        verification.get_by_role("button", name="Cancel verification", exact=True).click()
+        settled = page.locator("html").get_attribute("data-verification-settled")
+        held.pop().fulfill(response=committed)
+        expect(page.locator("html")).not_to_have_attribute("data-verification-settled", settled)
+        expect(verification).not_to_be_visible()
+        expect(editor.get_by_label("Title", exact=True)).to_have_value(title)
+        expect(page.locator("#toast")).to_have_text("Identity verification completed. No changes were saved.")
+        assert count_posts(title) == 0
+        editor.get_by_role("button", name="Save post", exact=True).click()
+        expect(editor).not_to_be_visible()
+        assert count_posts(title) == 1
+        page.unroute("**/api/security/reauthenticate")
+        checks.append("a committed verification reply after cancellation updates only the original session, keeps the dismissed dialog closed and preserves the draft for deliberate save")
+
+        expire_verification()
         title = "A delayed verification must not save this"
         editor = draft(page, title)
         editor.get_by_role("button", name="Save post", exact=True).click()
@@ -1767,6 +1979,7 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         expect(page.get_by_label("Username", exact=True)).to_be_visible()
         page.get_by_label("Username", exact=True).fill("alex")
         page.get_by_label("Password", exact=True).fill(credentials["alex"])
+        page.get_by_label("Authenticator code", exact=True).fill(code("alex"))
         page.get_by_role("button", name="Sign in", exact=True).click()
         expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
         assert len(held) == 1
@@ -1778,11 +1991,166 @@ def exercise_security(browser, url, output, credentials, checks, data_dir):
         assert context.request.get(url + "/api/session").json()["user"]["username"] == "alex"
         assert count_posts(title) == 0
         checks.append("a delayed verification denial cannot clear a newer account, revive a dismissed form, retain credentials or replay the abandoned save")
+        page.unroute("**/api/security/reauthenticate")
+
+        page.get_by_role("button", name="Sign out", exact=True).click()
+        expect(page.get_by_label("Username", exact=True)).to_be_visible()
+        page.get_by_label("Username", exact=True).fill("admin")
+        page.get_by_label("Password", exact=True).fill(credentials["admin"])
+        page.get_by_label("Authenticator code", exact=True).fill(code())
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
+        expire_verification()
+        title = "An old committed verification must not restore administrator access"
+        editor = draft(page, title)
+        editor.get_by_role("button", name="Save post", exact=True).click()
+        expect(verification).to_be_visible()
+        original_cookies = context.cookies()
+        held = []
+        page.route("**/api/security/reauthenticate", lambda route: held.append(route))
+        verification.get_by_label("Current password", exact=True).fill(credentials["admin"])
+        verification.get_by_label("Authenticator code", exact=True).fill(code())
+        with page.expect_request(url + "/api/security/reauthenticate"):
+            verification.get_by_role("button", name="Verify identity", exact=True).click()
+        wait_for_route(page, held)
+        committed = held[0].fetch()
+        assert committed.status == 200
+        # The browser has not received the held response. Restore its original
+        # jar in case route.fetch's shared API context accepted Set-Cookie early.
+        context.clear_cookies()
+        context.add_cookies(original_cookies)
+        verification.get_by_role("button", name="Cancel verification", exact=True).click()
+        editor.get_by_role("button", name="Close dialog", exact=True).click()
+        page.get_by_role("button", name="Refresh workspace", exact=True).click()
+        expect(page.get_by_label("Username", exact=True)).to_be_visible()
+        page.get_by_label("Username", exact=True).fill("alex")
+        page.get_by_label("Password", exact=True).fill(credentials["alex"])
+        page.get_by_label("Authenticator code", exact=True).fill(code("alex"))
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
+        settled = page.locator("html").get_attribute("data-verification-settled")
+        held.pop().fulfill(response=committed)
+        expect(page.locator("html")).not_to_have_attribute("data-verification-settled", settled)
+        expect(page.get_by_role("heading", name="The team schedule.", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Security & recovery", exact=True)).not_to_be_visible()
+        expect(verification).not_to_be_visible()
+        assert page.locator("#verification-dialog input").count() == 0
+        assert count_posts(title) == 0
+        # A late cookie may replace the newer browser cookie, but it must never
+        # restore the old account's authority or its stale verification UI.
+        stale_cookie = committed.headers["set-cookie"].split(";", 1)[0]
+        assert copied.request.get(url + "/api/admin/overview", headers={"Cookie": stale_cookie}).status == 401
+        current = context.request.get(url + "/api/session").json()
+        assert current.get("user") is None or current["user"]["username"] == "alex"
+        assert context.request.get(url + "/api/admin/overview").status in (401, 403)
+        page.unroute("**/api/security/reauthenticate")
+        checks.append("a delayed committed verification cannot restore the previous administrator after a newer login; its descendant cookie is revoked even if its late header overwrites the newer cookie")
         assert not errors, "Session UI caused a browser exception"
     finally:
         mfa.current_time = original_clock
         for context in contexts:
             context.close()
+
+
+def exercise_https_cookie_boundary(browser, credentials, checks, data_dir):
+    """Real browser cookies over intercepted fictional HTTPS; no live host/TLS claim."""
+    from fastapi.testclient import TestClient
+    from business.app import create_app
+    from business.secret_store import default_key_path
+    from business.security import COOKIE_NAME, HTTPS_COOKIE_NAME
+    from business import mfa
+    import pyotp
+
+    origin = "https://dashboard.example.test"
+    keys = ("BUSINESS_TURNSTILE_SITE_KEY", "BUSINESS_TURNSTILE_SECRET_KEY")
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ.update({key: "synthetic-cookie-boundary-key" for key in keys})
+        application = create_app(data_dir, public_origin=origin, mfa_key_file=default_key_path(data_dir))
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    context = browser.new_context()
+    original_clock = mfa.current_time
+    clock = {"now": time.time()}
+    mfa.current_time = lambda: clock["now"]
+
+    def payload(username):
+        secret, counter = synthetic_account_enrollment(data_dir, username)
+        clock["now"] = max(clock["now"], (counter + 1) * 30)
+        return {"username": username, "password": credentials[username],
+                "otp": pyotp.TOTP(secret).at(clock["now"])}
+
+    try:
+        with TestClient(application, base_url=origin) as backend:
+            login_context = backend.post("/api/login/context", json={}, headers={"Origin": origin})
+            assert login_context.status_code == 200
+            response = backend.post("/api/login", json=payload("blair"),
+                                    headers={"Origin": origin, "X-Login-CSRF": login_context.json()["csrf"]})
+            assert response.status_code == 200
+            foreign = backend.cookies[HTTPS_COOKIE_NAME]
+            backend.cookies.clear()
+
+            def route_request(route, request):
+                target = urlsplit(request.url)
+                if target.hostname == "evil.example.test":
+                    # Both attempts are actual browser Set-Cookie processing.
+                    name = HTTPS_COOKIE_NAME if target.path == "/prefixed" else COOKIE_NAME
+                    route.fulfill(status=200, content_type="text/html", body="<h1>Disposable sibling</h1>", headers={
+                        "Set-Cookie": f"{name}={foreign}; Secure; HttpOnly; SameSite=Strict; Domain=example.test; Path=/",
+                    })
+                elif target.hostname == "dashboard.example.test" and target.path == "/fixture":
+                    route.fulfill(status=200, content_type="text/html", body="<h1>Disposable dashboard origin</h1>")
+                elif target.hostname == "dashboard.example.test" and target.path.startswith("/api/"):
+                    headers = {key: value for key, value in request.all_headers().items()
+                               if key in ("cookie", "origin", "content-type", "x-csrf-token", "x-login-csrf", "sec-fetch-site")}
+                    backend.cookies.clear()
+                    response = backend.request(request.method, target.path, headers=headers, content=request.post_data)
+                    backend.cookies.clear()
+                    route.fulfill(status=response.status_code, body=response.content, headers={
+                        key: value for key, value in response.headers.items() if key in ("content-type", "set-cookie")
+                    })
+                else:
+                    route.abort()
+
+            context.route("**/*", route_request)
+            page = context.new_page()
+            page.goto(origin + "/fixture")
+            signed_in = page.evaluate("""async payload => {
+                const bootstrap = await fetch('/api/login/context', {method:'POST',
+                    headers:{'Content-Type':'application/json'}, body:'{}'});
+                if(!bootstrap.ok)return {status:bootstrap.status};
+                const context = await bootstrap.json();
+                const response = await fetch('/api/login', {method:'POST',
+                    headers:{'Content-Type':'application/json','X-Login-CSRF':context.csrf}, body:JSON.stringify(payload)});
+                return {status:response.status, body:await response.json()};
+            }""", payload("alex"))
+            assert signed_in["status"] == 200 and signed_in["body"]["user"]["id"] == "alex"
+            original = next(cookie["value"] for cookie in context.cookies(origin) if cookie["name"] == HTTPS_COOKIE_NAME)
+            page.goto("https://evil.example.test/legacy")
+            page.goto("https://evil.example.test/prefixed")
+            selected = [cookie for cookie in context.cookies(origin) if cookie["name"] == HTTPS_COOKIE_NAME]
+            assert len(selected) == 1 and selected[0]["value"] == original
+            assert selected[0]["domain"] == "dashboard.example.test"
+            assert any(cookie["name"] == COOKIE_NAME and cookie["value"] == foreign for cookie in context.cookies(origin))
+            page.goto(origin + "/fixture")
+            session = page.evaluate("async () => await (await fetch('/api/session')).json()")
+            assert session["user"]["id"] == "alex"
+            saved = page.evaluate("""async csrf => {
+                const response = await fetch('/api/messages', {method:'POST',
+                    headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+                    body:JSON.stringify({body:'Disposable original-account cookie control'})});
+                return {status:response.status, body:await response.json()};
+            }""", session["csrf"])
+            assert saved["status"] == 201 and saved["body"]["message"]["author"] == "Alex Morgan"
+            checks.append("the real browser rejects a sibling Domain cookie for the HTTPS host-prefixed session; legacy injection cannot switch the account or write attribution")
+    finally:
+        mfa.current_time = original_clock
+        context.close()
 
 
 def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
@@ -1793,6 +2161,7 @@ def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
 
     database = synthetic_database(data_dir)
     context = browser.new_context(viewport={"width": 1440, "height": 1050})
+    copied = browser.new_context()
     context.set_default_timeout(12000)
     page = context.new_page()
     errors = []
@@ -1861,10 +2230,15 @@ def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
         editor.get_by_role("button", name="Save post", exact=True).click()
         verification = page.locator("#verification-dialog")
         expect(verification).to_be_visible()
+        copied.add_cookies(context.cookies())
+        assert copied.request.get(url + "/api/messages").status == 200
+        before_rotation = context.request.get(url + "/api/session").json()["csrf"]
         with page.expect_response(url + "/api/security/passkeys/reauth/verify") as verified:
             verification.get_by_role("button", name="Use a passkey instead", exact=True).click()
         assert verified.value.status == 200
+        assert verified.value.json()["csrf"] != before_rotation
         expect(verification).not_to_be_visible()
+        assert copied.request.get(url + "/api/messages").status == 401
         expect(editor.get_by_label("Title", exact=True)).to_have_value(title)
         with database.transaction() as connection:
             assert connection.execute("SELECT COUNT(*) FROM posts WHERE title=?", (title,)).fetchone()[0] == 0
@@ -1872,9 +2246,23 @@ def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
         expect(editor).not_to_be_visible()
         with database.transaction() as connection:
             assert connection.execute("SELECT COUNT(*) FROM posts WHERE title=?", (title,)).fetchone()[0] == 1
-        checks.append("a fresh passkey assertion unlocks a stale administrator action while preserving its draft and requiring one deliberate save")
+        checks.append("a fresh passkey assertion rotates the session, rejects its copied old cookie and preserves the draft for one deliberate write with new CSRF")
 
         dialog = open_passkeys()
+        with database.transaction() as connection:
+            connection.execute("UPDATE session_security SET verified_at=0")
+        dialog.get_by_label("Passkey name", exact=True).fill("Retained after identity verification")
+        dialog.get_by_role("button", name="Add a passkey", exact=True).click()
+        expect(verification).to_be_visible()
+        with page.expect_response(url + "/api/security/passkeys/reauth/verify") as verified:
+            verification.get_by_role("button", name="Use a passkey instead", exact=True).click()
+        assert verified.value.status == 200
+        expect(verification).not_to_be_visible()
+        expect(dialog).to_be_visible()
+        expect(dialog.get_by_label("Passkey name", exact=True)).to_have_value("Retained after identity verification")
+        expect(dialog.locator(".session-card")).to_have_count(1)
+        assert len(context.request.get(url + "/api/security/passkeys").json()["passkeys"]) == 1
+        checks.append("passkey management reopens under the rotated session with its entered name intact; verification does not replay registration")
         dialog.get_by_role("button", name="Remove passkey", exact=True).click()
         expect(page.get_by_role("heading", name="Welcome back.", exact=True)).to_be_visible()
         assert context.request.get(url + "/api/messages").status == 401
@@ -1903,15 +2291,144 @@ def exercise_passkeys(browser, url, output, credentials, checks, data_dir):
         raise
     finally:
         mfa.current_time = original_clock
+        copied.close()
         context.close()
 
 
-def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_only=False, save_only=False, admin_tools_only=False, password_faults_only=False, safe_saves_only=False, security_only=False, passkeys_only=False):
+def exercise_lab(browser, url, output, credentials, checks, data_dir, fixture):
+    """Read-only real UI checks; input corruption is confined to owned fixtures."""
+    import pyotp
+    from playwright.sync_api import expect
+
+    with browser.new_context(viewport={"width": 1440, "height": 1050}) as guest:
+        page = guest.new_page()
+        page.set_default_timeout(10000)
+        observed, errors = [], []
+        page.on("request", lambda request: observed.append((request.method, urlsplit(request.url).path)))
+        page.on("pageerror", lambda error: errors.append(type(error).__name__))
+        page.goto(url)
+        page.get_by_role("link", name="Explore the security lab", exact=True).click()
+        expect(page.get_by_role("heading", name="Security, with the evidence.", exact=True)).to_be_visible()
+        expect(page.locator(".lab-scene")).to_have_count(3)
+        for title in ("Revoke access mid-session", "Let two editors race", "Restore data, preserve revocation"):
+            expect(page.get_by_role("heading", name=title, exact=True)).to_be_visible()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Not run")
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_have_count(0)
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        checks.append("the public security lab opens from sign-in, shows three scoped scenarios and claims no result when no evidence is configured")
+
+        fixture.select_evidence()
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Passed locally")
+        expect(page.locator(".lab-checks li")).to_have_count(14)
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Passed locally"}
+        detail = page.locator(".lab-scene details").first
+        detail.locator("summary").focus()
+        page.keyboard.press("Enter")
+        expect(detail).to_have_attribute("open", "")
+        expect(detail.locator("p")).to_be_visible()
+        page.screenshot(path=str(output / "lab-evidence-desktop.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Security lab overflows mobile viewport"
+        page.screenshot(path=str(output / "lab-evidence-mobile.png"), full_page=True)
+        checks.append("a genuine completed disposable scenario receipt renders fourteen checks on desktop and 390-pixel mobile; scenario reasoning opens with the keyboard")
+
+        # A deliberately altered copy tests stale-source presentation only.
+        # The real scenario receipt retained above is never rewritten.
+        stale = deepcopy(fixture.receipt)
+        stale["source"]["sha256"] = "0" * 64
+        stale.pop("sha256")
+        stale["sha256"] = hashlib.sha256(json.dumps(stale, sort_keys=True, separators=(",", ":"),
+                                                   ensure_ascii=True).encode("ascii")).hexdigest()
+        fixture.replace_test_receipt(stale)
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Source changed")
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Source changed"}
+        checks.append("an altered source identity is visibly stale rather than presented as current proof")
+
+        invalidated = deepcopy(fixture.receipt)
+        invalidated.update(status="failed", source_unchanged=False,
+                           error={"type": "SourceChanged", "code": "source_changed"})
+        invalidated.pop("sha256")
+        invalidated["sha256"] = hashlib.sha256(json.dumps(invalidated, sort_keys=True, separators=(",", ":"),
+                                                         ensure_ascii=True).encode("ascii")).hexdigest()
+        fixture.replace_test_receipt(invalidated)
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Source changed")
+        assert set(page.locator(".lab-scene .lab-status").all_text_contents()) == {"Source changed"}
+        checks.append("a run invalidated by source changes keeps all scenario cards stale even when the original source hash returns")
+
+        canary = "synthetic-lab-secret-canary-never-public"
+        fixture.replace_test_receipt({"password": canary})
+        page.get_by_role("button", name="Refresh evidence", exact=True).click()
+        expect(page.locator(".lab-overview .lab-status")).to_have_text("Evidence unavailable")
+        assert canary not in page.content()
+        assert canary not in guest.request.get(url + "/api/security-lab").text()
+        assert all(method == "GET" for method, _path in observed), "Public lab issued a mutation"
+        assert not any(path.startswith("/api/admin/") for _method, path in observed), "Public lab requested private administrator data"
+        assert not errors, "Public lab produced browser errors"
+        checks.append("invalid secret-bearing input is withheld; the guest lab only sends reads and never fetches the private security timeline")
+        assert guest.request.get(url + "/api/admin/security/events").status == 401
+        fixture.replace_test_receipt(fixture.receipt)
+
+    with browser.new_context(viewport={"width": 1440, "height": 1050}) as admin_context:
+        page = admin_context.new_page()
+        page.set_default_timeout(10000)
+        page.goto(url)
+        page.get_by_label("Username", exact=True).fill("admin")
+        page.get_by_label("Password", exact=True).fill(credentials["admin"])
+        secret, last_counter = synthetic_admin_enrollment(data_dir)
+        remaining = (last_counter + 1) * 30 - time.time()
+        if remaining > 0:
+            assert remaining <= 30, "Disposable administrator clock unexpectedly moved ahead"
+            time.sleep(remaining + 0.05)
+        page.get_by_label("Authenticator code", exact=True).fill(pyotp.TOTP(secret).now())
+        page.get_by_role("button", name="Sign in", exact=True).click()
+        expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Security lab", exact=True).click()
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_be_visible()
+        with page.expect_response(lambda response: urlsplit(response.url).path == "/api/admin/security/events") as response:
+            page.get_by_role("button", name="Load timeline", exact=True).click()
+        assert response.value.status == 200
+        timeline = response.value.json()
+        assert timeline["automatic_delivery"]["running"] is True
+        expect(page.locator(".lab-event-list li").first).to_be_visible()
+        assert page.locator(".lab-event-list li").count() > 0
+        expect(page.locator("#lab-events-content")).to_contain_text("Automatic delivery: running")
+        principals = page.locator(".lab-event-list li").first.locator("details")
+        principals.locator("summary").click()
+        expect(principals.locator("code").nth(0)).to_have_text(timeline["events"][0]["actor"] or "Not established")
+        expect(principals.locator("code").nth(1)).to_have_text(timeline["events"][0]["target"] or "Not recorded")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.screenshot(path=str(output / "lab-admin-timeline.png"), full_page=True)
+        page.set_viewport_size({"width": 390, "height": 844})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), "Expanded principals overflow mobile timeline"
+        page.screenshot(path=str(output / "lab-admin-timeline-mobile.png"), full_page=True)
+        checks.append("an administrator loads persisted events, inspects automatic delivery and opaque principals, and retains a readable mobile timeline")
+
+    with browser.new_context(viewport={"width": 390, "height": 844}) as employee:
+        with synthetic_mfa_clock(synthetic_database(data_dir)) as code:
+            response = browser_login_post(employee.request, url,
+                                          {"username": "alex", "password": credentials["alex"], "otp": code("alex")})
+        assert response.status == 200
+        page = employee.new_page()
+        page.goto(url + "/security-lab")
+        expect(page.get_by_role("heading", name="Security, with the evidence.", exact=True)).to_be_visible()
+        expect(page.get_by_role("button", name="Load timeline", exact=True)).to_have_count(0)
+        assert employee.request.get(url + "/api/admin/security/events").status == 403
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        checks.append("employees can inspect public evidence but cannot read administrator security events; unauthenticated requests are also rejected")
+
+
+def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_only=False, save_only=False, admin_tools_only=False, password_faults_only=False, safe_saves_only=False, security_only=False, passkeys_only=False, evidence_runtime=None, lab_fixture=None):
     import pyotp
     from playwright.sync_api import expect, sync_playwright
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, channel=channel)
+        if evidence_runtime is not None:
+            name = "chrome" if channel and channel.startswith("chrome") else "msedge" if channel and channel.startswith("msedge") else "chromium"
+            evidence_runtime.update(name=name, version=browser.version)
         context = browser.new_context(viewport={"width": 1440, "height": 1050})
         context.set_default_timeout(10000)
         page = context.new_page()
@@ -1943,28 +2460,31 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             page.goto(url)
             page.get_by_label("Username", exact=True).fill(username)
             page.get_by_label("Password", exact=True).fill(credentials[username])
-            if username == "admin":
-                secret, last_counter = synthetic_admin_enrollment(data_dir)
-                remaining = (last_counter + 1) * 30 - time.time()
-                if remaining > 0:
-                    assert remaining <= 30, "Disposable administrator clock unexpectedly moved ahead"
-                    time.sleep(remaining + 0.05)
-                page.get_by_label("Authenticator code", exact=True).fill(pyotp.TOTP(secret).now())
+            secret, last_counter = synthetic_account_enrollment(data_dir, username)
+            remaining = (last_counter + 1) * 30 - time.time()
+            if remaining > 0:
+                assert remaining <= 30, "Disposable account clock unexpectedly moved ahead"
+                time.sleep(remaining + 0.05)
+            page.get_by_label("Authenticator code", exact=True).fill(pyotp.TOTP(secret).now())
             page.get_by_role("button", name="Sign in", exact=True).click()
             expect(page.get_by_role("button", name="Sign out", exact=True)).to_be_visible()
 
         try:
+            if lab_fixture is not None:
+                exercise_lab(browser, url, output, credentials, checks, data_dir, lab_fixture)
+                return
             if passkeys_only:
                 exercise_passkeys(browser, url, output, credentials, checks, data_dir)
                 return
             if security_only:
                 exercise_security(browser, url, output, credentials, checks, data_dir)
+                exercise_https_cookie_boundary(browser, credentials, checks, data_dir)
                 return
             if safe_saves_only:
                 exercise_safe_saves(browser, url, output, credentials, checks, data_dir)
                 return
             if password_faults_only:
-                exercise_password_faults(browser, url, output, credentials, checks)
+                exercise_password_faults(browser, url, output, credentials, checks, data_dir)
                 return
             if admin_tools_only:
                 exercise_admin_tools(browser, output, checks)
@@ -2214,7 +2734,7 @@ def exercise(url, output, credentials, channel, checks, data_dir, *, challenge_o
             exercise_pending_saves(browser, output, checks)
             exercise_admin_tools(browser, output, checks)
             exercise_safe_saves(browser, url, output, credentials, checks, data_dir)
-            exercise_password_faults(browser, url, output, credentials, checks)
+            exercise_password_faults(browser, url, output, credentials, checks, data_dir)
         except Exception:
             # No traces or network payloads: they can capture test account secrets.
             page.screenshot(
@@ -2242,8 +2762,9 @@ def main(argv=None):
     focused.add_argument("--admin-tools-only", action="store_true", help="Run only administrator guidance, activity and session-race browser checks.")
     focused.add_argument("--password-faults-only", action="store_true", help="Run only real local password-change interruption and session-race checks.")
     focused.add_argument("--safe-saves-only", action="store_true", help="Run only real create retry, posting-limit and password-policy browser checks.")
-    focused.add_argument("--security-only", action="store_true", help="Run real local session revocation, fresh verification and draft-preservation checks.")
+    focused.add_argument("--security-only", action="store_true", help="Run real local session, verification, draft-preservation and HTTPS sibling-cookie checks.")
     focused.add_argument("--passkeys-only", action="store_true", help="Run real local WebAuthn with a disposable Chrome virtual authenticator.")
+    focused.add_argument("--lab-only", action="store_true", help="Run disposable scenarios and inspect the public evidence lab and protected timeline in a real browser.")
     options = parser.parse_args(argv)
     output = options.output_dir.resolve()
     if output == ROOT or ROOT in output.parents:
@@ -2255,10 +2776,16 @@ def main(argv=None):
     sys.path.insert(0, str(EXAMPLE))
     import role_aware_dashboard_toolkit as toolkit
     import uvicorn
+    from business.evidence import finish_browser_receipt, new_receipt, write_receipt
 
     assert Path(toolkit.__file__).resolve().parent == ROOT / "role_aware_dashboard_toolkit", "Expected this checkout's toolkit"
     checks = []
     result = {"passed": False, "checks": checks}
+    mode = next((name for name in ("challenge", "save", "admin_tools", "password_faults", "safe_saves", "security", "passkeys", "lab")
+                 if getattr(options, name + "_only")), "browser")
+    receipt = new_receipt(mode, ())
+    evidence_runtime = {}
+    failure = None
     try:
         with tempfile.TemporaryDirectory(prefix="radt-business-browser-") as temporary:
             data = Path(temporary).resolve() / "private"
@@ -2266,7 +2793,11 @@ def main(argv=None):
                 reservation.bind(("127.0.0.1", 0))
                 port = reservation.getsockname()[1]
             url = f"http://{'localhost' if options.passkeys_only else '127.0.0.1'}:{port}"
-            credentials, application = prepare_fixture(data, url)
+            lab_fixture = LabFixture(data, url, output) if options.lab_only else None
+            if lab_fixture is None:
+                credentials, application = prepare_fixture(data, url)
+            else:
+                credentials, application = lab_fixture.credentials, lab_fixture
             log = logging.FileHandler(output / "server.log", encoding="utf-8")
             logger = logging.getLogger("uvicorn")
             logger.addHandler(log)
@@ -2298,7 +2829,7 @@ def main(argv=None):
                              challenge_only=options.challenge_only, save_only=options.save_only,
                              admin_tools_only=options.admin_tools_only, password_faults_only=options.password_faults_only,
                              safe_saves_only=options.safe_saves_only, security_only=options.security_only,
-                             passkeys_only=options.passkeys_only)
+                             passkeys_only=options.passkeys_only, evidence_runtime=evidence_runtime, lab_fixture=lab_fixture)
                 finally:
                     server.should_exit = True
                     worker.join(timeout=15)
@@ -2308,7 +2839,8 @@ def main(argv=None):
                 logger.removeHandler(log)
                 log.close()
             result["passed"] = True
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
+        failure = error
         result["error_type"] = type(error).__name__
         result["error_frames"] = [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
                                   for frame in traceback.extract_tb(error.__traceback__)]
@@ -2320,6 +2852,14 @@ def main(argv=None):
         # Playwright call logs can contain filled passwords; never serialize them.
         print(f"Business browser check failed ({type(error).__name__}); inspect screenshots and server.log.", file=sys.stderr)
     finally:
+        receipt = finish_browser_receipt(receipt, len(checks), completed=result["passed"],
+                                         error=failure, browser=evidence_runtime or None)
+        result["passed"] = receipt["status"] == "passed"
+        if receipt["error"] is not None:
+            result["receipt_error"] = receipt["error"]["code"]
+        # The separate public receipt contains no free-text checks, paths or
+        # exception frames. The existing diagnostic summary stays local.
+        write_receipt(output / "receipt.json", receipt)
         (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"Business browser checks: {len(checks)} passed; evidence: {output}")
     return 0 if result["passed"] else 1

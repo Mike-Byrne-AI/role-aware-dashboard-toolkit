@@ -4,6 +4,27 @@
 
 ### Added
 
+- Westbridge's public, read-only Security Lab presents reproducible local
+  session-revocation, stale-writer and recovery scenarios with sanitized,
+  source-bound receipts and explicit failed, not-run and stale evidence states.
+- Westbridge schema six adds transactional structured security events, a
+  bounded delivery outbox, an idempotent local consumer and an administrator
+  timeline. Existing installations require explicit storage migration.
+- Offline MFA encryption-key rotation preserves original keys, changes all
+  enrollment ciphertext and key binding atomically, and fails closed in workers
+  still holding the old key. Identity-key rotation remains a separate migration.
+- A security design dossier documents trust boundaries, tradeoffs and scoped
+  verification requirements. Hosting exercises target the existing testbed.
+- The optional API accepts host-verified per-request identity with live grants,
+  freeze checks and attributed audit events. Authenticated apps require explicit
+  organization profile storage; the tenant contract is one isolated app/store
+  per organization.
+- Versioned memory and SQLite live-state backends provide revision-checked
+  replacements. Explicit API backends require ETag/If-Match on control writes
+  and profile activation. Public control state can survive restart; secret
+  controls, audit delivery and host side effects remain separate boundaries.
+- Key rotation guidance distinguishes identity reprovisioning, provider/cookie
+  credentials, API keys, encryption keys and backup recovery dependencies.
 - The landscaping source example includes an optional hosted adapter with
   explicit first provisioning, read-only preflight and normal startup that never
   reseeds accounts. Preflight checks private storage, database integrity and the
@@ -26,6 +47,14 @@
 
 ### Fixed
 
+- Security contexts now copy permissions into a read-only snapshot and prohibit
+  field assignment. Hosts must construct replacement contexts instead of
+  mutating them; live authorization still applies.
+- Control registration and direct control definitions reject non-string keys
+  before they can produce inconsistent JSON/profile or HTTP behavior.
+- Independent audit writers in one process coordinate complete JSONL appends
+  to the same resolved path, preventing short writes from interleaving records.
+  This adds no cross-process or distributed locking.
 - The landscaping browser check waits for the notification's intended lifetime
   before capturing the cleared schedule, avoiding a premature timeout.
 - The record-workflow browser check opens the visible status selector before

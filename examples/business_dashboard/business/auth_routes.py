@@ -3,23 +3,24 @@
 import hashlib
 import hmac
 import logging
-import secrets
 import time
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .db import record_activity
-from .mfa import verify_admin_code
+from .mfa import verify_account_code
 from .models import Login, PasswordChange
 from .password_policy import password_policy_error
 from .security import (
-    COOKIE_NAME, ROLES, SESSION_SECONDS, authenticate, dummy_password_check,
-    hash_password, token_hash, verify_password,
+    ROLES, create_session, dummy_password_check, hash_password, verify_password,
 )
+from .browser_flow import admit_login
+from .login_context_routes import login_proof
 from .work_limits import BoundedWork
-from .session_state import record_verification
+from .session_state import set_rotated_cookie
 from .telemetry import SecurityMetrics
+from .security_events import record_event
 
 ATTEMPT_LIMIT = 8
 ATTEMPT_WINDOW_SECONDS = 300
@@ -84,9 +85,7 @@ def _identity_state(user):
 
 
 def _mfa_generation(connection, user):
-    if user["role"] != "admin":
-        return None
-    row = connection.execute("SELECT generation FROM admin_mfa WHERE user_id=?", (user["id"],)).fetchone()
+    row = connection.execute("SELECT generation FROM account_mfa WHERE user_id=?", (user["id"],)).fetchone()
     return row["generation"] if row else None
 
 
@@ -107,6 +106,7 @@ def _classify_login(database, username):
 
 def install_auth_routes(app, database, authorized, origin):
     """Register login and password routes using the host's transaction boundary."""
+    from .enrollment import account_can_authenticate, requires_mfa
     metrics = SecurityMetrics()
     app.state.security_metrics = metrics
     known_work = BoundedWork(2, "Authentication", on_event=lambda event: metrics.record("auth_known_" + event))
@@ -117,6 +117,7 @@ def install_auth_routes(app, database, authorized, origin):
         username = payload.username.casefold()
         now = current_time()
         with database.transaction() as connection:
+            login_proof(connection, database, request, origin)
             user = connection.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
             if (user["id"] if user else None) != classified_id:
                 # Account creation, replacement or rename cannot borrow the
@@ -145,49 +146,34 @@ def install_auth_routes(app, database, authorized, origin):
         with database.transaction() as connection:
             current = connection.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
             if (not current or _identity_state(current) != _identity_state(user)
-                    or _mfa_generation(connection, current) != generation_before):
+                    or _mfa_generation(connection, current) != generation_before
+                    or not account_can_authenticate(connection, current)):
                 metrics.record("login_identity_changed")
                 return JSONResponse({"detail": "The sign-in details are incorrect."}, status_code=401)
             now = current_time()
             if not _reservation_valid(connection, key, reserved_window, now):
                 metrics.record("login_reservation_expired")
                 return _limit_response("sign-in")
+            proof = admit_login(connection, login_proof(connection, database, request, origin), current["id"])
             generation = None
-            if current["role"] == "admin":
-                generation = verify_admin_code(connection, current["id"], payload.otp, database.mfa_secrets)
+            if requires_mfa(connection, current):
+                generation = verify_account_code(connection, current["id"], payload.otp, database.mfa_secrets)
                 if generation is None:
                     metrics.record("login_rejected")
-                    return JSONResponse({"detail": "The sign-in details are incorrect."}, status_code=401)
-            session_now = time.time()
-            connection.execute(
-                "DELETE FROM sessions WHERE expires_at<=? OR last_seen<?",
-                (session_now, session_now - 1800),
+                    # Roll back admission; failed factors never consume a flow
+                    # generation or replace its current authority.
+                    raise HTTPException(401, "The sign-in details are incorrect.")
+            token, expiry, auth = create_session(
+                connection, current["id"], database.identity_key, flow_proof=proof,
+                method="totp" if generation else "password", mfa_generation=generation,
             )
-            old = request.cookies.get(COOKIE_NAME)
-            if old:
-                connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(old),))
-            connection.execute(
-                "DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM sessions "
-                "WHERE user_id=? ORDER BY created_at DESC LIMIT -1 OFFSET 7)", (user["id"],),
-            )
-            token = secrets.token_urlsafe(32)
-            connection.execute(
-                "INSERT INTO sessions VALUES(?,?,?,?,?)",
-                (token_hash(token), user["id"], session_now, session_now, session_now + SESSION_SECONDS),
-            )
-            if generation:
-                connection.execute("INSERT INTO session_mfa VALUES(?,?)", (token_hash(token), generation))
-            record_verification(connection, token_hash(token), session_now, "totp" if generation else "password")
-            auth = authenticate(connection, token, database.identity_key)
             auth.authorize("can_view_team")
             record_activity(connection, user["name"], "Signed in", "Workspace")
+            record_event(connection, "login_succeeded", actor=auth.user["principal"], method="totp" if generation else "password")
             result = auth.session_payload()
             _release_success(connection, key, reserved_window)
         metrics.record("login_succeeded")
-        response.set_cookie(
-            COOKIE_NAME, token, max_age=SESSION_SECONDS, httponly=True,
-            secure=origin.scheme == "https", samesite="strict", path="/",
-        )
+        set_rotated_cookie(response, origin, token, expiry)
         return result
 
     def perform_password(payload, request):
@@ -229,6 +215,7 @@ def install_auth_routes(app, database, authorized, origin):
             connection.execute("DELETE FROM sessions WHERE user_id=?", (auth.user["id"],))
             _release_success(connection, key, reserved_window)
             record_activity(connection, auth.user["name"], "Changed password", "Own account")
+            record_event(connection, "password_changed", actor=auth.user["principal"])
         metrics.record("password_changed")
         # Revocation above invalidates every old cookie on the server. Do not
         # expire a browser cookie here: a delayed response could otherwise erase

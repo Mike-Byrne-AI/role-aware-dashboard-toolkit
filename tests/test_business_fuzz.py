@@ -94,6 +94,23 @@ def test_reject_everything_mutant_fails_positive_authentication_control(monkeypa
     assert failure["actual"] == 403
 
 
+def test_employee_mfa_bypass_mutant_fails_missing_factor_control(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "examples" / "business_dashboard"))
+    from business import enrollment
+
+    actual_requires_mfa = enrollment.requires_mfa
+    monkeypatch.setattr(enrollment, "requires_mfa", lambda connection, user:
+                        user["id"] != "alex" and actual_requires_mfa(connection, user))
+    result = fuzz.run_campaign(seed=37, cases=9)
+    assert not result["passed"]
+    failure = result["failure"]
+    assert failure["family"] == "setup"
+    assert failure["invariant"] == "unexpected_status"
+    assert failure["route"] == "/api/login"
+    assert failure["expected"] == 401
+    assert failure["actual"] == 200
+
+
 def test_unexpected_exception_report_does_not_disclose_sensitive_text(monkeypatch, capsys):
     secret = "synthetic-password-cookie-and-MFA-secret-canary"
 

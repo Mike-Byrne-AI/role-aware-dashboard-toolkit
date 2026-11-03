@@ -1,5 +1,7 @@
 """Durable auth attempt limits, without collateral shared-proxy lockouts."""
 
+from tools.business_login_client import login_post
+
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import hmac
@@ -26,9 +28,8 @@ def _password(actor, current="Incorrect disposable password", **kwargs):
 
 
 def _login(business, username, password="Incorrect disposable password", **headers):
-    return business.client().post("/api/login", json={
-        "username": username, "password": password,
-    }, headers={"Origin": ORIGIN, **headers})
+    return login_post(business.client(), "/api/login", json=business.login_payload(username, password),
+                                  headers={"Origin": ORIGIN, **headers})
 
 
 def _protected_auth_rows(business):
@@ -38,7 +39,7 @@ def _protected_auth_rows(business):
             "sessions": [tuple(row) for row in connection.execute(
                 "SELECT token_hash,user_id,created_at,expires_at FROM sessions ORDER BY token_hash"
             )],
-            "mfa": [tuple(row) for row in connection.execute("SELECT * FROM admin_mfa ORDER BY user_id")],
+            "mfa": [tuple(row) for row in connection.execute("SELECT * FROM account_mfa ORDER BY user_id")],
             "activity": [tuple(row) for row in connection.execute("SELECT * FROM activity ORDER BY id")],
         }
 
@@ -62,9 +63,7 @@ def test_password_guess_budget_survives_other_sessions_login_and_restart(busines
     # A fresh process and a fresh session do not provide another guessing budget.
     application = create_app(business.directory, public_origin=ORIGIN)
     client = business.client(app=application)
-    response = client.post("/api/login", json={
-        "username": "alex", "password": business.credentials["alex"],
-    }, headers={"Origin": ORIGIN})
+    response = login_post(client, "/api/login", json=business.login_payload("alex"), headers={"Origin": ORIGIN})
     assert response.status_code == 200
     third = Actor(client, response.json()["user"], response.json()["csrf"])
     before = _protected_auth_rows(business)
@@ -159,7 +158,7 @@ def test_account_password_limit_survives_case_headers_and_restart(business):
             **{"X-Forwarded-For": f"192.0.2.{index}", "CF-Connecting-IP": f"198.51.100.{index}"},
         ).status_code == 401
     application = create_app(business.directory, public_origin=ORIGIN)
-    response = business.client(app=application).post("/api/login", json={
+    response = login_post(business.client(app=application), "/api/login", json={
         "username": "alex", "password": business.credentials["alex"],
     }, headers={"Origin": ORIGIN, "X-Forwarded-For": "203.0.113.99"})
     assert response.status_code == 429
@@ -224,7 +223,7 @@ def test_login_rechecks_credentials_and_mfa_after_password_work(business, monkey
     monkeypatch.setattr(auth_routes, "verify_password", held_verification)
     client = business.client()
     with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(client.post, "/api/login", json=payload, headers={"Origin": ORIGIN})
+        pending = pool.submit(login_post, client, "/api/login", json=payload, headers={"Origin": ORIGIN})
         try:
             assert entered.wait(timeout=5)
             # Health uses the real storage transaction, which remains available
@@ -236,7 +235,7 @@ def test_login_rechecks_credentials_and_mfa_after_password_work(business, monkey
                     "password": "UPDATE users SET password_hash='replaced' WHERE id='alex'",
                     "role": "UPDATE users SET role='admin' WHERE id='alex'",
                     "revision": "UPDATE users SET revision=revision+1 WHERE id='alex'",
-                    "mfa": "UPDATE admin_mfa SET generation='replacement-enrollment' WHERE user_id='admin'",
+                    "mfa": "UPDATE account_mfa SET generation='replacement-enrollment' WHERE user_id='admin'",
                 }[change]
                 connection.execute(sql)
             before = _protected_auth_rows(business)
@@ -284,6 +283,9 @@ def test_password_change_rechecks_session_and_identity_after_password_work(busin
 
 def test_auth_work_saturation_rejects_without_blocking_health_or_private_reads(business, monkeypatch):
     actor = business.login("casey")
+    # Set a common fresh step before holding concurrent password work. The
+    # later saturation probe must not advance the clock beyond in-flight OTPs.
+    business.next_otp("casey")
     arrived, release = Barrier(3), Event()
     original = auth_routes.verify_password
 

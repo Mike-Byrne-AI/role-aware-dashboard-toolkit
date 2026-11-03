@@ -1,39 +1,117 @@
 Offline common-password screening data
 
+The combined common-passwords.txt.gz contains 30,517 distinct normalized entries.
+It preserves all 19,640 original Django entries, in their original order, then
+appends 10,877 distinct eligible SecLists entries not already present in Django.
+Combined gzip SHA-256:
+899df167ec4bba726c8fdd146172c2af19a3f9d5b8bfe0d8cd2214e2eed9f746
+Size: 173,827 bytes. Decompressed UTF-8 text SHA-256:
+d88e18e77429f98a678961b2246b91979c2e68f50b458a1123a76ccf5dbe926b
+
+Django source
+-------------
 Source: Django 5.2.7
 https://github.com/django/django/tree/5.2.7
-
-The file common-passwords.txt.gz is an unmodified copy of:
+Original file:
 https://raw.githubusercontent.com/django/django/5.2.7/django/contrib/auth/common-passwords.txt.gz
-SHA-256: 3c1baed62596de36860824eb3f436d5932d37ca8b06e59df78f5a44ec175afe4
-Size: 80,228 bytes; 19,640 distinct entries after decompression.
+Original gzip SHA-256:
+3c1baed62596de36860824eb3f436d5932d37ca8b06e59df78f5a44ec175afe4
+Original size: 80,228 bytes; 19,640 distinct entries after decompression.
+Original decompressed text SHA-256 (also the combined file's first 19,640 lines):
+29ca0fa5303165f012f3e9775e3e95a3071cdd59f219973ec1cbb308d0214a6f
 
 Django describes this as its 20,000-common-password list, compiled by
-Royce Williams. The actual bundled file has 19,640 entries.
+Royce Williams. The actual original file has 19,640 entries.
 https://docs.djangoproject.com/en/5.2/topics/auth/passwords/#django.contrib.auth.password_validation.CommonPasswordValidator
-
-DJANGO_LICENSE.txt is an unmodified copy of the Django 5.2.7 BSD license:
+DJANGO_LICENSE.txt remains the unmodified Django 5.2.7 BSD license:
 https://raw.githubusercontent.com/django/django/5.2.7/LICENSE
 SHA-256: b846415d1b514e9c1dff14a22deb906d794bc546ca6129f950a18cd091e2a669
 
-This public wordlist is not application credentials or recovery material.
-The application loads it locally and never sends a prospective password or its
-hash to an external service. It compares whole passwords case-insensitively,
+SecLists source and reproducible expansion
+-----------------------------------------
+Repository: https://github.com/danielmiessler/SecLists
+Pinned commit: 9648611ec745e6201b532978119384b23f3a175a
+Password-only input (no account identifiers):
+https://raw.githubusercontent.com/danielmiessler/SecLists/9648611ec745e6201b532978119384b23f3a175a/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt
+Input SHA-256: 424a3e03a17df0a2bc2b3ca749d81b04e79d59cb7aeec8876a5a3f308d0caf51
+Input size: 8,557,632 bytes; 1,000,000 lines including one empty line.
+Input Git blob SHA-1: e5e73232c8f4f53edfe9c0fd699f415da8a336e3
+
+For each input line, in source order, apply Python str.strip().casefold(), then
+retain normalized values of 15 through 128 characters, inclusive, deduplicating
+by the resulting exact value. This produces 10,898 distinct eligible entries.
+Their newline-terminated UTF-8 text SHA-256 is:
+0f6f3c8b1fb059ccc9da49661847a8540b33730a32d677558a287f581bb2ebdb
+Exclude the 21 values already in the original Django list and append all 10,877
+remaining values. Their newline-terminated UTF-8 text SHA-256 is:
+6c5eb34662428fe70b34346d70ca55ae11b9c244c21af650841d74ffd9a5fa87
+Write the preserved Django lines followed by these additions, each terminated
+by LF; gzip using an empty filename and mtime=0. The exact shipped gzip and
+decompressed text hashes above are the distribution integrity checks.
+
+Provenance:
+https://raw.githubusercontent.com/danielmiessler/SecLists/9648611ec745e6201b532978119384b23f3a175a/Passwords/Common-Credentials/README.md
+The upstream README describes the xato list as unique passwords ordered from
+most to least common, originating in Mark Burnett's ten-million-password
+dataset. We use the supplied one-million-entry file and preserve its order.
+The README provides no numeric frequency counts; this project has not
+independently measured present-day prevalence or confirmed the original source
+records. The additions are actual normalized source entries, not manufactured
+variants or a claimed newly measured ranking. The original corpus discussion:
+https://medium.com/xato-security/today-i-am-releasing-ten-million-passwords-b6278bbe7495
+
+SecLists distributes this material under the repository MIT license reproduced
+below. Upstream license:
+https://raw.githubusercontent.com/danielmiessler/SecLists/9648611ec745e6201b532978119384b23f3a175a/LICENSE
+SHA-256: 3dbdc93d5f8829de0941744841730a09c106d0732e5ae0e98ca1d77be7ded66c
+
+Screening behavior and limits
+-----------------------------
+These public wordlists are not application credentials or recovery material.
+The application loads them locally and never sends a prospective password or
+its hash to an external service. It compares whole passwords case-insensitively,
 ignoring surrounding whitespace for screening only; hashing and sign-in retain
 the exact supplied characters. It also rejects exact account/service names.
 
 Predictable-repeat screening is a local extension, not part of the upstream
-corpus: a candidate is rejected when its entire normalized value consists of
-two or more identical repetitions of an entry in the bundled corpus. The
-implementation checks only lengths dividing the candidate's length, from one
-through the shorter of half the candidate length and the longest corpus entry
-(33 characters in this snapshot). Each unit is checked by exact set membership;
-the repeated unit must reconstruct the entire candidate. This adds at most 33
-set lookups per attempt and never rejects an unrelated phrase merely because
-it contains a common word. It imposes no character-class composition rules.
+corpora: a candidate is rejected when its entire normalized value consists of
+two or more identical repetitions of a corpus entry. Only lengths dividing the
+candidate's length are checked, through the shorter of half the candidate
+length and the longest corpus entry (39 characters in this snapshot). This
+adds at most 39 set lookups and does not reject unrelated phrases containing a
+common word. It imposes no character-class composition rules.
 
-This is a pinned snapshot, not a comprehensive or current breached-password
-database, and passing screening does not establish password strength or
-uniqueness. Maintainers must review upstream data updates explicitly, replace
-the corpus and license together when appropriate, update this provenance and
-its checksum regression, and rerun password and source-distribution checks.
+The regression checks the fixed provenance digest of all 10,877 direct added
+entries, their distinctness and allowed length, then submits every one to the
+actual new-password policy. Its >=3,000 rejection assertion does not count
+short passwords, repeated variants, or the implementation's set size.
+
+This is a pinned historical snapshot, not a comprehensive or current breached-
+password database. Passing screening does not establish password strength,
+uniqueness, or a security-standard compliance level. Review upstream updates
+explicitly, preserve both license notices, update the provenance and checksum
+regressions, and rerun password and source-distribution checks.
+
+SecLists MIT notice
+-------------------
+MIT License
+
+Copyright (c) 2018 Daniel Miessler
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

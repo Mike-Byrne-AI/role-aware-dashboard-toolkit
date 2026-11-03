@@ -16,7 +16,8 @@ use the [authenticated starter](../role_aware_dashboard_toolkit/resources/guides
 with verified OIDC identity, server-owned grants and shared freeze. The existing
 `auth_hook` remains a host-managed integration. Use TLS and restrict storage
 access. **Dashboard OIDC and freeze do not secure this separate FastAPI surface**;
-configure its API-key and role policy independently.
+configure its API-key and role policy independently, or explicitly pass
+`authentication=APIAuthentication(...)` as described below.
 
 Sensitive controls are write-only through the API response surface: updates are
 accepted into in-memory state, while reads and update responses return
@@ -136,7 +137,7 @@ loading unreviewed third-party plugins into production dashboards.
 
 ## Application state and callbacks
 
-Each `create_app()` instance owns its own in-memory control values. Sharing a
+By default each `create_app()` instance owns its own in-memory control values. Sharing a
 `ControlRegistry` shares definitions, not live values. API updates and profile
 activation update that API instance's state and audit records; they do not call
 control callbacks, the dashboard's `on_change`, or a running Streamlit session.
@@ -145,7 +146,88 @@ The API is therefore not an automatic remote-control connection to a dashboard.
 A host that needs shared UI/API state or external actions must supply its own
 integration and enforce authorization at the action boundary. Shared profile or
 audit stores do not synchronize live controls. The toolkit does not provide a
-shared-state adapter or cross-process coordination.
+automatic UI/API synchronization. Opt-in `state_store=` provides versioned API
+control persistence as described below.
+
+## Per-request identity and organization isolation
+
+```python
+from role_aware_dashboard_toolkit.api import create_app
+from role_aware_dashboard_toolkit.api_access import APIAuthentication
+
+# verify_request_credentials is supplied by the host. It verifies the token or
+# session and returns Identity(issuer, subject, expires_at), or None.
+authentication = APIAuthentication(verify_request_credentials, access_store, identity_key)
+app = create_app(registry, authentication=authentication,
+                 profile_store=organization_profiles, audit=organization_audit)
+```
+
+The resolver is a synchronous trusted host adapter, not a parser for unverified
+claims. Verify signature/session, issuer, audience and expiry, and apply the
+host's CSRF policy for cookie authentication. Verification failures deny with
+401; there is no shared-key or anonymous fallback. `X-Dashboard-Role` selects
+only among the principal's current grants; absent selection uses its first
+assigned role. The live identity, grants and freeze are rechecked at protected
+boundaries. Every mutation, including profile activation/save/delete, obeys
+freeze. Audit writes bind the opaque principal and a fresh request identifier;
+that identifier is not a persistent login-session identifier. The resolver must
+not cache stale identities or expose credentials in exceptions/logs.
+
+Use one organization per isolated app/store. Provision independent access
+stores and identity keys, profile stores/directories, audit logs and state
+backends. Per-user authentication requires an explicitly supplied profile store
+or directory; it never uses the legacy shared `profiles` directory implicitly.
+Separate deployments and OS credentials offer stronger isolation than
+mounting apps inside one trusted Python process. Mount paths and tenant headers
+are routing inputs, never membership proof. Reusing a store or audit log across
+organizations breaks the isolation contract; the toolkit does not automatically
+partition shared stores. Test two apps with identical resource names and role
+names: an account granted Admin in one must receive no access to the other until
+independently provisioned there. Include reads, writes, profiles and audit.
+
+## Durable live state and conflicting writes
+
+```python
+from role_aware_dashboard_toolkit.state_store import SQLiteStateStore
+
+# Trusted operator provisioning, once, in an OS-protected directory outside Git:
+# SQLiteStateStore.create(state_path)
+state = SQLiteStateStore(state_path)  # opens existing valid state only
+app = create_app(registry, authentication=authentication,
+                 profile_store=organization_profiles, audit=organization_audit,
+                 state_store=state)
+```
+
+`GET /controls` and `GET /controls/{key}` return an `ETag` such as `"0"`.
+Send that exact value in `If-Match` for `PATCH /controls` and
+`POST /profiles/{id}/activate`. Explicit backend mode requires it (428 if
+missing); stale values or concurrent replacements return 409 without a success
+audit event. Refresh and review the new values before retrying. Successful
+mutations return the new ETag. Response bodies retain their previous shape.
+Legacy in-memory apps may optionally use the same precondition but do not have
+to. `InMemoryStateStore` provides the explicit versioned contract without disk
+durability. Write-only roles need a host-authorized way to obtain revisions;
+this API does not grant read access merely to obtain an ETag.
+
+Snapshots contain public JSON-compatible control values. Explicit backend mode
+refuses secret-control writes and structured secret fields; use the host secret
+backend for secrets. Sensitive defaults remain host configuration and are never
+persisted. Missing, unreadable or schema-incompatible state denies live-state
+operations with 503 rather than resetting values. A changed control definition
+may require an explicit state migration; do not delete the database to repair it.
+
+Each app serializes its synchronous endpoint operations. SQLite transactions
+and revision checks prevent two local processes committing the same state
+revision. Profile save takes the current snapshot; profiles and audit are
+separate stores, not part of the state transaction. File profiles still require
+one writer process. A crash after state commit can precede audit persistence;
+state persistence is not a durable transactional audit trail. Authorization and
+state commit are also separate transactions: revocation denies the next check,
+but cannot cancel work already in progress. Hosts requiring atomic revocation,
+business writes and audit must supply one transactional action boundary.
+Use local disk, protect files/backups with OS permissions, and rehearse restart
+and restore. Restore can roll back values and revisions: close access, reconcile
+current authority and effects, and invalidate old clients before reopening.
 
 ## Control keys
 
@@ -187,6 +269,17 @@ cannot report this and keep returning 404 for a record they cannot load.
 API control updates, profile saves, activations and successful deletions record
 `source="api"` with the request's authorized role. API-created profiles also
 persist `source="api"`. A profile's `role` remains descriptive metadata and does
-not change the request's authorized role. Missing, unauthorized or failed
-profile deletions produce no successful `profile_delete` event; failed saves
-likewise produce no successful `profile_save` event.
+not change the request's authorized role. Missing, unauthorized or storage-refused
+profile deletions produce no successful `profile_delete` event; a save rejected
+before storage likewise produces no successful `profile_save` event.
+
+Audit recording follows the state or profile operation. If an audit adapter
+raises after the operation commits, the API returns HTTP 500 explicitly saying
+that the operation committed but audit recording failed. Control writes and
+profile activation include the committed state `ETag`; profile save/delete
+failures do not include one. The API does not undo or retry the committed
+operation. Refresh the state/profile and inspect audit diagnostics before
+deciding whether any further action is needed; a batch may already have some
+audit events. The built-in audit writer can also fail asynchronously or drop
+queued events, so a successful HTTP response does not guarantee durable audit
+persistence. State and audit remain separate transaction boundaries.

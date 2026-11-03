@@ -6,8 +6,8 @@ import secrets
 import sqlite3
 
 from .db import SCHEMA, create_private_file, validate_data_dir, utc_now
-from .security import hash_password, principal_for_user
-from .mfa import enroll_in_transaction
+from .security import principal_for_user
+from .enrollment import issue_grant
 from .secret_store import SecretStore, create_key_file
 
 ACCOUNTS = (
@@ -34,7 +34,7 @@ def provision(data_dir, *, mfa_key_file=None) -> dict[str, str]:
     create_private_file(directory / "identity.key", key)
     database_path = directory / "business.sqlite3"
     create_private_file(database_path, b"")
-    credentials = {username: secrets.token_urlsafe(18) for username, _, _ in ACCOUNTS}
+    credentials = {}
     connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     try:
@@ -44,7 +44,8 @@ def provision(data_dir, *, mfa_key_file=None) -> dict[str, str]:
         connection.execute("INSERT INTO mfa_key_binding VALUES(1,?)", (secret_store.create_binding(),))
         for username, name, role in ACCOUNTS:
             connection.execute("INSERT INTO users VALUES(?,?,?,?,?,1,?,0)",
-                               (username, username, name, hash_password(credentials[username]), role, principal_for_user(username, key)))
+                               (username, username, name, "!enrollment-pending!", role, principal_for_user(username, key)))
+            credentials[username] = issue_grant(connection, username, purpose="initial")
         now = utc_now()
         # Seed a normal workday in the provisioning machine's local time zone.
         tomorrow = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
@@ -84,12 +85,11 @@ def provision(data_dir, *, mfa_key_file=None) -> dict[str, str]:
             month = f"{month_index // 12:04d}-{month_index % 12 + 1:02d}"
             connection.execute("INSERT INTO revenue VALUES(?,?,?)", (month, revenue, cost))
         connection.execute("INSERT INTO activity(actor,action,target,created_at) VALUES(?,?,?,?)", ("Morgan Reed", "Workspace provisioned", "Westbridge", now))
-        sheet = "# Westbridge private demo accounts\n\nKeep this file private. These passwords were generated for this installation.\n\n| Username | Name | Role | Password |\n| --- | --- | --- | --- |\n"
+        sheet = "# Westbridge private account enrollment\n\nKeep this file private. These single-use enrollment secrets expire after 24 hours and cannot sign in to the workspace. Open the configured Westbridge site directly, choose Set up or recover your account, choose your own password and confirm an authenticator.\n\n| Username | Name | Role | Enrollment secret |\n| --- | --- | --- | --- |\n"
         for username, name, role in ACCOUNTS:
             sheet += f"| {username} | {name} | {role} | {credentials[username]} |\n"
         sheet += "\nGuest access needs no password and opens only the published public board.\n"
         create_private_file(directory / "ACCOUNTS.md", sheet.encode())
-        enroll_in_transaction(connection, directory, secret_store)
         connection.commit()
     except BaseException:
         connection.rollback()

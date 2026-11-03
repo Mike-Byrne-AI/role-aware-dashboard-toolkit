@@ -159,6 +159,8 @@ def test_two_app_instances_share_atomic_verification_attempt_reservations(hosted
 
 
 def test_slow_provider_and_cancelled_request_preserve_health_and_auth_capacity(hosted, business, monkeypatch):
+    # Set the fixture's current TOTP step before starting held provider work.
+    valid_login = business.login_payload("alex")
     entered, release = Event(), Event()
     lock = Lock()
     running = {"active": 0, "maximum": 0, "calls": 0}
@@ -202,9 +204,12 @@ def test_slow_provider_and_cancelled_request_preserve_health_and_auth_capacity(h
                     "/api/public/submissions", json=payload(), headers={"Origin": ORIGIN},
                 ), 2)).status_code == 429
                 assert (await asyncio.wait_for(client.get("/healthz"), 2)).status_code == 200
-                signed_in = await asyncio.wait_for(client.post(
-                    "/api/login", json={"username": "alex", "password": business.credentials["alex"]},
-                    headers={"Origin": ORIGIN},
+                context = await asyncio.wait_for(client.post(
+                    "/api/login/context", json={}, headers={"Origin": ORIGIN},
+                ), 2)
+                assert context.status_code == 200
+                signed_in = await asyncio.wait_for(client.post("/api/login", json=valid_login,
+                    headers={"Origin": ORIGIN, "X-Login-CSRF": context.json()["csrf"]},
                 ), 3)
                 assert signed_in.status_code == 200
                 assert (await asyncio.wait_for(client.get("/api/messages"), 2)).status_code == 200

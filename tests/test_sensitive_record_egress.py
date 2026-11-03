@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 from types import SimpleNamespace
 
@@ -202,8 +203,7 @@ def test_native_checkpoint_and_saved_summary_metadata_require_control_value_read
     teams.save_handoff(handoff)
     config = _runbook_config(runs, registry=registry, team_store=teams)
     ctx = _context("Viewer")
-    ctx.perms["can_view_metrics"] = can_view_metrics
-    ctx.perms["can_view_audit"] = False
+    ctx = replace(ctx, perms={**ctx.perms, "can_view_metrics": can_view_metrics, "can_view_audit": False})
     before = deepcopy((runs.load(run["run_id"]), teams.list_handoffs()))
     st = _FakeStreamlit()
 

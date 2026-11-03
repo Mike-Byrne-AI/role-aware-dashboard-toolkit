@@ -17,7 +17,7 @@ verificationDialog.id="verification-dialog";verificationDialog.setAttribute("ari
 const passkeyDialog=document.createElement("dialog");
 passkeyDialog.id="passkey-dialog";passkeyDialog.setAttribute("aria-labelledby","passkey-dialog-title");
 document.body.append(sessionDialog,verificationDialog,passkeyDialog);
-let sessionView=null,verificationView=null,passkeyView=null,passkeyLogin=null;
+let sessionView=null,verificationView=null,passkeyView=null;
 const BOARD_POLL_MS = 10000;
 let boardTimer;
 let boardRequest = null;
@@ -70,9 +70,10 @@ const empty = (title, body, name = "calendar") => `<div class="empty">${icon(nam
 async function api(path, method = "GET", body, options = {}) {
   const headers = { "Accept": "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET" && state.csrf) headers["X-CSRF-Token"] = state.csrf;
+  const sessionCsrf=options.sessionCsrf===undefined?state.csrf:options.sessionCsrf;
+  if (method !== "GET" && sessionCsrf) headers["X-CSRF-Token"] = sessionCsrf;
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
-  if (options.passkeyCsrf) headers["X-Passkey-CSRF"] = options.passkeyCsrf;
+  if (options.loginCsrf) headers["X-Login-CSRF"] = options.loginCsrf;
   let response;
   try {
     response = await fetch(path, {method, headers, credentials:"same-origin", cache:"no-store", signal:options.signal, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -95,6 +96,58 @@ async function api(path, method = "GET", body, options = {}) {
     throw error;
   }
   return data;
+}
+
+const loginFlow=window.WestbridgeLoginFlow.create({request:api,currentSession:()=>state,busyChanged:syncLoginControls});
+function syncLoginControls() {
+  const form=document.querySelector("#login-form");
+  if(!form)return;
+  form.querySelectorAll("input,button").forEach(control=>{control.disabled=loginFlow.busy;});
+  const status=form.querySelector("#login-status");
+  if(loginFlow.busy){
+    status.dataset.busy="true";
+    status.textContent="Waiting for this sign-in to finish. You can visit the public board while it completes.";
+    status.hidden=false;
+  } else if(status.dataset.busy==="true") {
+    delete status.dataset.busy;
+    status.textContent="";status.hidden=true;
+  }
+}
+function loginDeadline(context,form) {
+  const status=form.querySelector("#login-status");
+  delete status.dataset.busy;
+  status.textContent=`Complete this sign-in by ${sessionTime(context.expires_at)}. This browser's sign-in window ends ${sessionTime(context.flow_expires_at)}; signing in after that time starts a new eight-hour window.`;
+  status.hidden=false;
+}
+async function signIn(form,method) {
+  if(state.user||loginFlow.busy||!form)return;
+  const ticket=navigation,values=new FormData(form);
+  const current=()=>navigation===ticket&&!state.user&&form.isConnected;
+  const otp=String(values.get("otp")||"").trim();
+  const body={username:String(values.get("username")||"").trim(),password:values.get("password"),...(otp?{otp}:{})};
+  values.delete("password");values.delete("otp");
+  form.querySelector('[name="password"]').value="";
+  form.querySelector('[name="otp"]').value="";
+  const target=form.querySelector('[role="alert"]');target.hidden=true;
+  try {
+    const session=await loginFlow.run({owns:current,started:context=>loginDeadline(context,form)},async operation=>{
+      if(method==="passkey") {
+        const {request_id,credential}=await passkeyCeremony("/api/passkeys/login",false,{signal:operation.signal},operation.context.csrf);
+        operation.dispatch();
+        return api("/api/passkeys/login/verify","POST",{request_id,credential},{loginCsrf:operation.context.csrf});
+      }
+      operation.dispatch();
+      return api("/api/login","POST",body,{loginCsrf:operation.context.csrf});
+    });
+    if(!session||!current())return;
+    setSession(session);state.guest=false;await navigate(isAdmin()?"overview":"schedule");
+  } catch(error) {
+    if(current()) {
+      if(!error.status&&!["AbortError","NotAllowedError","InvalidStateError"].includes(error.name))
+        error.message="Sign-in could not be confirmed. Check this browser's current account before starting a new sign-in.";
+      errorAt(passkeyError(error),target);
+    }
+  } finally {body.password="";if("otp" in body)body.otp="";}
 }
 
 const CREATE_RETRIES_STORAGE="westbridge.create-retries.v1";
@@ -255,10 +308,24 @@ window.addEventListener("offline", () => startBoardUpdates());
 window.addEventListener("pagehide", stopBoardUpdates);
 window.addEventListener("pageshow", event => {if(event.persisted)startBoardUpdates(true);});
 
+const enrollmentUI=window.WestbridgeEnrollment.create({
+  escapeHTML,
+  captureSession:()=>{const account=state.user?.id,csrf=state.csrf;return()=>state.user?.id===account&&state.csrf===csrf;},
+  completed:username=>{
+    setSession({});state.data={};state.guest=false;renderLogin();
+    document.querySelector("#username").value=username;
+    const notice=document.createElement("p");notice.id="enrollment-completion";notice.setAttribute("role","status");notice.tabIndex=-1;
+    notice.textContent="Account setup is complete. Wait for your authenticator to show a new code, then sign in with your new password and that code.";
+    document.querySelector("#login-form").before(notice);notice.focus();
+  },
+});
+
 function setSession(session) {
   if(state.user?.id!==session.user?.id || state.csrf!==(session.csrf||""))closeSecurityDialogs();
   state.user = session.user || null;
   state.csrf = session.csrf || "";
+  state.session_id=session.session_id||"";
+  state.expires_at=session.expires_at||null;
   state.frozen = Boolean(session.frozen);
   state.freeze_revision = session.freeze_revision ?? 0;
 }
@@ -296,11 +363,12 @@ function closeVerification() {
 }
 
 function closeSecurityDialogs() {
+  enrollmentUI.close();
   closeVerification();sessionView=null;
   sessionDialog.close();sessionDialog.replaceChildren();
   passkeyView?.controller?.abort();passkeyView=null;
   passkeyDialog.close();passkeyDialog.replaceChildren();
-  passkeyLogin?.controller.abort();passkeyLogin=null;
+  loginFlow.cancelPreparation();
 }
 
 verificationDialog.addEventListener("close",()=>{if(!verificationDialog.open)closeVerification();});
@@ -310,8 +378,9 @@ passkeyDialog.addEventListener("close",()=>{if(!passkeyDialog.open){passkeyView?
 function openVerification(target=null) {
   if(!state.user)return;
   closeVerification();
-  const view={owns:securityOwner(),target};verificationView=view;
-  verificationDialog.innerHTML=`<div class="dialog-header"><div><h2 id="verification-dialog-title">Verify your identity</h2><p>Confirm your identity to continue with sensitive changes. Your draft stays open.</p></div><button class="icon-button" data-action="verification-close" aria-label="Close identity verification">${icon("close")}</button></div><form id="verification-form"><div class="dialog-body"><p class="dialog-copy">Verification lasts five minutes. After it succeeds, choose your original action again. Nothing is saved automatically.</p><div class="error" role="alert" tabindex="-1" hidden></div><label class="field"><span>Current password</span><input type="password" name="current_password" autocomplete="current-password" maxlength="128" required></label>${isAdmin()?'<label class="field"><span>Authenticator code</span><input name="otp" aria-label="Authenticator code" aria-describedby="fresh-code-hint" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required><small id="fresh-code-hint">Use a fresh code. A code accepted at sign-in cannot be used again.</small></label>':""}</div><div class="dialog-footer"><button type="button" class="button" data-action="verification-close">Cancel verification</button><button type="submit" class="button primary">Verify identity</button></div></form>`;
+  const account=state.user.id,csrf=state.csrf;
+  const view={owns:securityOwner(),sameSession:()=>state.user?.id===account&&state.csrf===csrf,target};verificationView=view;
+  verificationDialog.innerHTML=`<div class="dialog-header"><div><h2 id="verification-dialog-title">Verify your identity</h2><p>Confirm your identity to continue with sensitive changes. Your draft stays open.</p></div><button class="icon-button" data-action="verification-close" aria-label="Close identity verification">${icon("close")}</button></div><form id="verification-form"><div class="dialog-body"><p class="dialog-copy">Verification lasts five minutes. After it succeeds, choose your original action again. Nothing is saved automatically.</p><div class="error" role="alert" tabindex="-1" hidden></div><label class="field"><span>Current password</span><input type="password" name="current_password" autocomplete="current-password" maxlength="128" required></label>${state.user?.mfa_required?'<label class="field"><span>Authenticator code</span><input name="otp" aria-label="Authenticator code" aria-describedby="fresh-code-hint" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required><small id="fresh-code-hint">Use a fresh code. A code accepted at sign-in cannot be used again.</small></label>':""}</div><div class="dialog-footer"><button type="button" class="button" data-action="verification-close">Cancel verification</button><button type="submit" class="button primary">Verify identity</button></div></form>`;
   verificationDialog.showModal();verificationDialog.querySelector("input")?.focus();
   const passkeyButton=document.createElement("button");
   passkeyButton.type="button";passkeyButton.className="button";passkeyButton.dataset.action="verification-passkey";
@@ -338,9 +407,9 @@ function passkeyJSON(credential) {
   return {id:credential.id,rawId:passkeyBase64(credential.rawId),type:credential.type,response,
     authenticatorAttachment:credential.authenticatorAttachment,clientExtensionResults:credential.getClientExtensionResults()};
 }
-async function passkeyCeremony(endpoint,create,controller) {
+async function passkeyCeremony(endpoint,create,controller,loginCsrf) {
   if(!passkeysSupported())throw new Error("Passkeys require a supported browser on HTTPS or this local demonstration.");
-  const challenge=await api(endpoint+"/options","POST",{}, {signal:controller.signal});
+  const challenge=await api(endpoint+"/options","POST",{}, {signal:controller.signal,loginCsrf});
   const publicKey=passkeyOptions(challenge.options,create);
   const credential=await navigator.credentials[create?"create":"get"]({publicKey,signal:controller.signal});
   if(!credential)throw new Error("The passkey request was not completed.");
@@ -351,13 +420,37 @@ function passkeyError(error) {
   if(error.name==="InvalidStateError")return new Error("This authenticator may already have a passkey for your account. Use that passkey or choose another authenticator.");
   return error;
 }
-function finishVerification(view) {
+async function finishVerification(view,session) {
+  // A dismissed dialog cannot cancel a committed rotation. Adopt its replacement
+  // only while this tab still owns the original account and bearer context.
+  if(!view.sameSession())return;
+  if(session?.ok!==true||session.user?.id!==state.user?.id||typeof session.csrf!=="string"||!session.csrf||session.csrf===state.csrf)
+    throw new Error("Verification could not be confirmed. Sign in again before making sensitive changes.");
+  const installed=await api("/api/session");
+  if(!view.sameSession())return;
+  if(installed.user?.id!==session.user.id||installed.csrf!==session.csrf||!session.session_id||installed.session_id!==session.session_id)
+    throw new Error("Sign-in changed while verification completed. Refresh to check the current account before continuing.");
+  session=installed;
+  const current=verificationView===view&&view.owns()&&verificationDialog.open;
   const original=view.target;
-  closeVerification();
+  // Rotation invalidates every callback that captured the old CSRF value.
+  // Reopen a security view under the new session; never replay its action.
+  const resumePasskeys=current&&passkeyDialog.open&&passkeyView?.owns();
+  const passkeyName=resumePasskeys?passkeyDialog.querySelector('input[name="name"]')?.value:"";
+  const resumeSessions=current&&sessionDialog.open&&sessionView?.owns();
+  setSession(session);
+  if(!current){toast("Identity verification completed. No changes were saved.");return;}
+  let target=original;
+  if(resumePasskeys){
+    openPasskeys();
+    passkeyDialog.querySelector('input[name="name"]').value=passkeyName||"";
+    target=passkeyDialog.querySelector('[role="alert"]');
+  } else if(resumeSessions){
+    openSessions();target=sessionDialog.querySelector('[role="alert"]');
+  }
   const message="Identity verified. Choose your original action again when you are ready.";
-  if(original?.isConnected){original.textContent=message;original.hidden=false;original.focus();}
+  if(target?.isConnected){target.textContent=message;target.hidden=false;target.focus();}
   toast(message);
-  if(sessionView?.owns()&&sessionDialog.open)loadSessions(sessionView);
 }
 async function verifyWithPasskey(button) {
   const view=verificationView;
@@ -367,31 +460,16 @@ async function verifyWithPasskey(button) {
   const form=verificationDialog.querySelector("form"),controls=[...form.querySelectorAll("input,button:not([data-action=verification-close])")];
   form.reset();controls.forEach(control=>{control.disabled=true;});
   try {
+    await loginFlow.context({signal:view.controller.signal,owns:current});
+    if(!current())return;
     const {request_id,credential}=await passkeyCeremony("/api/security/passkeys/reauth",false,view.controller);
     if(!current())return;
-    const result=await api("/api/security/passkeys/reauth/verify","POST",{request_id,credential},{signal:view.controller.signal});
-    if(!current())return;
-    if(result?.ok!==true)throw new Error("Passkey verification could not be confirmed. Try again.");
-    finishVerification(view);
+    // Keep the final response observable even when the dialog is dismissed:
+    // cancellation can stop a device ceremony, but cannot undo server commit.
+    const result=await api("/api/security/passkeys/reauth/verify","POST",{request_id,credential});
+    await finishVerification(view,result);
   } catch(error){if(current())errorAt(passkeyError(error),form.querySelector('[role="alert"]'));}
   finally {if(current()){view.busy=false;controls.forEach(control=>{control.disabled=false;});}}
-}
-async function signInWithPasskey(button) {
-  if(state.user||passkeyLogin)return;
-  const ticket=navigation,form=document.querySelector("#login-form"),controller=new AbortController();
-  const operation={controller};passkeyLogin=operation;
-  const current=()=>passkeyLogin===operation&&navigation===ticket&&!state.user&&form.isConnected;
-  const controls=[...form.querySelectorAll("input,button")];controls.forEach(control=>{control.disabled=true;});
-  form.reset();
-  try {
-    const {request_id,credential,csrf}=await passkeyCeremony("/api/passkeys/login",false,controller);
-    if(!current())return;
-    const session=await api("/api/passkeys/login/verify","POST",{request_id,credential},{signal:controller.signal,passkeyCsrf:csrf});
-    if(!current())return;
-    if(!session?.user||typeof session.csrf!=="string")throw new Error("Passkey sign-in could not be confirmed. Try again.");
-    setSession(session);state.guest=false;await navigate(isAdmin()?"overview":"schedule");
-  } catch(error){if(current())errorAt(passkeyError(error),form.querySelector('[role="alert"]'));}
-  finally {if(current()){passkeyLogin=null;controls.forEach(control=>{control.disabled=false;});}}
 }
 async function loadPasskeys(view) {
   const sequence=view.sequence=(view.sequence||0)+1;
@@ -469,10 +547,10 @@ document.addEventListener("submit",async(event)=>{
   const body={current_password:values.get("current_password"),...(values.has("otp")?{otp:values.get("otp")}: {})};
   form.reset();form.dataset.submitting="true";controls.forEach(control=>{control.disabled=true;});target.hidden=true;
   try {
-    const data=await api("/api/security/reauthenticate","POST",body);
+    await loginFlow.context({owns:current});
     if(!current())return;
-    if(data?.ok!==true)throw new Error("Verification could not be confirmed. Try again with a fresh code.");
-    finishVerification(view);
+    const data=await api("/api/security/reauthenticate","POST",body);
+    await finishVerification(view,data);
   } catch(error) {
     if(current()) {
       // Incorrect credentials keep this form usable. Only an expired session
@@ -491,7 +569,7 @@ function renderLogin() {
   stopBoardUpdates();
   removeSubmissionChallenge();
   editor.close();editor.replaceChildren();dialogState=null;
-  if(location.pathname === "/board" || location.hash === "#board")history.replaceState(null, "", "/");
+  if(["/board","/security-lab"].includes(location.pathname) || location.hash === "#board")history.replaceState(null, "", "/");
   navigation++;
   state.page = "";
   state.submissionReceipt = false;
@@ -503,22 +581,29 @@ function renderLogin() {
         <div class="story-preview" aria-hidden="true"><div class="preview-head"><span>Your working day, together.</span><span>TEAM WORKSPACE</span></div><div class="preview-event"><span class="preview-time">09:00 AM</span><span class="preview-rule"></span><div><strong>Start with a shared plan</strong><small>Team schedules · Clear responsibilities</small></div></div><div class="preview-event"><span class="preview-time">11:30 AM</span><span class="preview-rule tan"></span><div><strong>Keep the conversation moving</strong><small>Company updates · Team messages</small></div></div><div class="preview-footer"><span>Built around the people doing the work.</span><div class="preview-avatars"><i>AM</i><i>BC</i><i>CR</i><i>+2</i></div></div></div>
       </div><div class="story-footer"><span>WESTBRIDGE BUSINESS GROUP</span><span>Clarity. Every working day.</span></div>
     </section>
-    <section class="login-panel" aria-labelledby="login-heading"><div class="login-top">Your business, in good company.</div><div class="login-form-wrap"><div class="eyebrow">The team workspace</div><h2 id="login-heading">Welcome back.</h2><p>Sign in to pick up where your team left off.</p><form id="login-form" class="login-form"><div id="login-error" class="error" role="alert" tabindex="-1" hidden></div><label class="field"><span>Username</span><input name="username" id="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="64" placeholder="Your username"></label><label class="field"><span>Password</span><span class="password-wrap"><input name="password" id="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Your password"><button type="button" class="icon-button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></span></label><label class="field"><span>Authenticator code</span><input name="otp" aria-label="Authenticator code" type="text" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code" aria-describedby="otp-hint" placeholder="6-digit code"><small id="otp-hint">Administrators use the code from their authenticator app. Employees can leave this blank.</small></label><button class="button primary" type="submit">Sign in ${icon("arrow")}</button></form><div class="login-separator">OR VISIT OUR PUBLIC BOARD</div><button class="button guest-button" data-action="guest">Continue as guest ${icon("arrow")}</button><p class="guest-caption">Company news and announcements. No account needed.</p></div><footer class="login-footer">© ${new Date().getFullYear()} Westbridge Business Group.<br>A place for good work.</footer></section>
+    <section class="login-panel" aria-labelledby="login-heading"><div class="login-top">Your business, in good company.</div><div class="login-form-wrap"><div class="eyebrow">The team workspace</div><h2 id="login-heading">Welcome back.</h2><p>Sign in to pick up where your team left off.</p><form id="login-form" class="login-form"><div id="login-error" class="error" role="alert" tabindex="-1" hidden></div><p id="login-status" class="dialog-copy" role="status" hidden></p><label class="field"><span>Username</span><input name="username" id="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="64" placeholder="Your username"></label><label class="field"><span>Password</span><span class="password-wrap"><input name="password" id="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Your password"><button type="button" class="icon-button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></span></label><label class="field"><span>Authenticator code</span><input name="otp" aria-label="Authenticator code" type="text" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code" aria-describedby="otp-hint" placeholder="6-digit code"><small id="otp-hint">Use the current code from your authenticator. Accounts awaiting an operator-managed upgrade may not require one yet.</small></label><button class="button primary" type="submit">Sign in ${icon("arrow")}</button></form><div class="login-separator">OR VISIT OUR PUBLIC BOARD</div><button class="button guest-button" data-action="guest">Continue as guest ${icon("arrow")}</button><p class="guest-caption">Company news and announcements. No account needed.</p></div><footer class="login-footer">© ${new Date().getFullYear()} Westbridge Business Group.<br>A place for good work.</footer></section>
   </main>`;
   const passkeyButton=document.createElement("button");passkeyButton.type="button";passkeyButton.className="button";
   passkeyButton.dataset.action="passkey-login";passkeyButton.textContent="Sign in with a passkey";
   document.querySelector("#login-form").append(passkeyButton);
+  const setupButton=document.createElement("button");setupButton.type="button";setupButton.className="button";
+  setupButton.dataset.action="enrollment-open";setupButton.textContent="Set up or recover your account";
+  document.querySelector("#login-form").append(setupButton);
+  const labLink=document.createElement("a");labLink.href="/security-lab";labLink.className="button guest-button";
+  labLink.textContent="Explore the security lab";document.querySelector(".login-form-wrap").append(labLink);
+  syncLoginControls();
 }
 
-const pages = {overview:{label:"Overview",icon:"grid"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"}};
+const pages = {overview:{label:"Overview",icon:"grid"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"},lab:{label:"Security lab",icon:"shield"}};
 
 function shell(content) {
   const title = pages[state.page]?.label || "Workspace";
   const guest = !state.user;
-  const allowed = isAdmin() ? ["overview","schedule","messages","outreach","public","security"] : ["schedule","messages","public"];
+  const allowed = isAdmin() ? ["overview","schedule","messages","outreach","public","security","lab"] : ["schedule","messages","public","lab"];
   const sidebar = `<aside class="sidebar" id="sidebar" aria-label="Workspace navigation"><div class="row">${brand()}<button class="icon-button mobile-close" aria-label="Close navigation" data-action="menu-close">${icon("close")}</button></div><p class="workspace-label">Your workspace</p><nav>${allowed.map(key=>`<button class="nav-link${state.page===key?" active":""}" data-page="${key}"${state.page===key?' aria-current="page"':""}>${icon(pages[key].icon)}<span>${pages[key].label}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="sidebar-note"><strong>Westbridge Business Group</strong>Good people. Thoughtful work.</div></div></aside>`;
-  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
-  app.innerHTML = `<div class="workspace${guest?" guest-workspace":""}">${guest?"":sidebar}<div class="workspace-main"><header class="topbar">${header}</header><main id="main" class="content">${!guest && state.frozen ? `<div class="notice frozen-banner" role="status">${icon("lock")}<span>Workspace changes are paused. You can continue to view schedules, messages, and updates.${isAdmin()?" You can still unpublish posts and pause employee access.":""}</span></div>`:""}${content}<footer class="workspace-footer"><span>© ${new Date().getFullYear()} Westbridge Business Group</span><span>${guest?"Company news & community":"A clearer view of your working day."}</span></footer></main></div></div>`;
+  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><a class="button" href="${state.page==="lab"?"/board":"/security-lab"}">${state.page==="lab"?"Public board":"Security lab"}</a><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
+  const expiryNotice=!guest&&Number.isFinite(state.expires_at)?`<p id="session-expiry" class="notice" role="status">This sign-in expires no later than ${e(sessionTime(state.expires_at))}; inactivity may end it sooner. Sign-ins that reuse this window share its deadline. Identity verification does not extend it.</p>`:"";
+  app.innerHTML = `<div class="workspace${guest?" guest-workspace":""}">${guest?"":sidebar}<div class="workspace-main"><header class="topbar">${header}</header><main id="main" class="content">${!guest && state.frozen ? `<div class="notice frozen-banner" role="status">${icon("lock")}<span>Workspace changes are paused. You can continue to view schedules, messages, and updates.${isAdmin()?" You can still unpublish posts and pause employee access.":""}</span></div>`:""}${expiryNotice}${content}<footer class="workspace-footer"><span>© ${new Date().getFullYear()} Westbridge Business Group</span><span>${guest?"Company news & community":"A clearer view of your working day."}</span></footer></main></div></div>`;
   document.title = `${title} · Westbridge`;
 }
 
@@ -531,7 +616,7 @@ async function navigate(page, options = {}) {
   stopBoardUpdates();
   const ticket = ++navigation;
   if (!Object.hasOwn(pages,page)) page = isAdmin() ? "overview" : "schedule";
-  if (!state.user && page !== "public") {renderLogin(); return;}
+  if (!state.user && !["public","lab"].includes(page)) {renderLogin(); return;}
   if (state.user && !isAdmin() && ["overview","outreach","security"].includes(page)) page = "schedule";
   state.page = page;
   shell(heading("Workspace", pages[page].label, "") + '<div class="panel empty" role="status" aria-busy="true">Loading your workspace…</div>');
@@ -540,7 +625,8 @@ async function navigate(page, options = {}) {
     if (page === "overview") {
       const [overview,schedule,users] = await Promise.all([api("/api/admin/overview"),api("/api/schedule"),api("/api/admin/users")]);
       data = {...overview,...schedule,...users};
-    } else if (page === "schedule") data = await api("/api/schedule");
+    } else if (page === "lab") data = await api("/api/security-lab");
+    else if (page === "schedule") data = await api("/api/schedule");
     else if (page === "messages") data = await api("/api/messages");
     else if (page === "outreach") data = await api("/api/admin/contacts");
     else if (page === "security") {
@@ -557,9 +643,9 @@ async function navigate(page, options = {}) {
     if (ticket !== navigation) return;
     state.data = data;
     if (data.frozen !== undefined) {state.frozen=Boolean(data.frozen);state.freeze_revision=data.freeze_revision;}
-    const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity};
+    const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity,lab:data=>window.WestbridgeSecurityLab.render(data,{e,heading,isAdmin:isAdmin()})};
     shell(render[page](data));
-    history.replaceState(null, "", page === "public" ? "/board" : "/");
+    history.replaceState(null, "", page === "public" ? "/board" : page === "lab" ? "/security-lab" : "/");
     if(page === "public")startBoardUpdates();
     const pageTitle = document.querySelector("#main h1");
     pageTitle?.setAttribute("tabindex", "-1");
@@ -903,6 +989,7 @@ function profileDialog() {
   const button=document.createElement("button");button.type="button";button.className="button";
   button.dataset.action="passkeys-open";button.textContent="Manage your passkeys";
   editor.querySelector('[data-action="sessions-open"]').after(button);
+  if(!state.user.mfa_required){const upgrade=document.createElement("button");upgrade.type="button";upgrade.className="button";upgrade.dataset.action="enrollment-open";upgrade.textContent="Complete account upgrade";button.after(upgrade);}
 }
 
 function confirmation(type,title,body,record,label) {
@@ -915,7 +1002,8 @@ document.addEventListener("click",async(event)=>{
   if(button.dataset.page){navigate(button.dataset.page);return;}
   const action=button.dataset.action;
   if(!action)return;
-  if(action==="passkey-login"){await signInWithPasskey(button);return;}
+  if(action==="enrollment-open"){const username=state.user?.username||document.querySelector("#username")?.value||"";closeSecurityDialogs();editor.close();navigation++;enrollmentUI.open(username);return;}
+  if(action==="passkey-login"){await signIn(document.querySelector("#login-form"),"passkey");return;}
   if(action==="verification-passkey"){await verifyWithPasskey(button);return;}
   if(action==="passkeys-open"){openPasskeys();return;}
   if(action==="passkeys-close"){passkeyView?.controller?.abort();passkeyView=null;passkeyDialog.close();passkeyDialog.replaceChildren();return;}
@@ -972,6 +1060,24 @@ document.addEventListener("click",async(event)=>{
   if(action==="menu-close"){closeMenu();return;}
   if(action==="profile"){profileDialog();return;}
   if(action==="activity"&&isAdmin()&&state.page==="overview"){activityDialog();return;}
+  if(action==="lab-events"&&isAdmin()&&state.page==="lab"){
+    const owns=securityOwner(),region=document.querySelector(".lab-timeline");
+    const current=()=>owns()&&region?.isConnected&&state.page==="lab";
+    button.disabled=true;region.querySelector("#lab-events-error").hidden=true;
+    region.querySelector("#lab-events-status").textContent="Loading protected events…";
+    try{
+      const data=await api("/api/admin/security/events?limit=50");
+      if(!current())return;
+      region.querySelector("#lab-events-content").innerHTML=window.WestbridgeSecurityLab.timeline(data,e);
+      region.querySelector("#lab-events-status").textContent="Latest retained events. Refresh to observe new decisions.";
+    }catch(error){
+      if(!current())return;
+      region.querySelector("#lab-events-content").replaceChildren();
+      region.querySelector("#lab-events-status").textContent="The timeline could not be loaded.";
+      errorAt(error,region.querySelector("#lab-events-error"));
+    }finally{if(current())button.disabled=false;}
+    return;
+  }
   if(action==="recovery-copy"&&isAdmin()&&state.page==="security"){
     const code=document.querySelector(`#recovery-${button.dataset.command}`);
     if(!code)return;
@@ -1080,6 +1186,7 @@ document.addEventListener("submit",async(event)=>{
   const form=event.target;
   if(!["login-form","message-form","dialog-form"].includes(form.id))return;
   event.preventDefault();
+  if(form.id==="login-form"){await signIn(form,"password");return;}
   if(form.id==="dialog-form" && ["board-share","activity"].includes(dialogState?.type))return;
   if(form.dataset.submitting==="true")return;
   const submission=beginSubmission(form);
@@ -1097,13 +1204,6 @@ document.addEventListener("submit",async(event)=>{
   target.hidden=true;
   submit.disabled=true;submit.textContent="Saving…";
   try {
-    if(form.id==="login-form") {
-      submit.textContent="Signing in…";
-      const otp=String(values.get("otp")||"").trim();
-      const session=await api("/api/login","POST",{username:values.get("username").trim(),password:values.get("password"),...(otp?{otp}:{})});
-      if(!isCurrent())return;
-      setSession(session);state.guest=false;await navigate(isAdmin()?"overview":"schedule");return;
-    }
     if(form.id==="message-form") {
       const body=values.get("body").trim();if(!body)throw new Error("Write a message before posting.");
       await createRecord(form,"/api/messages",{body},"message");
@@ -1215,7 +1315,8 @@ document.addEventListener("submit",async(event)=>{
 
 async function start() {
   const boardLanding=location.pathname==="/board" || location.hash==="#board";
-  try {const session=await api("/api/session");setSession(session);if(boardLanding){state.guest=!state.user;await navigate("public");}else if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
+  const labLanding=location.pathname==="/security-lab";
+  try {const session=await api("/api/session");setSession(session);if(labLanding){state.guest=!state.user;await navigate("lab");}else if(boardLanding){state.guest=!state.user;await navigate("public");}else if(state.user)await navigate(isAdmin()?"overview":"schedule");else renderLogin();}
   catch(error){renderLogin();errorAt(error,document.querySelector("#login-error"));}
 }
 start();

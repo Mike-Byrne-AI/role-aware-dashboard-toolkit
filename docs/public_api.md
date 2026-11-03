@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `63`
+- Documented module-only public symbols: `70`
 
 ## Usage recipes
 
@@ -137,6 +137,21 @@ Root exports: `0`; module-only symbols: `4`.
 
 Module-only reference helpers from role_aware_dashboard_toolkit.guidance; no host application execution.
 
+## Versioned live state (module imports)
+
+Classification: `stable`
+
+Root exports: `0`; module-only symbols: `6`.
+
+- `StateStore` (module-only)
+- `StateSnapshot` (module-only)
+- `StateConflict` (module-only)
+- `StateStoreError` (module-only)
+- `InMemoryStateStore` (module-only)
+- `SQLiteStateStore` (module-only)
+
+Import from state_store. Detached JSON snapshots and atomic revision-checked replacements; SQLite persists public control values on one host. Audit and external operations are separate transactions.
+
 ## Operator record modules
 
 Classification: `stable`
@@ -176,12 +191,13 @@ Module-only local operator records; these do not expand the root API.
 
 Classification: `stable`
 
-Root exports: `2`; module-only symbols: `0`.
+Root exports: `2`; module-only symbols: `1`.
 
 - `FASTAPI_AVAILABLE`
 - `create_app`
+- `APIAuthentication` (module-only)
 
-Optional FastAPI routes for controls, profiles, roles, and audit.
+Optional FastAPI routes for controls, profiles, roles, and audit. Import APIAuthentication from api_access for host-verified per-request identity and live grants in one isolated organization app.
 
 ## Neutral packets
 

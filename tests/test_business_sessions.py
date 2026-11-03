@@ -1,5 +1,7 @@
 """Fresh authentication and own-session management with disposable accounts."""
 
+from tools.business_login_client import login_post
+
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
@@ -31,7 +33,10 @@ def verify(business, actor, username="admin", **patch):
     if "otp" in login:
         payload["otp"] = login["otp"]
     payload.update(patch)
-    return actor.request("POST", "/api/security/reauthenticate", json=payload)
+    response = actor.request("POST", "/api/security/reauthenticate", json=payload)
+    if response.status_code == 200:
+        actor.csrf = response.json()["csrf"]
+    return response
 
 
 def test_inventory_is_own_active_sessions_without_bearer_material(business, business_admin):
@@ -81,8 +86,8 @@ def test_stale_admin_can_contain_but_cannot_restore_authority(business, business
     post = response.json()["post"]
     expire_verification(business, business_admin)
     assert business_admin.request("POST", f"/api/admin/posts/{post['id']}/unpublish", json={"revision": post["revision"]}).status_code == 200
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 200
-    denied = business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": 1})
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": business.user_revision("alex")}).status_code == 200
+    denied = business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": business.user_revision("alex")})
     assert denied.status_code == 403
     assert denied.headers["x-reauthentication-required"] == "true"
 
@@ -93,7 +98,9 @@ def test_reverification_requires_admin_password_and_new_mfa_code(business, busin
     assert verify(business, business_admin, otp=None).status_code == 403
     payload = business.login_payload("admin")
     body = {"current_password": payload["password"], "otp": payload["otp"]}
-    assert business_admin.request("POST", "/api/security/reauthenticate", json=body).status_code == 200
+    response = business_admin.request("POST", "/api/security/reauthenticate", json=body)
+    assert response.status_code == 200
+    business_admin.csrf = response.json()["csrf"]
     assert business_admin.request("POST", "/api/security/reauthenticate", json=body).status_code == 403
     assert inventory(business_admin)["verification_expires_at"] > 0
 
@@ -188,3 +195,109 @@ def test_csrf_and_payload_fields_cannot_manufacture_fresh_auth(business, busines
     assert inventory(business_admin)["verification_expires_at"] == 0
     with business.db() as connection:
         assert connection.execute("SELECT COUNT(*) FROM login_limits").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("username", ["admin", "alex"])
+def test_reverification_replaces_bearer_and_csrf_without_extending_session(business, username):
+    owner = business.login(username)
+    copied = business.client()
+    old_token, old_csrf = owner.client.cookies[COOKIE_NAME], owner.csrf
+    copied.cookies.set(COOKIE_NAME, old_token)
+    before = inventory(owner)["sessions"][0]
+    with business.app.state.database.readonly_snapshot() as connection:
+        absolute_expiry = connection.execute("SELECT expires_at FROM sessions WHERE token_hash=?", (token_hash(old_token),)).fetchone()[0]
+    expire_verification(business, owner)
+    response = verify(business, owner, username)
+    assert response.status_code == 200
+    new_token = owner.client.cookies[COOKIE_NAME]
+    assert bool(new_token != old_token), "Reverification must replace the bearer"
+    assert response.json()["csrf"] != old_csrf
+    owner.csrf = response.json()["csrf"]
+    assert copied.get("/api/messages").status_code == 401
+    assert copied.post("/api/security/reauthenticate", json={
+        "current_password": business.credentials[username],
+    }, headers={"Origin": "http://127.0.0.1:8091", "X-CSRF-Token": old_csrf}).status_code == 401
+    assert owner.request("GET", "/api/messages").status_code == 200
+    after = inventory(owner)["sessions"][0]
+    assert after["id"] == before["id"]
+    assert after["created_at"] == before["created_at"]
+    with business.db() as connection:
+        session = connection.execute("SELECT * FROM sessions WHERE token_hash=?", (token_hash(new_token),)).fetchone()
+        assert session["expires_at"] == absolute_expiry
+        assert connection.execute("SELECT 1 FROM sessions WHERE token_hash=?", (token_hash(old_token),)).fetchone() is None
+    assert owner.request("POST", "/api/messages", json={"body": "After verification"},
+                         headers={"X-CSRF-Token": old_csrf}).status_code == 403
+    assert owner.request("POST", "/api/messages", json={"body": "After verification"}).status_code == 201
+
+
+def test_login_with_shared_flow_revokes_delayed_rotation_descendant(business):
+    from business.browser_flow import COOKIE_NAME as FLOW_COOKIE_NAME
+    owner = business.login("alex")
+    old = owner.client.cookies[COOKIE_NAME]
+    # The browser has not received the first rotation response when another
+    # account signs in. This also covers a later descendant of that rotation.
+    for _ in range(2):
+        response = verify(business, owner, "alex")
+        assert response.status_code == 200
+        owner.csrf = response.json()["csrf"]
+    delayed_token = owner.client.cookies[COOKIE_NAME]
+    newer = business.client()
+    signed = login_post(newer, "/api/login", json=business.login_payload("blair"), headers={
+        "Origin": "http://127.0.0.1:8091",
+        "Cookie": f"{COOKIE_NAME}={old}; {FLOW_COOKIE_NAME}={owner.client.cookies[FLOW_COOKIE_NAME]}",
+    })
+    assert signed.status_code == 200
+    assert newer.get("/api/messages").status_code == 200
+    # Applying a late Set-Cookie can lose the new browser session, but must
+    # never restore the previous account's authority. Sign in again if needed.
+    assert newer.get("/api/messages", headers={"Cookie": f"{COOKIE_NAME}={delayed_token}"}).status_code == 401
+    assert owner.request("GET", "/api/messages").status_code == 401
+
+
+def test_reverification_response_loss_never_accepts_old_bearer(business):
+    owner = business.login("alex")
+    old_token, old_csrf = owner.client.cookies[COOKIE_NAME], owner.csrf
+    response = verify(business, owner, "alex")
+    assert response.status_code == 200
+    # Retry the request as a caller that never received the replacement cookie.
+    retry = owner.client.post("/api/security/reauthenticate", json={
+        "current_password": business.credentials["alex"],
+    }, headers={"Origin": "http://127.0.0.1:8091", "Cookie": f"{COOKIE_NAME}={old_token}",
+                "X-CSRF-Token": old_csrf})
+    assert retry.status_code == 401 and "set-cookie" not in retry.headers
+
+
+def test_rotation_audit_failure_rolls_back_token_bindings_and_freshness(business, business_admin, monkeypatch):
+    old_token = business_admin.client.cookies[COOKIE_NAME]
+    expire_verification(business, business_admin)
+
+    def fail_event(*args, **kwargs):
+        import sqlite3
+        raise sqlite3.OperationalError("Disposable event failure")
+
+    monkeypatch.setattr(session_routes, "record_event", fail_event)
+    response = verify(business, business_admin)
+    assert response.status_code == 503 and "set-cookie" not in response.headers
+    assert bool(business_admin.client.cookies[COOKIE_NAME] == old_token)
+    assert inventory(business_admin)["verification_expires_at"] == 0
+    assert business_admin.request("GET", "/api/messages").status_code == 200
+    with business.db() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM session_predecessors").fetchone()[0] == 0
+        assert connection.execute("SELECT token_hash FROM session_mfa").fetchone()[0] == token_hash(old_token)
+
+
+def test_rotation_lineage_capacity_refuses_without_forgetting_live_predecessors(business, monkeypatch):
+    owner = business.login("alex")
+    first = owner.client.cookies[COOKIE_NAME]
+    monkeypatch.setattr(session_state, "MAX_SESSION_PREDECESSORS", 1)
+    response = verify(business, owner, "alex")
+    assert response.status_code == 200
+    owner.csrf = response.json()["csrf"]
+    current = owner.client.cookies[COOKIE_NAME]
+    response = verify(business, owner, "alex")
+    assert response.status_code == 409 and "set-cookie" not in response.headers
+    assert bool(owner.client.cookies[COOKIE_NAME] == current)
+    assert owner.request("GET", "/api/messages").status_code == 200
+    with business.db() as connection:
+        assert connection.execute("SELECT predecessor_hash FROM session_predecessors").fetchone()[0] == token_hash(first)

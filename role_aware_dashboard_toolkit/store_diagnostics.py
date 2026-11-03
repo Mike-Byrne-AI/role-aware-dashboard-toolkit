@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import warnings
+import weakref
 from pathlib import Path
 from typing import Any
 from collections.abc import Iterable, MutableSequence
@@ -62,6 +63,17 @@ _STORE_RECORD_APPEND_UNSAFE_MESSAGE = (
 )
 _STORE_RECORD_ID_MISMATCH_MESSAGE = "store record id does not match its file"
 _STORE_RECORD_ID_CONFLICT_MESSAGE = "store record file holds a different record id"
+
+
+class _StoreAppendLock:
+    """Keep a path's lock alive while any appender owns or waits for it."""
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+
+
+_STORE_APPEND_LOCKS: weakref.WeakValueDictionary[str, _StoreAppendLock] = weakref.WeakValueDictionary()
+_STORE_APPEND_LOCKS_GUARD = threading.Lock()
 
 
 class StorePathSecurityError(Exception):
@@ -546,11 +558,31 @@ def append_text_record(
     *,
     root_dir: Path | None = None,
 ) -> Path:
+    """Append one complete record without interleaving in-process appenders.
+
+    The shared lock covers validation, tail recovery and every short-write
+    continuation. It does not coordinate other processes or external writers.
+    """
     target = _resolve_safe_store_write_path(path, root_dir=root_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    expected_stat = _probe_safe_store_append_file(target)
-    _append_validated_store_text(target, text, expected_stat)
+    coordinator = _store_append_lock(target)
+    with coordinator.lock:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        expected_stat = _probe_safe_store_append_file(target)
+        _append_validated_store_text(target, text, expected_stat)
     return target
+
+
+def _store_append_lock(path: Path) -> _StoreAppendLock:
+    # Resolve parent aliases and normalize Windows case before joining callers.
+    # Waiting/active calls retain a strong reference; idle paths disappear from
+    # the weak registry instead of accumulating for the process lifetime.
+    key = os.path.normcase(str(path.resolve(strict=False)))
+    with _STORE_APPEND_LOCKS_GUARD:
+        coordinator = _STORE_APPEND_LOCKS.get(key)
+        if coordinator is None:
+            coordinator = _StoreAppendLock()
+            _STORE_APPEND_LOCKS[key] = coordinator
+        return coordinator
 
 
 def atomic_write_json_record(path: Path, value: dict[str, Any], *, root_dir: Path | None = None) -> Path:

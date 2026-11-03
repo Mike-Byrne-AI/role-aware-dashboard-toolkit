@@ -22,9 +22,16 @@ import os
 import logging
 import hmac
 import ipaddress
+import json
+from copy import deepcopy
+from functools import wraps
+from threading import RLock
 from typing import Any
 
 from .audit import AuditLog
+from .access_audit import bind_audit_identity
+from .api_access import APIAuthentication
+from .state_store import StateStore, StateConflict, StateStoreError
 from ._record_projection import project_audit_events, project_record
 from .controls import (
     ControlDef,
@@ -50,6 +57,7 @@ from .security import (
     make_security_context,
     get_role,
     has_perm,
+    can_write,
     RoleDef,
     BUILTIN_ROLES,
 )
@@ -175,11 +183,12 @@ def _resolve_api_context(app_state: _AppState, x_api_key: str) -> SecurityContex
     raise HTTPException(status_code=401, detail="API key required")
 
 
-def _require_permission(ctx: SecurityContext, permission: str) -> None:
+def _require_permission(ctx: SecurityContext, permission: str, *, write: bool = False) -> None:
     # An empty or missing permission name denies, as the dashboard UI does.
     if not isinstance(permission, str) or not permission:
         raise HTTPException(status_code=403, detail="Forbidden: no permission is declared")
-    if not has_perm(ctx, permission):
+    check = can_write if write else has_perm
+    if not check(ctx, permission):
         raise HTTPException(status_code=403, detail=f"Forbidden: requires {permission}")
 
 
@@ -478,6 +487,8 @@ class _AppState:
         allow_anonymous: bool = False,
         anonymous_role: str = _ANONYMOUS_ROLE,
         api_role: str | None = None,
+        authentication: APIAuthentication | None = None,
+        state_store: StateStore | None = None,
     ) -> None:
         self.registry = registry
         self.audit = audit if audit is not None else AuditLog()
@@ -487,6 +498,10 @@ class _AppState:
         self.allow_anonymous = bool(allow_anonymous)
         self.anonymous_role = str(anonymous_role or _ANONYMOUS_ROLE)
         self.api_role = str(api_role) if api_role else None
+        self.authentication = authentication
+        self.state_store = state_store
+        self.revision = 0
+        self.lock = RLock()
         # In-memory state mirror (since there's no Streamlit session)
         self.state: dict[str, Any] = {}
         self._init_defaults()
@@ -494,7 +509,102 @@ class _AppState:
     def _init_defaults(self) -> None:
         for ctrl in self.registry.all():
             if ctrl.key not in self.state:
-                self.state[ctrl.key] = ctrl.default
+                self.state[ctrl.key] = deepcopy(ctrl.default)
+
+    def endpoint(self, permission: str, *, write: bool = False, live_state: bool = False):
+        """Serialize this app's synchronous operations; recheck after waiting.
+
+        SQLite CAS coordinates live values with other processes. This lock does
+        not make file profiles or the audit log transactional across processes.
+        """
+        def decorate(function):
+            @wraps(function)
+            def guarded(*args, **kwargs):
+                with self.lock:
+                    ctx = next(value for value in kwargs.values() if isinstance(value, SecurityContext))
+                    _require_permission(ctx, permission, write=write)
+                    try:
+                        if live_state:
+                            self.refresh()
+                        result = function(*args, **kwargs)
+                        if not write:
+                            _require_permission(ctx, permission)
+                        return result
+                    except StateConflict:
+                        raise HTTPException(status_code=409, detail="Control state changed. Refresh before retrying.") from None
+                    except StateStoreError:
+                        logger.warning("Control state backend unavailable; inspect the protected backend.")
+                        raise HTTPException(status_code=503, detail="Control state is unavailable.") from None
+            return guarded
+        return decorate
+
+    def refresh(self) -> None:
+        if self.state_store is None:
+            return
+        snapshot = self.state_store.read()
+        values = {ctrl.key: deepcopy(ctrl.default) for ctrl in self.registry.all()}
+        for key, value in snapshot.values.items():
+            ctrl = self.registry.get(key)
+            if ctrl is None or ctrl.sensitive or _contains_secret_fields(value):
+                raise StateStoreError()
+            try:
+                values[key] = _exact_control_value(ctrl, value)
+            except _RejectedControlValue:
+                raise StateStoreError() from None
+        self.state = values
+        self.revision = snapshot.revision
+
+    def require_revision(self, request: Request) -> None:
+        supplied = request.headers.get("if-match")
+        if supplied is None:
+            if self.state_store is not None:
+                raise HTTPException(status_code=428, detail="Send the control ETag in If-Match.")
+            return
+        if supplied != f'"{self.revision}"':
+            raise HTTPException(status_code=409, detail="Control state changed. Refresh before retrying.")
+
+    def commit(self, values: dict[str, Any]) -> None:
+        if self.state_store is not None:
+            persisted = self.registry.persistable_snapshot(values)
+            if any(_contains_secret_fields(value) for value in persisted.values()):
+                raise HTTPException(status_code=422, detail="State persistence refuses structured secret fields.")
+            try:
+                # Check the representation the backend will actually restore,
+                # including JSON normalization of select defaults and options.
+                persisted = json.loads(json.dumps(persisted, allow_nan=False))
+                for key, value in persisted.items():
+                    _exact_control_value(self.registry.get(key), value)
+            except (TypeError, ValueError, OverflowError, RecursionError, _RejectedControlValue):
+                raise HTTPException(status_code=422, detail="Controls must round-trip as valid JSON state.") from None
+            snapshot = self.state_store.compare_and_set(persisted, self.revision)
+            self.revision = snapshot.revision
+        else:
+            self.revision += 1
+        self.state = values
+
+    def request_audit(self, ctx: SecurityContext):
+        if ctx.authenticated:
+            return bind_audit_identity(self.audit, ctx.user_id, ctx.session_id)
+        return self.audit
+
+    def record_audit(
+        self, ctx: SecurityContext, method: str, *args: Any,
+        state_committed: bool = False, **kwargs: Any,
+    ) -> None:
+        """Report an audit failure without implying an already committed write failed."""
+        try:
+            getattr(self.request_audit(ctx), method)(*args, **kwargs)
+        except Exception:
+            # Audit adapters can raise backend errors too. Convert them here so
+            # the endpoint's state-backend handler cannot misreport the commit.
+            # No automatic retry: an adapter may have recorded part of the event.
+            logger.error("Audit recording failed after an API operation committed; inspect the protected audit adapter.")
+            operation = "Control state" if state_committed else "Profile operation"
+            raise HTTPException(
+                status_code=500,
+                detail=f"{operation} committed, but audit recording failed. Refresh before retrying.",
+                headers={"ETag": f'"{self.revision}"'} if state_committed else None,
+            ) from None
 
 
 def _make_require_api_context(app_state: _AppState):
@@ -503,9 +613,17 @@ def _make_require_api_context(app_state: _AppState):
             request: Request,
             x_api_key: str = Header(default="", alias="X-API-Key"),
         ) -> SecurityContext:
-            ctx = _resolve_api_context(app_state, x_api_key)
+            if app_state.authentication is None:
+                ctx = _resolve_api_context(app_state, x_api_key)
+            else:
+                try:
+                    ctx = app_state.authentication.resolve(request, app_state.custom_roles)
+                except Exception:
+                    # Provider errors and malformed claims cannot fall back to
+                    # the legacy shared key or anonymous mode.
+                    raise HTTPException(status_code=401, detail="Authentication could not be confirmed.") from None
             _require_preflighted_request(request)
-            if app_state.allow_anonymous and not os.getenv(_API_KEY_ENV, ""):
+            if app_state.authentication is None and app_state.allow_anonymous and not os.getenv(_API_KEY_ENV, ""):
                 # The request was served anonymously: no key was checked.
                 _require_loopback_host(request)
             _require_permission(ctx, permission)
@@ -569,21 +687,29 @@ def _register_health_route(app: FastAPI) -> None:
 
 def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/controls", response_model=list[ControlValue])
-    async def get_controls(_: SecurityContext = Depends(require_api_context("can_view_metrics"))):
+    @app_state.endpoint("can_view_metrics", live_state=True)
+    def get_controls(response: Response, _: SecurityContext = Depends(require_api_context("can_view_metrics"))):
         """Return all control keys and their current values."""
+        response.headers["ETag"] = f'"{app_state.revision}"'
         return [_control_value(app_state, ctrl.key) for ctrl in app_state.registry.all()]
 
     @app.get("/controls/{key:path}")
-    async def get_control(key: str, _: SecurityContext = Depends(require_api_context("can_view_metrics"))):
+    @app_state.endpoint("can_view_metrics", live_state=True)
+    def get_control(key: str, response: Response, _: SecurityContext = Depends(require_api_context("can_view_metrics"))):
         """Return a single control's current value."""
+        response.headers["ETag"] = f'"{app_state.revision}"'
         return _control_value(app_state, key)
 
     @app.patch("/controls", response_model=list[ControlValue])
-    async def update_controls(
+    @app_state.endpoint("can_edit_controls", write=True, live_state=True)
+    def update_controls(
         req: ControlUpdateRequest,
+        request: Request,
+        response: Response,
         ctx: SecurityContext = Depends(require_api_context("can_edit_controls")),
     ):
         """Update one or more control values. Returns the updated controls."""
+        app_state.require_revision(request)
         pending_updates = []
         for key, value in req.values.items():
             _require_json_depth(value, key)
@@ -593,7 +719,9 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                     status_code=404,
                     detail=f"Control '{key}' not found",
                 )
-            _require_permission(ctx, ctrl.permission)
+            _require_permission(ctx, ctrl.permission, write=True)
+            if app_state.state_store is not None and ctrl.sensitive:
+                raise HTTPException(status_code=422, detail="Versioned state refuses secret control writes; use the host secret backend.")
             old = app_state.state.get(key, ctrl.default)
             try:
                 # Store exactly what was sent, or refuse: never record a
@@ -605,13 +733,21 @@ def _register_control_routes(app: FastAPI, app_state: _AppState, require_api_con
                 ) from None
             pending_updates.append((ctrl, old, stored))
 
+        staged = dict(app_state.state)
+        for ctrl, old, stored in pending_updates:
+            staged[ctrl.key] = stored
+            _require_permission(ctx, ctrl.permission, write=True)
+        _require_permission(ctx, "can_edit_controls", write=True)
+        app_state.commit(staged)
+        response.headers["ETag"] = f'"{app_state.revision}"'
         updated = []
         for ctrl, old, stored in pending_updates:
-            app_state.state[ctrl.key] = stored
-            app_state.audit.log_control_change(
+            app_state.record_audit(
+                ctx, "log_control_change",
                 ctrl.key,
                 old,
                 stored,
+                state_committed=True,
                 role=ctx.role or "api",
                 source="api",
                 sensitive=app_state.registry._audit_sensitivity(ctrl),
@@ -690,7 +826,8 @@ def _api_profile_store(app_state: _AppState) -> BaseProfileStore:
 
 def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/profiles", response_model=list[str])
-    async def get_profiles(
+    @app_state.endpoint("can_load_profiles")
+    def get_profiles(
         response: Response,
         _: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
@@ -706,7 +843,8 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         return profile_ids
 
     @app.get("/profiles/{profile_id}", response_model=ProfileResponse)
-    async def get_profile(profile_id: str, ctx: SecurityContext = Depends(require_api_context("can_load_profiles"))):
+    @app_state.endpoint("can_load_profiles")
+    def get_profile(profile_id: str, ctx: SecurityContext = Depends(require_api_context("can_load_profiles"))):
         _require_permission(ctx, "can_view_metrics")
         store = _api_profile_store(app_state)
         watch = _ReadErrorWatch(store)
@@ -722,6 +860,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             if watch.new_errors():
                 raise HTTPException(status_code=500, detail=_unreadable_profile(profile_id))
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
+        _require_permission(ctx, "can_view_metrics")
         return ProfileResponse(
             profile_id=data.get("profile_id", profile_id),
             saved_at=data.get("saved_at", ""),
@@ -730,7 +869,8 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         )
 
     @app.post("/profiles", response_model=ProfileResponse)
-    async def save_profile_endpoint(
+    @app_state.endpoint("can_save_profiles", write=True, live_state=True)
+    def save_profile_endpoint(
         req: ProfileRequest,
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
@@ -748,6 +888,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
                     "replaced. Repair or delete the stored record first."
                 ),
             )
+        _require_permission(ctx, "can_save_profiles", write=True)
         save_profile(
             profile_id,
             app_state.registry,
@@ -758,7 +899,7 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             profile_dir=app_state.profile_dir,
             store=store,
         )
-        app_state.audit.log_profile_save(profile_id, role=ctx.role or req.role or "api", source="api")
+        app_state.record_audit(ctx, "log_profile_save", profile_id, role=ctx.role or req.role or "api", source="api")
         return ProfileResponse(
             profile_id=profile_id,
             role=req.role,
@@ -766,10 +907,14 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         )
 
     @app.post("/profiles/{profile_id}/activate", response_model=ProfileResponse)
-    async def activate_profile(
+    @app_state.endpoint("can_load_profiles", write=True, live_state=True)
+    def activate_profile(
         profile_id: str,
+        request: Request,
+        response: Response,
         ctx: SecurityContext = Depends(require_api_context("can_load_profiles")),
     ):
+        app_state.require_revision(request)
         staged_state = dict(app_state.state)
         store = _api_profile_store(app_state)
         watch = _ReadErrorWatch(store)
@@ -792,11 +937,11 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
                 or staged_state[ctrl.key] != app_state.state[ctrl.key]
             )
             if restored or changed:
-                _require_permission(ctx, ctrl.permission)
-        app_state.state.update(
-            {ctrl.key: staged_state[ctrl.key] for ctrl in app_state.registry.all()}
-        )
-        app_state.audit.log_profile_load(profile_id, role=ctx.role or "api", source="api")
+                _require_permission(ctx, ctrl.permission, write=True)
+        _require_permission(ctx, "can_load_profiles", write=True)
+        app_state.commit({ctrl.key: staged_state[ctrl.key] for ctrl in app_state.registry.all()})
+        response.headers["ETag"] = f'"{app_state.revision}"'
+        app_state.record_audit(ctx, "log_profile_load", profile_id, state_committed=True, role=ctx.role or "api", source="api")
         return ProfileResponse(
             profile_id=data.get("profile_id", profile_id),
             saved_at=data.get("saved_at", ""),
@@ -805,7 +950,8 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
         )
 
     @app.delete("/profiles/{profile_id}")
-    async def delete_profile_endpoint(
+    @app_state.endpoint("can_save_profiles", write=True)
+    def delete_profile_endpoint(
         profile_id: str,
         ctx: SecurityContext = Depends(require_api_context("can_save_profiles")),
     ):
@@ -824,13 +970,14 @@ def _register_profile_routes(app: FastAPI, app_state: _AppState, require_api_con
             ) from None
         if not ok:
             raise HTTPException(status_code=404, detail=f"Profile '{profile_id}' not found")
-        app_state.audit.log("profile_delete", detail=profile_id, role=ctx.role or "api", source="api")
+        app_state.record_audit(ctx, "log", "profile_delete", detail=profile_id, role=ctx.role or "api", source="api")
         return {"deleted": profile_id}
 
 
 def _register_role_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/roles", response_model=list[RoleResponse])
-    async def get_roles(_: SecurityContext = Depends(require_api_context("can_view_metrics"))):
+    @app_state.endpoint("can_view_metrics")
+    def get_roles(_: SecurityContext = Depends(require_api_context("can_view_metrics"))):
         all_roles = dict(BUILTIN_ROLES)
         if app_state.custom_roles:
             all_roles.update(app_state.custom_roles)
@@ -842,7 +989,8 @@ def _register_role_routes(app: FastAPI, app_state: _AppState, require_api_contex
 
 def _register_audit_routes(app: FastAPI, app_state: _AppState, require_api_context: Any) -> None:
     @app.get("/audit")
-    async def get_audit(
+    @app_state.endpoint("can_view_audit")
+    def get_audit(
         n: int = 50,
         _: SecurityContext = Depends(require_api_context("can_view_audit")),
     ):
@@ -858,7 +1006,7 @@ def create_app(
     *,
     audit: AuditLog | None = None,
     custom_roles: dict[str, RoleDef] | None = None,
-    profile_dir: str = "profiles",
+    profile_dir: str | None = None,
     profile_store: BaseProfileStore | None = None,
     title: str = "Role-Aware Dashboard Toolkit API",
     version: str = ROLE_AWARE_DASHBOARD_TOOLKIT_VERSION,
@@ -866,6 +1014,8 @@ def create_app(
     allow_anonymous: bool | None = None,
     anonymous_role: str = _ANONYMOUS_ROLE,
     max_body_bytes: int = _DEFAULT_MAX_BODY_BYTES,
+    authentication: APIAuthentication | None = None,
+    state_store: StateStore | None = None,
 ) -> FastAPI:
     """
     Create a FastAPI app exposing Role-Aware Dashboard Toolkit controls, profiles, and roles.
@@ -886,8 +1036,20 @@ def create_app(
     and JSON nested more than 32 levels deep receives HTTP 422. These limits and
     the toolkit's 422 format apply to the routes created here; routes a host
     adds to the returned app keep FastAPI's defaults.
+
+    ``authentication`` opts into host-verified per-request identity and live
+    grants/freeze. It requires explicit organization-scoped profile storage.
+    ``state_store`` opts into revisioned public state; updates and activation
+    then require the ETag from a control read in ``If-Match``. See the installed
+    API guide for isolation, secret, concurrency and audit boundaries.
     """
     _require_fastapi()
+    if authentication is not None and not isinstance(authentication, APIAuthentication):
+        raise TypeError("authentication must be APIAuthentication")
+    if authentication is not None and (allow_anonymous or api_role is not None):
+        raise ValueError("Per-user authentication cannot be combined with anonymous access or a shared API role")
+    if authentication is not None and profile_store is None and not profile_dir:
+        raise ValueError("Per-user authentication requires an explicit organization profile_store or profile_dir")
     body_limit = _validated_body_limit(max_body_bytes)
     resolved_api_role = str(api_role or os.getenv(_API_ROLE_ENV, _DEFAULT_AUTHENTICATED_ROLE) or _DEFAULT_AUTHENTICATED_ROLE)
 
@@ -895,20 +1057,23 @@ def create_app(
         registry=registry,
         audit=audit,
         custom_roles=custom_roles,
-        profile_dir=profile_dir,
+        profile_dir=profile_dir if profile_dir is not None else "profiles",
         profile_store=profile_store,
         allow_anonymous=_env_flag(_ALLOW_ANONYMOUS_ENV) if allow_anonymous is None else allow_anonymous,
         anonymous_role=anonymous_role,
         api_role=resolved_api_role,
+        authentication=authentication,
+        state_store=state_store,
     )
-    _validate_role_config(app_state.anonymous_role, app_state.custom_roles, field_name="anonymous_role")
-    _validate_role_config(
-        app_state.api_role or _DEFAULT_AUTHENTICATED_ROLE,
-        app_state.custom_roles,
-        field_name="api_role",
-    )
+    if authentication is None:
+        _validate_role_config(app_state.anonymous_role, app_state.custom_roles, field_name="anonymous_role")
+        _validate_role_config(
+            app_state.api_role or _DEFAULT_AUTHENTICATED_ROLE,
+            app_state.custom_roles,
+            field_name="api_role",
+        )
 
-    if not os.getenv(_API_KEY_ENV, "") and not app_state.allow_anonymous:
+    if authentication is None and not os.getenv(_API_KEY_ENV, "") and not app_state.allow_anonymous:
         # The key is read per request, so this is a warning, not an error: a
         # host may set it after creating the app. Never log the key itself.
         logger.warning(

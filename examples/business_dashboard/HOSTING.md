@@ -1,7 +1,7 @@
 # Host the business dashboard on Render
 
 The source example includes a POSIX hosting adapter at `hosting/pilot.py`.
-It serves only explicitly provisioned state, requires administrator MFA and
+It serves only explicitly provisioned state, enforces account enrollment policy and
 Turnstile for HTTPS, and ignores unverified forwarding headers. The local
 `run.py` remains a loopback launcher. Keep this complete source-example layout;
 the toolkit wheel alone does not include it.
@@ -10,13 +10,19 @@ This is a prepared deployment workflow. Local tests do not establish that a
 particular Render account, domain, proxy or disk is configured correctly. Use
 fictional records until the actual-host checks at the end pass.
 
+For the existing Westbridge testbed, start with
+[Prepare the existing security testbed](#prepare-the-existing-security-testbed).
+Preserve that service and its data; do not create another service or provision
+new credentials. The initial-creation instructions below are for a genuinely
+new installation only.
+
 ## Prepare the Render form
 
 Publish and review a branch containing the complete business example and its
 hosting adapter before selecting it in Render. An older `main` containing only
 the landscaping example cannot run these commands. Record the deployed commit.
 
-Create a Python **Web Service** with these settings:
+For a new installation only, create a Python **Web Service** with these settings:
 
 | Setting | Value |
 | --- | --- |
@@ -87,16 +93,23 @@ its default permissions do. The sibling path above is separate from database
 bundles, but shares the same disk and host. Preserve its recovery copy separately
 from database backups. Losing that key prevents decryption of enrolled MFA seeds.
 
-This creates fictional data, a private identity key, six distinct account
-passwords and administrator authenticator enrollment. It prints only the paths
-to private `ACCOUNTS.md` and `ADMIN_MFA_SETUP.md` sheets. Inspect or retrieve
-them through your trusted private operator session, enroll the administrator's
-authenticator, and keep a secure offline recovery copy. Never paste their
-contents into a support message, screenshot, source file or build log. Remove
-the host's enrollment sheet after successful enrollment if the recovery copy
-is secure. The [recovery-sheet guide](RECOVERY.md) provides an optional age-based
-encryption and verification helper; keep its passphrase separately and verify
-the recovery copy before removing any plaintext sheet.
+This creates fictional data, a private identity key and six pending accounts
+under strict policy. It prints only the private `ACCOUNTS.md` path. The sheet
+contains distinct single-use enrollment grants with 24-hour expiry, not initial
+passwords or preapproved authenticator seeds. Retrieve it through the trusted
+private operator session and deliver each account's grant through a trusted
+channel. Never put its contents in a support message, screenshot, source file
+or build log. Do not place grants in URLs.
+
+After the intended HTTPS origin is live, each recipient starts account setup,
+chooses a new password and proves the current code from their newly configured
+authenticator within ten minutes. Both roles require this enrollment; pending
+accounts cannot sign in or read staff data. Completion returns to sign-in with
+the chosen password and a new TOTP code, without automatic login. Passkeys can
+be registered afterward. The [README's enrollment procedure](README.md#enrollment-migration-and-recovery)
+covers expiry and offline reissue. Protect authenticator recovery material and
+the independent encryption key separately. The [private-file recovery guide](RECOVERY.md)
+can encrypt retained small files; recovering an expired grant does not renew it.
 
 The command refuses nonempty storage. On failure, inspect and preserve existing
 files; do not delete them to force a new installation. Normal `serve` never
@@ -145,10 +158,15 @@ In the current service's Shell, after environment changes have applied:
 python examples/business_dashboard/hosting/pilot.py preflight
 ```
 
-This validates existing schema-v5 storage, the matched identity key, private
-files, active administrator MFA and challenge configuration. It starts no
-listener and makes no provider calls. It does not prove that Turnstile accepts
-the real keys, or that the disk actually survives a redeploy.
+This validates schema-eight storage, the matched identity and MFA keys, private
+files, account lifecycle/factors and challenge configuration. It reports
+`transition`, `enrollment_only`, `enrollment_incomplete` or `ready` separately
+from stored enrollment readiness. A fresh strict workspace can serve account
+setup while every account is pending; this does not grant ordinary sign-in.
+Missing or expired pending grants are reported and need offline reissue.
+Preflight creates no credentials, changes no policy, starts no listener and
+makes no provider calls. It does not prove real authenticator/Turnstile behavior
+or that the disk survives a redeploy.
 
 After preflight passes and the one intended custom domain is verified, change:
 
@@ -208,11 +226,18 @@ handlers. Set and verify ingress connection/read limits as well.
 The hosting adapter's single worker and single instance are part of this
 capacity policy. Increasing either does not create a distributed limiter.
 Attempt budgets reuse `login_limits` with separate namespaces. Safe create
-retries use receipt storage, and schema five adds encrypted MFA and session
-verification state. Keep the existing database and identity
+retries use receipt storage. Schema five added encrypted MFA and session
+verification; schema six adds structured events and delivery obligations;
+schema seven adds bounded predecessor hashes for session-rotation revocation.
+Schema eight adds explicit transition/strict policy, per-account lifecycle and
+expiring enrollment. Upgrades from versions before eight retain existing
+accounts as legacy in transition; they do not turn them into enrolled accounts
+or silently require employee MFA. Upgrades from eight or nine to ten preserve
+the current policy and account lifecycle, including completed strict activation.
+Keep the existing database, independent MFA key and identity
 key together; never reprovision to apply this update. Before deployment, rehearse
 `run.py --migrate-storage --data-dir <private-copy>` on an application-consistent
-backup, verify accounts/records and rollback behavior, then stop production
+backup, verify accounts/records and rollback behavior, then stop testbed
 writes and explicitly migrate the original through a private operator shell.
 For the documented Render directory, the command is:
 
@@ -224,6 +249,16 @@ Run this only with the reviewed code, a verified backup and writes stopped.
 Normal hosted preflight refuses the old schema. Do not run two code versions
 against the same store during this upgrade. A code rollback also requires
 its compatible backup and reconciliation of any later access changes.
+
+After migration, run `run.py --auth-readiness` with the same data/key paths.
+Issue `--issue-enrollment USERNAME --purpose migration` separately for each
+legacy account and complete the browser setup. Existing access remains available
+until that account completes. Keep a working administrator throughout the rollout.
+When every active account is enrolled with a confirmed TOTP factor or passkey,
+run `--activate-auth-policy` explicitly; it refuses incomplete state and revokes
+existing sessions on activation. Transition is temporary migration work, not
+acceptance of the final policy. Use the [exact local commands](README.md#enrollment-migration-and-recovery)
+with the hosted `--data-dir` and `--mfa-key-file` arguments.
 
 Render documents managed [DDoS protection](https://render.com/docs/ddos-protection),
 but that does not establish route-specific throttling or monitoring for this
@@ -325,11 +360,16 @@ Use disposable fictional records and private evidence for these checks:
 
 1. Confirm the deployed source revision, URL, exact public origin, persistent
    mount and current runtime dependency audit.
-2. Check HTTPS redirects/certificate, accepted Host/Origin, cookie Secure,
-   HttpOnly and SameSite attributes, and absence of secrets in service logs.
-3. Sign in with the administrator password plus authenticator; verify wrong,
-   missing and reused codes fail. Verify employee password-only sign-in and
-   guest access do not grant administration.
+2. Check HTTPS redirects/certificate, accepted Host/Origin, the
+   `__Host-westbridge_session` cookie with Secure, HttpOnly, SameSite=Strict,
+   Path=/ and no Domain attribute, and absence of secrets in service logs.
+3. Complete bounded enrollment checks for both roles: an unused grant cannot
+   sign in, expired/claimed grants fail, and pending accounts cannot read staff
+   data. Finish setup with a chosen password and current authenticator code,
+   then sign in with the next code. Under strict policy verify wrong, missing,
+   previous-step and reused codes fail for administrators and employees.
+   Verify guest and employee access never grant administration. Record any
+   unfinished transition accounts explicitly; they are not strict-policy acceptance.
 4. Submit through the real widget. Missing/invalid/reused tokens, another
    hostname/action and provider failure must not create a pending post.
 5. Confirm a pending post is private, approval publishes exactly once, rejection
@@ -367,8 +407,11 @@ Use disposable fictional records and private evidence for these checks:
 
 Do not treat a raw disk snapshot as a tested database backup. Back up SQLite
 consistently with its original identity key, keep credentials private and
-rehearse restoration. A lost authenticator uses the README's explicit trusted
-operator reset; no password-only web reset endpoint exists.
+rehearse restoration. A lost authenticator uses the README's account-specific
+offline recovery after external identity proofing and a durable case reference.
+The reference does not itself establish identity. Recovery immediately revokes
+that account's old credentials, passkeys and sessions. Avoid the all-administrator
+reset while relying on those accounts for access; no password-only web reset exists.
 
 Local tests cover startup and request boundaries with disposable data. They do
 not replace hosted checks or establish public HTTPS/proxy configuration. Keep
@@ -379,10 +422,17 @@ is deployed. A prior live report does not establish the behavior of a new commit
 
 ## Security lab deployment prerequisites
 
-Review [the security lab](SECURITY_LAB.md) before migrating. Hosted schema five
+Review [the security lab](SECURITY_LAB.md) before migrating. Hosted schema ten
 requires an explicit `BUSINESS_MFA_KEY_FILE` outside the data/backup directory.
-Create and protect that independent key before migration; never replace a lost
-key to force startup. Hold its recovery copy separately from database backups.
+If a remote security destination is activated, set
+`BUSINESS_SECURITY_DELIVERY_CONFIG` to its private JSON configuration and
+preserve its separate token/CA files. Follow the
+[collector reference](../security_event_collector/README.md) before activation.
+Missing configuration leaves durable obligations pending; local delivery or
+application `/healthz` does not prove collector retention or alert delivery.
+For pre-five storage, explicitly create and protect that independent key before
+migration. Existing schema-five storage must retain its original external key;
+never replace a lost key to force startup. Hold its recovery copy separately from database backups.
 Migrate a protected copy first, then the original with writes stopped. Old
 backups and SQLite remnants may still contain plaintext MFA seeds.
 
@@ -390,28 +440,52 @@ Fresh verification is required for sensitive administration. Test the real
 browser flow and session revocation after deployment. Security counters are
 per-instance observations that reset on restart; configure retention and
 alerts at the host separately. Public health now checks read readiness, not
-write capacity. Run the real encrypted recovery drill on an isolated service
+write capacity. Run the real encrypted recovery drill on disposable data first,
+then rehearse the existing testbed's controlled maintenance/cutover procedure
 and reconcile current access before switching to restored storage.
 
-## Prepare an isolated staging service
+## Prepare the existing security testbed
 
-Use a separate service named, for example, `westbridge-security-staging`, with
-its own 1 GB disk, fictional accounts, independent keys and hostname. Start in
-`bootstrap`, with auto-deploy off. Select the exact reviewed commit after local
-and CI checks; an uncommitted working tree cannot identify a Render deployment.
-Do not copy the production database, enrollment sheets or Turnstile secret into
-this service. Give the staging hostname its own widget configuration.
+HTTPS sessions now use `__Host-westbridge_session`. Deploying this change
+requires existing HTTPS users to sign in again: the old `westbridge_session`
+cookie is deliberately not accepted as a fallback. Preserve a working password
+and authenticator or passkey before the update, and verify both sign-in methods
+on the deployed revision. Do not rename or copy an existing cookie to bridge the
+transition. The explicit loopback HTTP demonstration retains its old cookie
+name. Duplicate cookies with the selected name are rejected, rather than letting
+header order choose an account. Supporting browsers reject a sibling site's
+attempt to set the `__Host-` cookie with a parent Domain attribute; verify that
+boundary separately from the public host's TLS/proxy configuration.
 
-Render's smallest paid web-service plan is currently `0.5c-512mb` (formerly
-Starter). Its official example estimates about $7/month for compute plus
-$0.25/month for a 1 GB disk. Treat $7.25/month as a starting estimate, excluding
-workspace charges, tax, bandwidth and other usage; review the creation form's
-current quote before creating resources. This is not a measured capacity
-recommendation. See [compute plans](https://render.com/docs/compute-plans),
-[Render's cost example](https://github.com/render-examples/nanobot-render/blob/main/README.md#cost-expectations)
-and [pricing](https://render.com/pricing).
+The existing Westbridge service is the testbed. These exercises do not require
+creating another paid service. Identify the existing service, exact deployed
+commit, hostname, persistent disk and external MFA-key location before changing
+anything. Disable auto-deploy for the controlled maintenance window. A local
+working tree or successful CI run does not identify the currently serving build.
 
-Keep test artifacts in a private directory on the staging disk. For the portable
+Preserve its database, identity key, external MFA key, recovery material and
+working administrator access. Use fictional accounts and records for the
+exercise. Run disposable local drills first; then rehearse on the existing
+testbed with a deliberate maintenance window. Confirm both protected reads and
+writes are closed before an offline migration, rotation or restore. Pausing
+edits is not an ingress barrier. Do not create, overwrite or replace keys just
+to make a preflight pass.
+
+Before replacing an existing schema-five through schema-nine deployment, take its protected backup
+with the matching, reviewed tool and retain that source identity.
+The schema-ten backup command intentionally refuses an unmigrated source.
+After the current workspace is explicitly upgraded, recover a preserved
+schema-five through schema-nine archive only with `backup.py restore --upgrade-backup-schema` and
+the current schema-ten workspace as `--security-source`. The flag upgrades a
+private staging copy, preserves the original archive and never removes the
+need for current authority. Omit the security source only to retain quarantine.
+
+Record deployed source and dependency identity, configuration presence (never
+secret values), health/maintenance responses and relevant sanitized logs. Keep
+failed attempts separately. Physical-device passkey acceptance and public
+proxy/HTTPS behavior remain separate from local browser and unit tests.
+
+Keep test artifacts in a private directory on the testbed disk. For the portable
 real-age drill, download the matching archive from the official release, then:
 
 ```bash
@@ -426,34 +500,34 @@ encrypts and decrypts fictional data, and checks restored authority locally on
 that host. Its local HTTP client does not exercise the public proxy or an
 actual service cutover. Preserve failures as well as successful receipts.
 
-### Rehearse recovery of the staging application's own data
+### Rehearse recovery of the testbed's own data
 
-Use only the isolated service created above. Before taking its backup, establish
+Use the existing testbed identified above. Before taking its backup, establish
 an employee browser session, register and successfully use a disposable passkey,
 and confirm a second employee can sign in. Preserve these private test controls
 without putting cookies or credentials in evidence. Keep a current administrator
 and a working authenticator available throughout the exercise.
 
-The following commands run in the staging service's private POSIX Shell. Replace
-the example hostname and staging paths in the guards with that isolated service's
-actual values. Do not substitute production paths. Use the verified age binary
+The following commands run in the testbed's private POSIX Shell. Replace
+the example hostname and paths in the guards with its inspected actual values.
+Keep the guards; do not infer these values from the examples. Use the verified age binary
 from the completed pinned-release drill above. Reserve disk space for several
 copies of the database; preserve failures and choose a new attempt directory.
 
 ```bash
 set -eu
 umask 077
-export STAGING_SOURCE=/var/data/westbridge-staging
+export TESTBED_SOURCE=/var/data/westbridge
 export CUTOVER_DIR=/var/data/security-drills/cutover-001
 export RECOVERED_KEY="$CUTOVER_DIR/key-custody/mfa.key"
 AGE=/var/data/security-drills/recovery-001/age
-test "$PUBLIC_ORIGIN" = 'https://staging.example.com'
-test "$BUSINESS_DATA_DIR" = "$STAGING_SOURCE"
-test "$BUSINESS_MFA_KEY_FILE" = '/var/data/westbridge-staging-secrets/mfa.key'
+test "$PUBLIC_ORIGIN" = 'https://testbed.example.com'
+test "$BUSINESS_DATA_DIR" = "$TESTBED_SOURCE"
+test "$BUSINESS_MFA_KEY_FILE" = '/var/data/westbridge-secrets/mfa.key'
 test "$("$AGE" --version)" = 'v1.3.2'
 mkdir -m 700 "$CUTOVER_DIR"
 mkdir -m 700 "$CUTOVER_DIR/key-custody"
-python examples/business_dashboard/backup.py backup "$STAGING_SOURCE" --output "$CUTOVER_DIR/bundle" --mfa-key-file "$BUSINESS_MFA_KEY_FILE"
+python examples/business_dashboard/backup.py backup "$TESTBED_SOURCE" --output "$CUTOVER_DIR/bundle" --mfa-key-file "$BUSINESS_MFA_KEY_FILE"
 ```
 
 Package only the three expected bundle members. This creates a private archive
@@ -542,14 +616,16 @@ original plaintext files or host disk. A same-disk copy does not prove off-host
 backup availability. Never replace a missing original key with a newly generated
 key. Checksums alone do not authenticate a maliciously replaced bundle.
 
-After the backup, use the staging UI to change the first employee's password,
+After the backup, use the testbed UI to change the first employee's password,
 remove the disposable passkey and disable the second employee. Verify current
 sign-in still works. To exercise stale authenticator recovery too, perform the
-README's explicit administrator MFA reset and enroll the new authenticator
-privately. These changes must precede reconciliation; otherwise the expected
+README's account-specific offline recovery for a disposable account after
+external identity proofing, record its case reference and complete enrollment
+privately. Preserve a working administrator; the all-admin reset is unnecessary
+for this exercise. These changes must precede reconciliation; otherwise the expected
 rejection of an "old" credential is an empty test.
 
-Switch the staging service to maintenance: set **Health Check Path** to blank
+Switch the testbed service to maintenance: set **Health Check Path** to blank
 (TCP) and **Start Command** to `python examples/business_dashboard/hosting/pilot.py bootstrap`,
 then deploy those settings together. Confirm the actual HTTPS URL returns the
 fixed 503 maintenance response and the dashboard process has stopped. Keeping
@@ -557,7 +633,7 @@ fixed 503 maintenance response and the dashboard process has stopped. Keeping
 pause business edits: authentication changes must also stop. Keep this original
 runtime stopped through reconciliation and cutover.
 
-The maintenance deploy may terminate the old Shell. Open a new staging Shell
+The maintenance deploy may terminate the old Shell. Open a new testbed Shell
 and restore the guarded variables below, using the same attempt paths. Do not
 repeat the earlier directory creation, backup or encryption steps. Restore with
 the stopped **current runtime** as security authority, not the old bundle or
@@ -566,16 +642,16 @@ another historical backup. The output directory must not exist:
 ```bash
 set -eu
 umask 077
-export STAGING_SOURCE=/var/data/westbridge-staging
+export TESTBED_SOURCE=/var/data/westbridge
 export CUTOVER_DIR=/var/data/security-drills/cutover-001
 export RECOVERED_KEY="$CUTOVER_DIR/key-custody/mfa.key"
-test "$PUBLIC_ORIGIN" = 'https://staging.example.com'
-test "$BUSINESS_DATA_DIR" = "$STAGING_SOURCE"
-test "$BUSINESS_MFA_KEY_FILE" = '/var/data/westbridge-staging-secrets/mfa.key'
+test "$PUBLIC_ORIGIN" = 'https://testbed.example.com'
+test "$BUSINESS_DATA_DIR" = "$TESTBED_SOURCE"
+test "$BUSINESS_MFA_KEY_FILE" = '/var/data/westbridge-secrets/mfa.key'
 test -f "$RECOVERED_KEY"
 test -d "$CUTOVER_DIR/decrypted-bundle"
 test ! -e "$CUTOVER_DIR/restored"
-python examples/business_dashboard/backup.py restore "$CUTOVER_DIR/decrypted-bundle" --output "$CUTOVER_DIR/restored" --mfa-key-file "$RECOVERED_KEY" --security-source "$STAGING_SOURCE"
+python examples/business_dashboard/backup.py restore "$CUTOVER_DIR/decrypted-bundle" --output "$CUTOVER_DIR/restored" --mfa-key-file "$RECOVERED_KEY" --security-source "$TESTBED_SOURCE"
 BUSINESS_DATA_DIR="$CUTOVER_DIR/restored" BUSINESS_MFA_KEY_FILE="$RECOVERED_KEY" python examples/business_dashboard/hosting/pilot.py preflight
 ```
 
@@ -586,9 +662,27 @@ intentionally produces an unusable quarantined restore. No usable current source
 means this procedure cannot safely reopen historical authority; retain quarantine
 for a separate reviewed recovery plan. Never remove its marker to force startup.
 
+For a validated schema-five through schema-nine archive, add
+`--upgrade-backup-schema` to that restore command. Confirm `restore.json` reports
+the matching `backup_schema` (5, 6, 7, 8 or 9), `restored_schema: 10` and
+`schema_upgraded: true`. The reviewed current security source must already be
+schema ten; a historical archive cannot substitute for it. Reconciliation
+copies current lifecycle, policy, credentials and durable recovery decision
+references, then discards grants and pending setup sessions. Pending accounts
+remain pending and need fresh offline grants. A restore cannot silently promote
+legacy or pending accounts, undo strict activation or reopen disabled accounts.
+
+This restores across an already completed MFA-key change; it does not perform
+key rotation. Follow the [key rotation boundaries](SECURITY_LAB.md#key-rotation-boundaries)
+when planning a change. The offline `rotate_mfa_key.py` command rotates the MFA
+encryption key; identity-key changes still require a reviewed migration of principals, passkeys and
+MFA context binding. Keep the service in verified maintenance throughout any
+such operation; changing an environment secret without coordinating its database
+and every running process is not a completed rotation.
+
 After successful preflight, persist **BUSINESS_DATA_DIR** as the full restored
 path and **BUSINESS_MFA_KEY_FILE** as the full recovered-key path in Render's
-settings; Shell variables alone do not change the service. Preserve the staging
+settings; Shell variables alone do not change the service. Preserve the testbed
 **PUBLIC_ORIGIN** so passkeys keep their original relying-party hostname. Set
 **Start Command** back to `python examples/business_dashboard/hosting/pilot.py serve`
 and **Health Check Path** to `/healthz`, then deploy. The old source stays offline.

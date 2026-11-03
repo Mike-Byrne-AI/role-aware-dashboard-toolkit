@@ -20,7 +20,7 @@ jobs:
   tests:
     name: contributor-tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -184,6 +184,8 @@ jobs:
         run: python tools/business_dashboard_browser.py --security-only --output-dir "$RUNNER_TEMP/business-security-browser"
       - name: Business passkey browser checks
         run: python tools/business_dashboard_browser.py --passkeys-only --output-dir "$RUNNER_TEMP/business-passkey-browser"
+      - name: Security lab evidence browser checks
+        run: python tools/business_dashboard_browser.py --lab-only --output-dir "$RUNNER_TEMP/business-lab-browser"
       - name: Retain browser diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -210,6 +212,7 @@ jobs:
           path: |
             ${{ runner.temp }}/business-security-browser
             ${{ runner.temp }}/business-passkey-browser
+            ${{ runner.temp }}/business-lab-browser
           if-no-files-found: warn
           retention-days: 7
 

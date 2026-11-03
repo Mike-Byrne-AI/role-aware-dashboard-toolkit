@@ -151,6 +151,21 @@ to date before merging and force pushes/deletions disabled. Check the live
 repository rules rather than assuming this document configures protection.
 The separately guarded release workflow in `ci.yml` remains manually dispatched.
 
+For security changes, the review should explain the attack prerequisites, the
+affected authority or recovery guarantee, the failing regression before the
+repair, and the passing checks on the final source. Include migration and
+rollback effects, particularly session invalidation, key custody and offline
+recovery. Preserve earlier failures; do not replace their receipts with a later
+successful run or treat local checks as deployed acceptance.
+
+When another trusted maintainer is available, require an approving pull-request
+review with stale approvals dismissed after new changes, alongside the required
+CI checks. Verify that policy in live GitHub settings. A solo maintainer must
+explicitly retain the single-maintainer limitation: self-review and multiple
+agent reviews do not constitute independent approval. Do not enable a required
+approval without a real approver and a reviewed recovery path. This document
+does not itself configure a repository protection rule.
+
 ## Contribution channels
 
 Use the [issue tracker](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)

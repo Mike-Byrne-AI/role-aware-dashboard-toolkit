@@ -1,5 +1,7 @@
 """Recovery fixture isolation and evidence runners' assertion requirements."""
 
+from tools.business_login_client import login_post
+
 import os
 from pathlib import Path
 import subprocess
@@ -89,7 +91,6 @@ def test_fixture_never_reads_host_keys_configuration_or_storage(monkeypatch):
 
 def test_browser_fixture_and_enrollment_ignore_host_key_and_configuration(monkeypatch):
     from fastapi.testclient import TestClient
-    import pyotp
 
     monkeypatch.syspath_prepend(str(browser.EXAMPLE))
     with tempfile.TemporaryDirectory(prefix="radt-browser-environment-") as temporary:
@@ -118,11 +119,15 @@ def test_browser_fixture_and_enrollment_ignore_host_key_and_configuration(monkey
         assert database.mfa_secrets.path == application.state.database.mfa_secrets.path == key
         assert key.stat().st_size == 32
         assert drill.digest(key) != drill.digest(runtime / "identity.key")
-        secret, counter = browser.synthetic_admin_enrollment(runtime)
-        assert counter == -1
-        with TestClient(application, base_url=drill.ORIGIN) as client:
-            response = client.post("/api/login", json={
-                "username": "admin", "password": credentials["admin"], "otp": pyotp.TOTP(secret).now(),
+        _secret, counter = browser.synthetic_admin_enrollment(runtime)
+        assert counter >= 0  # The real enrollment ceremony consumed its proof.
+        with database.transaction() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM account_security WHERE lifecycle='active'").fetchone()[0] == 6
+            assert connection.execute("SELECT COUNT(*) FROM account_mfa WHERE last_counter>=0").fetchone()[0] == 6
+            assert connection.execute("SELECT COUNT(*) FROM enrollment_grants").fetchone()[0] == 0
+        with browser.synthetic_mfa_clock(database) as code, TestClient(application, base_url=drill.ORIGIN) as client:
+            response = login_post(client, "/api/login", json={
+                "username": "admin", "password": credentials["admin"], "otp": code("admin"),
             }, headers={"Origin": drill.ORIGIN})
             assert response.status_code == 200
             assert client.get("/api/admin/overview").status_code == 200

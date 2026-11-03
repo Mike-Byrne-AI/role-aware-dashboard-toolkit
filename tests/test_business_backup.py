@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -13,6 +14,7 @@ import sys
 import zipfile
 
 import pytest
+from tools.business_login_client import login_post
 
 from tests.test_business_dashboard import (
     ORIGIN, business as business, business_admin as business_admin, business_seed as business_seed,
@@ -54,6 +56,9 @@ def test_backup_captures_committed_wal_records_and_excludes_external_secrets(bus
         writer.commit()
         before = _fingerprint(business.directory)
         output = _make_backup(business)
+        # A read-write SQLite inspection can clean up WAL sidecars. Inspect the
+        # actual published bundle first, before any helper opens its database.
+        assert {item.name for item in output.iterdir()} == {*backup.FILES, "manifest.json"}
         assert _fingerprint(output) == before
     assert _fingerprint(business.directory) == before
     assert {item.name for item in output.iterdir()} == {"business.sqlite3", "identity.key", "manifest.json"}
@@ -76,9 +81,11 @@ def test_quarantine_preserves_business_data_revokes_sessions_and_cannot_start(bu
     assert result == {"quarantined": True, "sessions_revoked": True, "frozen": True}
     assert (restored / backup.QUARANTINE).is_file()
     assert all(row[5] == 0 and row[3] == "!restore-quarantined!" for row in _rows(restored, "users"))
-    for table in ("sessions", "session_mfa", "session_security", "session_passkey", "passkey_challenges"):
+    for table in ("sessions", "session_mfa", "session_security", "session_passkey", "passkey_challenges", "session_predecessors",
+                  "enrollment_grants", "enrollment_sessions"):
         assert _rows(restored, table) == []
-    for table in ("messages", "events", "assignments", "contacts", "posts", "admin_mfa", "mfa_key_binding"):
+    for table in ("messages", "events", "assignments", "contacts", "posts", "account_mfa", "mfa_key_binding",
+                  "account_security", "authentication_policy", "enrollment_decisions"):
         assert _rows(restored, table) == _rows(output, table)
     assert _fingerprint(output) == before
     with pytest.raises(ValueError, match="quarantined"):
@@ -90,14 +97,16 @@ def test_reconciled_restore_uses_current_password_disable_mfa_limits_and_revokes
     employee = business.login("alex")
     old_cookie = employee.client.cookies.get(COOKIE_NAME)
     output = _make_backup(business)
-    old_mfa = hashlib.sha256(json.dumps(_rows(output, "admin_mfa")).encode()).hexdigest()
+    old_mfa = hashlib.sha256(json.dumps(_rows(output, "account_mfa")).encode()).hexdigest()
     new_password = "Disposable recovered password 93724!"
     with business.db() as connection:
         connection.execute("UPDATE users SET password_hash=?,revision=revision+1 WHERE id='alex'", (hash_password(new_password),))
         connection.execute("UPDATE users SET active=0,revision=revision+1 WHERE id='blair'")
         connection.execute("INSERT INTO login_limits VALUES('current-opaque-budget',12345,7)")
         connection.execute("INSERT INTO submission_limits(key_hash,submitted_at) VALUES('current-opaque-peer',12345)")
-    mfa.setup_admin_mfa(business.directory, reset=True)
+    sheet = mfa.setup_admin_mfa(business.directory, reset=True, case_reference="CASE-BACKUP-1")
+    grant = re.search(r"Enrollment grant: `([A-Za-z0-9_-]{43})`", sheet.read_text()).group(1)
+    business.complete_enrollment("admin", grant)
     current_state = _fingerprint(business.directory)
     backup_state = _fingerprint(output)
     restored = business.directory.parent / "reconciled"
@@ -107,23 +116,69 @@ def test_reconciled_restore_uses_current_password_disable_mfa_limits_and_revokes
     assert not (restored / backup.QUARANTINE).exists()
     assert _fingerprint(business.directory) == current_state
     assert _fingerprint(output) == backup_state
-    for table in ("users", "admin_mfa", "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits"):
+    for table in ("users", "account_mfa", "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits",
+                  "account_security", "authentication_policy", "enrollment_decisions"):
         assert _rows(restored, table) == _rows(business.directory, table)
-    assert hashlib.sha256(json.dumps(_rows(restored, "admin_mfa")).encode()).hexdigest() != old_mfa
-    for table in ("sessions", "session_mfa", "session_security", "session_passkey", "passkey_challenges"):
+    assert hashlib.sha256(json.dumps(_rows(restored, "account_mfa")).encode()).hexdigest() != old_mfa
+    for table in ("sessions", "session_mfa", "session_security", "session_passkey", "passkey_challenges", "session_predecessors",
+                  "enrollment_grants", "enrollment_sessions"):
         assert _rows(restored, table) == []
     restored_app = create_app(restored, public_origin=ORIGIN, mfa_key_file=default_key_path(business.directory))
     client = business.client(restored_app)
     assert client.get("/api/messages", headers={"Cookie": f"{COOKIE_NAME}={old_cookie}"}).status_code == 401
-    assert client.post("/api/login", json={"username": "alex", "password": business.credentials["alex"]},
+    assert login_post(client, json=business.login_payload("alex"),
                        headers={"Origin": ORIGIN}).status_code == 401
-    signed_in = client.post("/api/login", json={"username": "alex", "password": new_password}, headers={"Origin": ORIGIN})
+    signed_in = login_post(client, json=business.login_payload("alex", new_password), headers={"Origin": ORIGIN})
     assert signed_in.status_code == 200
     assert signed_in.json()["frozen"] is True
     assert client.post("/api/messages", json={"body": "Must remain frozen"},
                        headers={"Origin": ORIGIN, "X-CSRF-Token": signed_in.json()["csrf"]}).status_code == 403
-    assert business.client(restored_app).post("/api/login", json={"username": "blair", "password": business.credentials["blair"]},
+    assert login_post(business.client(restored_app), json=business.login_payload("blair"),
                                             headers={"Origin": ORIGIN}).status_code == 401
+
+
+@pytest.mark.parametrize("reconciled", [False, True])
+def test_restore_discards_historical_and_current_session_predecessors(business, reconciled):
+    business.login("alex")
+    with business.db() as connection:
+        row = connection.execute(
+            "SELECT v.public_id,s.expires_at FROM sessions s JOIN session_security v "
+            "ON v.token_hash=s.token_hash WHERE s.user_id='alex'"
+        ).fetchone()
+        connection.execute("INSERT INTO session_predecessors VALUES(?,?,?)", ("1" * 64, *row))
+    bundle = _make_backup(business)
+    with business.db() as connection:
+        connection.execute("INSERT INTO session_predecessors VALUES(?,?,?)", ("2" * 64, *row))
+    before = _fingerprint(bundle), _fingerprint(business.directory)
+    restored = business.directory.parent / "lineage-revoked"
+    result = backup.restore_backup(bundle, restored, mfa_key_file=default_key_path(business.directory),
+                                   security_source=business.directory if reconciled else None)
+    assert result["quarantined"] is not reconciled
+    assert _rows(restored, "sessions") == []
+    assert _rows(restored, "session_predecessors") == []
+    assert (_fingerprint(bundle), _fingerprint(business.directory)) == before
+
+
+def test_restore_keeps_current_security_ledger_and_delivery_receipts(business):
+    from business.security_events import dispatch_pending, record_event
+
+    dispatch_pending(business.app.state.database)
+    earlier_receipts = len(_rows(business.directory, "security_sink_receipts"))
+    with business.db() as connection:
+        record_event(connection, "editing_paused")
+    bundle = _make_backup(business)
+    assert dispatch_pending(business.app.state.database)["delivered"] == 1
+    with business.db() as connection:
+        record_event(connection, "editing_resumed")
+    restored = business.directory.parent / "current-security-ledger"
+    backup.restore_backup(bundle, restored, security_source=business.directory,
+                          mfa_key_file=default_key_path(business.directory))
+    for table in ("security_events", "security_delivery_identity", "security_destinations", "security_event_payloads",
+                  "security_delivery_obligations", "security_sink_receipts", "security_denial_budget"):
+        assert _rows(restored, table) == _rows(business.directory, table)
+    recovered = Database(restored, mfa_key_file=default_key_path(business.directory))
+    assert dispatch_pending(recovered) == {"delivered": 1, "failed": 0, "pending": 0}
+    assert len(_rows(restored, "security_sink_receipts")) == earlier_receipts + 2
 
 
 @pytest.mark.parametrize("damage", ["checksum", "missing-key", "wrong-key", "different-identity", "different-users", "backup-as-authority"])
@@ -178,9 +233,9 @@ def test_reconcile_after_external_key_rotation_uses_separate_original_and_curren
     backup.create_private_file(new_key, b"r" * 32)
     new_secrets = SecretStore(business.directory, business.app.state.database.identity_key, new_key)
     with business.db() as connection:
-        for row in connection.execute("SELECT * FROM admin_mfa").fetchall():
+        for row in connection.execute("SELECT * FROM account_mfa").fetchall():
             secret = business.app.state.database.mfa_secrets.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
-            connection.execute("UPDATE admin_mfa SET secret_ciphertext=? WHERE user_id=?",
+            connection.execute("UPDATE account_mfa SET secret_ciphertext=? WHERE user_id=?",
                                (new_secrets.encrypt(secret, row["user_id"], row["generation"]), row["user_id"]))
         connection.execute("UPDATE mfa_key_binding SET ciphertext=? WHERE id=1", (new_secrets.create_binding(),))
     restored = business.directory.parent / "restored-after-key-rotation"
@@ -190,7 +245,7 @@ def test_reconcile_after_external_key_rotation_uses_separate_original_and_curren
     Database(restored, mfa_key_file=new_key)
     with pytest.raises(ValueError, match="ciphertext|encryption key"):
         Database(restored, mfa_key_file=old_key)
-    assert _rows(restored, "admin_mfa") == _rows(business.directory, "admin_mfa")
+    assert _rows(restored, "account_mfa") == _rows(business.directory, "account_mfa")
 
 
 def test_final_snapshot_failure_leaves_offline_marker_and_sources_unchanged(business, monkeypatch):
@@ -199,10 +254,10 @@ def test_final_snapshot_failure_leaves_offline_marker_and_sources_unchanged(busi
     before = _fingerprint(business.directory), _fingerprint(bundle)
     original = backup._snapshot
 
-    def fail_publication(source, destination):
+    def fail_publication(source, destination, **options):
         if destination.parent == restored:
             raise OSError("Disposable simulated storage failure")
-        return original(source, destination)
+        return original(source, destination, **options)
 
     monkeypatch.setattr(backup, "_snapshot", fail_publication)
     with pytest.raises(OSError):
@@ -266,18 +321,23 @@ def _hosting_snippet(name, directory):
 def _backup_cli(*arguments):
     return subprocess.run([sys.executable, "-B", str(SCRIPT), *map(str, arguments)],
                           capture_output=True, text=True,
-                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(SCRIPT.parents[2])})
 
 
-def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_authority(business):
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_authority(business, journal_mode):
     attempt = business.directory.parent / "staging-attempt"
     attempt.mkdir(mode=0o700)
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=" + journal_mode)
     with business.db() as connection:
         connection.execute("INSERT INTO messages VALUES('large-doc-drill','alex',?,'2026-10-27')",
                            ("Disposable archive record " * 50000,))
     key = default_key_path(business.directory)
     created = _backup_cli("backup", business.directory, "--output", attempt / "bundle", "--mfa-key-file", key)
     assert created.returncode == 0, created.stderr
+    # Pack the untouched CLI output; no fingerprint/read-write connection may
+    # silently repair the artifact before the operator's next documented step.
     packed = _hosting_snippet("pack", attempt)
     assert packed.returncode == 0, packed.stderr
     assert (attempt / "backup.zip").stat().st_size > 1024 * 1024
@@ -307,6 +367,49 @@ def test_hosting_archive_snippets_and_cli_restore_large_bundle_with_current_auth
     if os.name == "posix":
         assert (attempt / "decrypted-bundle").stat().st_mode & 0o777 == 0o700
         assert all(path.stat().st_mode & 0o777 == 0o600 for path in (attempt / "decrypted-bundle").iterdir())
+
+
+@pytest.mark.parametrize("journal_mode", ["DELETE", "WAL"])
+def test_cli_backup_is_immediately_restorable_without_inspecting_database(business, journal_mode):
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=" + journal_mode)
+    bundle = business.directory.parent / "untouched-cli-bundle"
+    restored = business.directory.parent / "untouched-cli-restored"
+    key = default_key_path(business.directory)
+    created = _backup_cli("backup", business.directory, "--output", bundle, "--mfa-key-file", key)
+    assert created.returncode == 0, created.stderr
+    completed = _backup_cli("restore", bundle, "--output", restored, "--mfa-key-file", key,
+                            "--security-source", business.directory)
+    assert completed.returncode == 0, completed.stderr
+    assert {item.name for item in bundle.iterdir()} == {*backup.FILES, "manifest.json"}
+    assert _rows(restored, "users") == _rows(business.directory, "users")
+    assert _rows(restored, "sessions") == []
+    with Database(restored, mfa_key_file=key).transaction() as connection:
+        assert connection.execute("SELECT frozen FROM settings WHERE id=1").fetchone()[0] == 1
+    # Only the new snapshot is normalized; the live source keeps its mode.
+    with closing(sqlite3.connect(business.directory / "business.sqlite3")) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0].upper() == journal_mode
+
+
+def test_historical_wal_bundle_can_be_restored_twice_without_source_sidecars(business):
+    bundle = _make_backup(business)
+    # A historical valid bundle can have a WAL header but no WAL dependency:
+    # its previous writer checkpointed and closed before archiving three files.
+    with closing(sqlite3.connect(bundle / "business.sqlite3")) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["business.sqlite3"] = backup._digest(bundle / "business.sqlite3")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    before = {path.name: backup._digest(path) for path in bundle.iterdir()}
+    assert set(before) == {*backup.FILES, "manifest.json"}
+    for attempt in range(2):
+        restored = business.directory.parent / f"historical-wal-restore-{attempt}"
+        backup.restore_backup(bundle, restored, mfa_key_file=default_key_path(business.directory),
+                              security_source=business.directory)
+        # No SQLite connection to the original may hide sidecar creation here.
+        assert {path.name: backup._digest(path) for path in bundle.iterdir()} == before
+        assert _rows(restored, "sessions") == []
 
 
 @pytest.mark.parametrize("damage", ["traversal", "duplicate", "missing", "compressed", "digest"])

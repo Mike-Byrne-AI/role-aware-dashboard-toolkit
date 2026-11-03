@@ -29,7 +29,11 @@ if not __debug__:
     raise SystemExit("This evidence runner requires assertions. Rerun without -O, -OO or PYTHONOPTIMIZE.")
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "examples/business_dashboard"))
+
+from tools.business_login_client import login_post  # noqa: E402
+
 AGE_VERSION = "v1.3.2"
 # Pin archive digests published with the official release. Extraction admits
 # only the native age binary, never paths or executables supplied by an archive.
@@ -54,7 +58,9 @@ def digest(path):
 
 
 def source_fingerprint():
-    paths = [Path(__file__).resolve(), *sorted((ROOT / "examples/business_dashboard").rglob("*.py")),
+    paths = [Path(__file__).resolve(), ROOT / "tools/business_dashboard_browser.py",
+             *sorted((ROOT / "examples/business_dashboard").rglob("*.py")),
+             *sorted((ROOT / "examples/business_dashboard/business/password_data").iterdir()),
              *(ROOT / "role_aware_dashboard_toolkit" / name for name in ("access.py", "access_store.py", "security.py"))]
     return {str(path.relative_to(ROOT)): digest(path) for path in paths}
 
@@ -73,28 +79,27 @@ class DisposableFixture:
 def prepare_fixture(output):
     """Create only fictional state, without consulting hosted configuration."""
     import backup
-    from business.app import create_app
-    from business.db import Database, create_private_file
-    from business.mfa import setup_admin_mfa
-    from business.secret_store import create_key_file, default_key_path
+    from business.db import create_private_file
+    from business.enrollment import issue_grant
+    from business.secret_store import default_key_path
     from business.security import COOKIE_NAME, hash_password
-    from business.seed import provision
     from fastapi.testclient import TestClient
+    from tools.business_dashboard_browser import complete_fixture_enrollment, prepare_fixture as enroll_fixture, synthetic_mfa_clock
 
     runtime = output / "fictional-current"
     key = default_key_path(runtime)
     # Explicit creation and injection prevent a hosted Shell's ambient key
     # configuration from reading or reusing an actual application's secrets.
-    create_key_file(runtime, key)
-    credentials = provision(runtime, mfa_key_file=key)
-    database = Database(runtime, mfa_key_file=key)
+    credentials, application = enroll_fixture(runtime, ORIGIN)
+    database = application.state.database
     with database.transaction() as connection:
         for index in range(600):
             body = "".join(hashlib.sha256(f"fictional-{index}-{part}".encode()).hexdigest() for part in range(40))
             connection.execute("INSERT INTO messages VALUES(?,?,?,?)", (f"drill-{index}", "alex", body, "2026-10-27T12:00:00+00:00"))
     # The explicit loopback origin also avoids hosted Turnstile configuration.
-    with TestClient(create_app(runtime, public_origin=ORIGIN, mfa_key_file=key), base_url=ORIGIN) as client:
-        login = client.post("/api/login", json={"username": "alex", "password": credentials["alex"]}, headers={"Origin": ORIGIN})
+    with synthetic_mfa_clock(database) as code, TestClient(application, base_url=ORIGIN) as client:
+        login = login_post(client, "/api/login", json={"username": "alex", "password": credentials["alex"], "otp": code("alex")},
+                            headers={"Origin": ORIGIN})
         assert login.status_code == 200, "Disposable initial login failed"
         previous_cookie = client.cookies.get(COOKIE_NAME)
     bundle = output / "backup"
@@ -111,7 +116,8 @@ def prepare_fixture(output):
         connection.execute("UPDATE users SET active=0,revision=revision+1 WHERE id='blair'")
         connection.execute("UPDATE users SET password_hash=?,revision=revision+1 WHERE id='alex'", (hash_password(replacement),))
         connection.execute("INSERT INTO login_limits VALUES('preserved-current-budget',12345,7)")
-    setup_admin_mfa(runtime, reset=True, mfa_key_file=key)
+        grant = issue_grant(connection, "admin", purpose="recovery", case_reference="DISPOSABLE-RECOVERY-DRILL")
+    credentials.update(complete_fixture_enrollment(application, {"admin": grant}, ORIGIN))
     custody = output / "independent-key-custody"
     custody.mkdir(mode=0o700)
     create_private_file(custody / "mfa.key", key.read_bytes())
@@ -133,6 +139,7 @@ def run(archive_path, output):
     from business.db import create_private_file
     from business.security import COOKIE_NAME
     from fastapi.testclient import TestClient
+    from tools.business_dashboard_browser import synthetic_mfa_clock
 
     output = backup._new_directory(output)
     create_private_file(output / "source.json", json.dumps({
@@ -174,21 +181,23 @@ def run(archive_path, output):
     result = backup.restore_backup(extracted, restored, mfa_key_file=fixture.custody_key, security_source=runtime)
     assert result == {"quarantined": False, "sessions_revoked": True, "frozen": True}
     with closing(sqlite3.connect(runtime / "business.sqlite3")) as current, closing(sqlite3.connect(restored / "business.sqlite3")) as recovered:
-        for table in ("users", "admin_mfa", "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits"):
+        for table in ("users", "account_mfa", "account_security", "authentication_policy", "enrollment_decisions",
+                      "mfa_key_binding", "passkey_credentials", "login_limits", "submission_limits"):
             assert current.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall() == recovered.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall(), "Current security reconciliation differs"
-        for table in ("sessions", "session_mfa", "session_security", "session_passkey", "passkey_challenges"):
+        for table in ("sessions", "session_mfa", "session_security", "session_passkey", "session_predecessors",
+                      "passkey_challenges", "enrollment_grants", "enrollment_sessions"):
             assert recovered.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, "Historical session survived"
         assert recovered.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= 600
     application = create_app(restored, public_origin=ORIGIN, mfa_key_file=fixture.custody_key)
-    with TestClient(application, base_url=ORIGIN) as client:
+    with synthetic_mfa_clock(application.state.database) as code, TestClient(application, base_url=ORIGIN) as client:
         assert client.get("/api/messages", headers={"Cookie": f"{COOKIE_NAME}={fixture.previous_cookie}"}).status_code == 401
-        assert client.post("/api/login", json={"username": "alex", "password": fixture.credentials["alex"]}, headers={"Origin": ORIGIN}).status_code == 401
-        login = client.post("/api/login", json={"username": "alex", "password": fixture.replacement}, headers={"Origin": ORIGIN})
+        assert login_post(client, "/api/login", json={"username": "alex", "password": fixture.credentials["alex"], "otp": code("alex")}, headers={"Origin": ORIGIN}).status_code == 401
+        login = login_post(client, "/api/login", json={"username": "alex", "password": fixture.replacement, "otp": code("alex")}, headers={"Origin": ORIGIN})
         assert login.status_code == 200 and login.json()["frozen"] is True
         assert client.get("/api/messages").status_code == 200
         assert client.post("/api/messages", json={"body": "Frozen action must fail"}, headers={"Origin": ORIGIN, "X-CSRF-Token": login.json()["csrf"]}).status_code == 403
-    with TestClient(application, base_url=ORIGIN) as client:
-        assert client.post("/api/login", json={"username": "blair", "password": fixture.credentials["blair"]}, headers={"Origin": ORIGIN}).status_code == 401
+    with synthetic_mfa_clock(application.state.database) as code, TestClient(application, base_url=ORIGIN) as client:
+        assert login_post(client, "/api/login", json={"username": "blair", "password": fixture.credentials["blair"], "otp": code("blair")}, headers={"Origin": ORIGIN}).status_code == 401
     if source_hashes != source_fingerprint():
         raise ValueError("Source changed during the drill; preserve this run and repeat against a stable snapshot.")
     summary = {
@@ -199,6 +208,7 @@ def run(archive_path, output):
         "archive_sha256": digest(plaintext_zip), "ciphertext_sha256": digest(encrypted),
         "decrypted_archive_matches": True, "independent_mfa_key_custody_used": True,
         "synthetic_mfa_key_explicitly_created_and_injected": True,
+        "initial_and_recovery_enrollment_completed_through_http": True,
         "current_credentials_disabled_accounts_mfa_and_budgets_preserved": True,
         "historical_sessions_and_old_password_rejected": True, "current_login_and_private_read_passed": True,
         "frozen_write_refused": True,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from tools.business_login_client import login_post
+
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -33,6 +35,7 @@ from business.security import COOKIE_NAME  # noqa: E402
 from business.secret_store import default_key_path  # noqa: E402
 from business import mfa  # noqa: E402
 from business.abuse import PUBLIC_RULES  # noqa: E402
+from tools.business_dashboard_browser import complete_fixture_enrollment  # noqa: E402
 
 ORIGIN = "http://127.0.0.1:8091"
 EMPLOYEES = ("alex", "blair", "casey", "drew", "ellis")
@@ -61,7 +64,7 @@ class Actor:
 class Trial:
     def __init__(self, directory, credentials, stack):
         self.directory = directory
-        self.credentials = credentials
+        self.credentials = dict(credentials)
         self.app = create_app(directory, public_origin=ORIGIN)
         self.stack = stack
         self.mfa_time = mfa.current_time()
@@ -69,27 +72,66 @@ class Trial:
     def client(self, app=None, **kwargs):
         return self.stack.enter_context(TestClient(app or self.app, base_url=ORIGIN, **kwargs))
 
-    def login_payload(self, username, password=None):
-        payload = {
-            "username": username, "password": password or self.credentials[username],
-        }
-        with self.db() as connection:
-            enrollment = connection.execute("SELECT * FROM admin_mfa WHERE user_id=?", (username,)).fetchone()
+    def next_otp(self, username):
+        """Get the next unconsumed disposable account code, including employees."""
+        with self.app.state.database.readonly_snapshot() as connection:
+            enrollment = connection.execute("SELECT * FROM account_mfa WHERE user_id=?", (username,)).fetchone()
         if enrollment:
             self.mfa_time = max(self.mfa_time, (enrollment["last_counter"] + 1) * mfa.INTERVAL)
             secret = self.app.state.database.mfa_secrets.decrypt(enrollment["secret_ciphertext"], username, enrollment["generation"])
-            payload["otp"] = pyotp.TOTP(secret).at(self.mfa_time)
+            return pyotp.TOTP(secret).at(self.mfa_time)
+        return None
+
+    def login_payload(self, username, password=None):
+        payload = {
+            "username": username, "password": self.credentials[username] if password is None else password,
+        }
+        otp = self.next_otp(username)
+        if otp is not None:
+            payload["otp"] = otp
         return payload
+
+    def reauth_payload(self, username, password=None):
+        payload = self.login_payload(username, password)
+        payload["current_password"] = payload.pop("password")
+        del payload["username"]
+        return payload
+
+    def complete_enrollment(self, username, grant):
+        """Complete a reviewed test grant through the actual HTTP ceremony."""
+        chosen = complete_fixture_enrollment(self.app, {username: grant}, ORIGIN)
+        self.credentials.update(chosen)
+        return chosen[username]
+
+    def user_revision(self, username):
+        with self.db() as connection:
+            return connection.execute("SELECT revision FROM users WHERE id=?", (username,)).fetchone()[0]
 
     def login(self, username, password=None):
         client = self.client()
-        response = client.post("/api/login", json=self.login_payload(username, password), headers={"Origin": ORIGIN})
+        response = login_post(client, "/api/login", json=self.login_payload(username, password), headers={"Origin": ORIGIN})
         assert response.status_code == 200, "Disposable account could not sign in"
         data = response.json()
         return Actor(client, data["user"], data["csrf"])
 
     def db(self):
         return self.app.state.database.transaction()
+
+    @contextmanager
+    def raw_db(self):
+        # Test-only raw inspection/setup also supports deliberately corrupt or
+        # downgraded fixtures. Requests use Database.transaction's live guards.
+        connection = self.app.state.database._connect()
+        try:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
 
 @pytest.fixture(scope="session")
@@ -99,12 +141,23 @@ def business_seed():
         directory = Path(temporary).resolve() / "private"
         output = io.StringIO()
         with redirect_stdout(output), redirect_stderr(output):
-            credentials = provision(directory)
+            grants = provision(directory)
+            application = create_app(directory, public_origin=ORIGIN)
+            credentials = complete_fixture_enrollment(application, grants, ORIGIN)
         yield Seed(directory, credentials, output.getvalue())
 
 
 @pytest.fixture
 def business(business_seed, monkeypatch):
+    # Event accounting/fault tests control delivery explicitly. Real lifespan
+    # delivery, failure and overlapping-client behavior have dedicated tests in
+    # test_business_security_delivery.py; production/browser apps keep it on.
+    from business.security_delivery import SecurityEventDispatcher
+    from business.event_remote import RemoteSecurityEventDispatcher
+    monkeypatch.setattr(SecurityEventDispatcher, "start", lambda self: None)
+    monkeypatch.setattr(SecurityEventDispatcher, "stop", lambda self: None)
+    monkeypatch.setattr(RemoteSecurityEventDispatcher, "start", lambda self: None)
+    monkeypatch.setattr(RemoteSecurityEventDispatcher, "stop", lambda self: None)
     with tempfile.TemporaryDirectory(prefix="radt-business-test-") as temporary:
         directory = Path(temporary).resolve() / "private"
         shutil.copytree(business_seed.directory, directory)
@@ -144,18 +197,22 @@ def saved(response, key):
     return response.json()[key]
 
 
-def business_rows(trial):
-    with trial.db() as connection:
+def business_rows(trial, *, raw=False):
+    with (trial.raw_db() if raw else trial.db()) as connection:
         return tuple(tuple(tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1"))
                      for table in ("events", "assignments", "messages", "contacts", "posts", "activity"))
 
 
-def test_seed_has_one_admin_five_employees_unique_passwords_and_no_console_secrets(business, business_seed):
+def test_enrolled_fixture_has_one_admin_five_employees_and_no_console_secrets(business, business_seed):
     assert set(business_seed.credentials) == {"admin", *EMPLOYEES}
     assert len(set(business_seed.credentials.values())) == 6
     assert all(len(password) >= 12 for password in business_seed.credentials.values())
     with business.db() as connection:
         users = connection.execute("SELECT username,role,password_hash FROM users ORDER BY username").fetchall()
+        assert connection.execute("SELECT COUNT(*) FROM account_security WHERE lifecycle='active'").fetchone()[0] == 6
+        assert connection.execute("SELECT COUNT(*) FROM account_mfa WHERE last_counter>=0").fetchone()[0] == 6
+        for table in ("enrollment_grants", "enrollment_sessions", "sessions"):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     assert {row["username"]: row["role"] for row in users} == {
         "admin": "admin", **dict.fromkeys(EMPLOYEES, "employee"),
     }
@@ -212,7 +269,7 @@ def test_public_board_link_serves_shell_without_private_data_or_staff_access(bus
 def test_guest_is_not_a_passwordless_staff_account(business):
     client = business.client()
     for username in ("guest", "admin", "alex"):
-        response = client.post("/api/login", json={"username": username, "password": ""}, headers={"Origin": ORIGIN})
+        response = login_post(client, "/api/login", json={"username": username, "password": ""}, headers={"Origin": ORIGIN})
         assert response.status_code in (401, 422)
     assert client.get("/api/session").json()["user"] is None
     assert client.get("/api/public/posts").status_code == 200
@@ -282,7 +339,7 @@ def test_csrf_missing_forged_other_session_and_origin_attacks_preserve_records(b
 
 @pytest.mark.parametrize("origin", [None, "null", "http://127.0.0.1:8091.evil.invalid", "https://127.0.0.1:8091"])
 def test_login_rejects_missing_or_foreign_origin(business, origin):
-    response = business.client().post("/api/login", json={"username": "admin", "password": business.credentials["admin"]},
+    response = login_post(business.client(), "/api/login", json={"username": "admin", "password": business.credentials["admin"]},
                                       headers={} if origin is None else {"Origin": origin})
     assert response.status_code == 403
 
@@ -306,7 +363,7 @@ def test_password_change_revokes_all_sessions_and_old_password(business):
     replay = business.client()
     replay.cookies.set(COOKIE_NAME, cookie)
     assert replay.get("/api/messages").status_code == 401
-    assert business.client().post("/api/login", json={
+    assert login_post(business.client(), "/api/login", json={
         "username": "alex", "password": business.credentials["alex"],
     }, headers={"Origin": ORIGIN}).status_code == 401
     assert business.login("alex", NEW_PASSWORD).request("GET", "/api/messages").status_code == 200
@@ -315,11 +372,13 @@ def test_password_change_revokes_all_sessions_and_old_password(business):
 def test_disable_reenable_does_not_resurrect_previous_session(business, business_admin):
     employee = business.login("alex")
     cookie = employee.client.cookies.get(COOKIE_NAME)
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 200
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={
+        "active": False, "revision": business.user_revision("alex"),
+    }).status_code == 200
     users = business_admin.request("GET", "/api/admin/users").json()["users"]
     user = next(row for row in users if row["id"] == "alex")
     assert employee.request("GET", "/api/messages").status_code == 401
-    assert business.client().post("/api/login", json={"username": "alex", "password": business.credentials["alex"]},
+    assert login_post(business.client(), "/api/login", json={"username": "alex", "password": business.credentials["alex"]},
                                   headers={"Origin": ORIGIN}).status_code == 401
     assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": user["revision"]}).status_code == 200
     replay = business.client()
@@ -377,12 +436,15 @@ def test_freeze_blocks_business_writes_preserves_reads_and_admin_can_resume(busi
 
 def test_freeze_keeps_account_security_available_with_stale_and_last_admin_protection(business, business_admin):
     alex, blair, casey = (business.login(username) for username in ("alex", "blair", "casey"))
+    revision = business.user_revision("alex")
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": True, "revision": 0}).status_code == 200
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 200
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": revision}).status_code == 200
     assert alex.request("GET", "/api/messages").status_code == 401
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": 0}).status_code == 409
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": 1}).status_code == 403
-    assert business_admin.request("PUT", "/api/admin/users/admin", json={"active": False, "revision": 0}).status_code == 409
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": False, "revision": revision}).status_code == 409
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": revision + 1}).status_code == 403
+    assert business_admin.request("PUT", "/api/admin/users/admin", json={
+        "active": False, "revision": business.user_revision("admin"),
+    }).status_code == 409
     assert blair.request("POST", "/api/password", json={
         "current_password": business.credentials["blair"], "new_password": NEW_PASSWORD,
     }).status_code == 200
@@ -390,7 +452,7 @@ def test_freeze_keeps_account_security_available_with_stale_and_last_admin_prote
     assert casey.request("POST", "/api/logout", json={}).status_code == 200
     assert casey.request("GET", "/api/messages").status_code == 401
     assert business_admin.request("POST", "/api/admin/freeze", json={"frozen": False, "revision": 1}).status_code == 200
-    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": 1}).status_code == 200
+    assert business_admin.request("PUT", "/api/admin/users/alex", json={"active": True, "revision": revision + 1}).status_code == 200
 
 
 def test_schedule_revisions_preserve_newer_edits_and_archive(business, business_admin):
@@ -461,7 +523,7 @@ def test_restart_preserves_saved_records_credentials_and_identity(business, busi
     identity = (business.directory / "identity.key").read_bytes()
     restarted = create_app(business.directory, public_origin=ORIGIN)
     client = business.client(restarted)
-    response = client.post("/api/login", json=business.login_payload("admin"), headers={"Origin": ORIGIN})
+    response = login_post(client, "/api/login", json=business.login_payload("admin"), headers={"Origin": ORIGIN})
     assert response.status_code == 200
     assert any(row["id"] == message["id"] for row in client.get("/api/messages").json()["messages"])
     # Login may append an audit entry; business records themselves must survive untouched.
@@ -502,7 +564,7 @@ def test_missing_identity_key_fails_closed_without_recreating_state(business):
 def test_errors_and_public_assets_do_not_expose_credentials_or_database(business, business_admin):
     secret = "SECRET_VALIDATION_CANARY_" + "x" * 500
     responses = [
-        business.client().post("/api/login", json={"username": "admin", "password": secret}, headers={"Origin": ORIGIN}),
+        login_post(business.client(), "/api/login", json={"username": "admin", "password": secret}, headers={"Origin": ORIGIN}),
         business_admin.request("POST", "/api/password", json={"current_password": secret, "new_password": secret}),
         business_admin.request("POST", "/api/messages", content="{invalid SECRET_PARSER_CANARY", headers={"Content-Type": "application/json"}),
     ]
@@ -721,8 +783,59 @@ def test_concurrent_reviews_publish_one_post(business, business_admin):
     assert len([post for post in posts if post["title"] == "Single concurrent publication"]) == 1
 
 
+def downgrade_delivery_schema(connection):
+    """Construct the historical local-only schema for explicit migration tests."""
+    from business.db import SCHEMA_V8
+
+    assert connection.execute("SELECT COUNT(*) FROM security_destinations WHERE kind='https'").fetchone()[0] == 0
+    rows = connection.execute(
+        "SELECT event_id,attempts,next_attempt_at,acknowledged_at,last_error "
+        "FROM security_delivery_obligations WHERE destination_id='local-v1'"
+    ).fetchall()
+    for table in ("security_delivery_obligations", "security_event_payloads",
+                  "security_destinations", "security_delivery_identity"):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("DROP TRIGGER security_events_immutable")
+    with sqlite3.connect(":memory:") as expected:
+        expected.executescript(SCHEMA_V8)
+        statements = expected.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name='security_outbox' AND sql IS NOT NULL ORDER BY rowid"
+        ).fetchall()
+    for row in statements:
+        connection.execute(row[0])
+    connection.executemany("INSERT INTO security_outbox VALUES(?,?,?,?,?)", rows)
+    connection.execute("PRAGMA user_version=8")
+
+
+def downgrade_enrollment_schema(connection):
+    """Reconstruct schema seven explicitly for historical migration fixtures."""
+    from business.db import SCHEMA_V7
+
+    # Historical schemas had no browser-flow authority. Drop child bindings
+    # before creator references while preserving the actual legacy sessions.
+    for table in ("session_browser_flow", "browser_login_flows", "browser_flow_state"):
+        connection.execute(f"DROP TABLE IF EXISTS {table}")
+    downgrade_delivery_schema(connection)
+    for table in ("enrollment_sessions", "enrollment_grants", "enrollment_decisions",
+                  "account_security", "authentication_policy"):
+        connection.execute(f"DROP TABLE {table}")
+    # Reverse ALTER TABLE adds quoted identifiers, which is not the historical
+    # exact schema contract. Rebuild from its original DDL instead.
+    with sqlite3.connect(":memory:") as expected:
+        expected.executescript(SCHEMA_V7)
+        ddl = expected.execute("SELECT sql FROM sqlite_master WHERE name='admin_mfa'").fetchone()[0]
+    connection.execute(ddl)
+    connection.execute("INSERT INTO admin_mfa SELECT * FROM account_mfa")
+    connection.execute("DROP TABLE account_mfa")
+    connection.execute("PRAGMA user_version=7")
+
+
 def as_legacy_database(business):
     with business.db() as connection:
+        downgrade_enrollment_schema(connection)
+        for table in ("security_sink_receipts", "security_outbox", "security_denial_budget", "security_events"):
+            connection.execute(f"DROP TABLE {table}")
+        connection.execute("DROP TABLE session_predecessors")
         connection.execute("DROP TABLE session_passkey")
         connection.execute("DROP TABLE passkey_challenges")
         connection.execute("DROP TABLE passkey_credentials")
@@ -741,19 +854,19 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
     saved(business_admin.request("POST", "/api/messages", json={"body": "Preserved legacy message"}), "message")
     employee = business.login("alex")
     as_legacy_database(business)
-    before = business_rows(business)
+    before = business_rows(business, raw=True)
     identity = (business.directory / "identity.key").read_bytes()
     accounts = (business.directory / "ACCOUNTS.md").read_bytes()
-    with business.db() as connection:
+    with business.raw_db() as connection:
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
         sessions_before = [tuple(row) for row in connection.execute("SELECT * FROM sessions WHERE user_id<>'admin' ORDER BY token_hash")]
     with pytest.raises(ValueError, match="explicit"):
         create_app(business.directory, public_origin=ORIGIN)
     Database(business.directory, migrate=True)
     migrated = create_app(business.directory, public_origin=ORIGIN)
-    assert business_rows(business) == before
-    with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert business_rows(business, raw=True) == before
+    with business.raw_db() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == sessions_before
     assert (business.directory / "identity.key").read_bytes() == identity
@@ -769,7 +882,7 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
 def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl(business, damage):
     from business.db import Database
     as_legacy_database(business)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         if damage == "missing-old-table":
             connection.execute("DROP TABLE contacts")
         else:
@@ -779,7 +892,7 @@ def test_submission_migration_refuses_malformed_legacy_state_without_partial_ddl
         users_before = [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")]
     with pytest.raises(ValueError):
         Database(business.directory, migrate=True)
-    with business.db() as connection:
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
@@ -791,8 +904,8 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
     from business import db
 
     as_legacy_database(business)
-    before = business_rows(business)
-    with business.db() as connection:
+    before = business_rows(business, raw=True)
+    with business.raw_db() as connection:
         schema_before = [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")]
     apply = db._apply_submission_migration
 
@@ -803,14 +916,14 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
     monkeypatch.setattr(db, "_apply_submission_migration", fail_after_ddl)
     with pytest.raises(ValueError):
         db.Database(business.directory, migrate=True)
-    assert business_rows(business) == before
-    with business.db() as connection:
+    assert business_rows(business, raw=True) == before
+    with business.raw_db() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
         assert [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")] == schema_before
     monkeypatch.setattr(db, "_apply_submission_migration", apply)
     db.Database(business.directory, migrate=True)
-    with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    with business.raw_db() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
 
 
 @pytest.mark.parametrize("condition", ["paused", "address-limit", "global-limit", "queue-full"])

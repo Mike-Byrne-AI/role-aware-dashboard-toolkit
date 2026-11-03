@@ -233,7 +233,7 @@ def test_current_authorization_is_checked_before_receipt_replay(business, busine
         elif change == "frozen":
             connection.execute("UPDATE settings SET frozen=1,freeze_revision=freeze_revision+1 WHERE id=1")
         elif change == "mfa":
-            connection.execute("UPDATE admin_mfa SET generation='replacement-generation' WHERE user_id='admin'")
+            connection.execute("UPDATE account_mfa SET generation='replacement-generation' WHERE user_id='admin'")
     headers = {"X-CSRF-Token": "invalid"} if change == "csrf" else {"Origin": "https://foreign.invalid"} if change == "origin" else {}
     before = _counts(business)
     response = _create(business_admin, "/api/admin/contacts", payload, headers=headers)

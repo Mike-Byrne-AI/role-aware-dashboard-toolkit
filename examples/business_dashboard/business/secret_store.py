@@ -59,14 +59,29 @@ def key_path(data_dir, configured=None) -> Path:
 
 
 def create_key_file(data_dir, configured=None) -> Path:
-    """Explicit exclusive creation. Never repair or overwrite an existing key."""
-    from .db import create_private_file, validate_data_dir
+    """Create exclusively and publish its directory entries before POSIX cutover.
+
+    A failed flush retains any new key and directories for investigation. It
+    never authorizes a ciphertext cutover or silently retries an uncertain path.
+    Windows directory-entry durability requires separate host qualification.
+    """
+    from .db import create_private_file, sync_directory, validate_data_dir
 
     path = key_path(data_dir, configured)
+    new_parents = []
+    for parent in (path.parent, *path.parent.parents):
+        if parent.exists():
+            break
+        new_parents.append(parent)
     validate_data_dir(path.parent, create=True)
     if os.path.lexists(path):
         raise ValueError("The MFA encryption key already exists; preserve it.")
     create_private_file(path, secrets.token_bytes(32))
+    # First persist the key name, then each newly created ancestor's name in
+    # its parent. A file fsync does not make these directory entries durable.
+    # Every POSIX error propagates before the caller can re-encrypt its rows.
+    for directory in (path.parent, *(parent.parent for parent in new_parents)):
+        sync_directory(directory)
     return path
 
 
@@ -129,14 +144,28 @@ class SecretStore:
         if row is None:
             raise ValueError("MFA encryption key binding is missing; preserve existing state.")
         self.check_binding(row[0])
-        for row in connection.execute("SELECT * FROM admin_mfa"):
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        # Explicit four-to-five migration validates the new encrypted columns
+        # inside its transaction before publishing user_version=5.
+        if version not in (4, 5, 6, 7, 8, 9, 10):
+            raise ValueError("MFA validation requires a reviewed storage schema.")
+        table = "account_mfa" if version in (8, 9, 10) else "admin_mfa"
+        for row in connection.execute(f"SELECT * FROM {table}"):
             if (not isinstance(row["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", row["generation"])
                     or type(row["last_counter"]) is not int or row["last_counter"] < -1):
-                raise ValueError("An administrator authenticator is invalid; preserve existing state.")
-            secret = self.decrypt(row["secret_ciphertext"], row["user_id"], row["generation"])
-            try:
-                valid = len(secret) == 32 and len(base64.b32decode(secret, casefold=False)) == 20
-            except (binascii.Error, ValueError):
-                valid = False
-            if not valid:
-                raise ValueError("An administrator authenticator is invalid; preserve existing state.")
+                raise ValueError("An account authenticator is invalid; preserve existing state.")
+            self._validate_seed(row["secret_ciphertext"], row["user_id"], row["generation"])
+        if version in (8, 9, 10):
+            for row in connection.execute("SELECT * FROM enrollment_sessions"):
+                if not isinstance(row["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", row["generation"]):
+                    raise ValueError("A pending authenticator is invalid; preserve existing state.")
+                self._validate_seed(row["secret_ciphertext"], "enrollment:" + row["user_id"], row["generation"])
+
+    def _validate_seed(self, ciphertext, user_id, generation):
+        secret = self.decrypt(ciphertext, user_id, generation)
+        try:
+            valid = len(secret) == 32 and len(base64.b32decode(secret, casefold=False)) == 20
+        except (binascii.Error, ValueError):
+            valid = False
+        if not valid:
+            raise ValueError("An account authenticator is invalid; preserve existing state.")

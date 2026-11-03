@@ -26,6 +26,11 @@ VALID_KINDS = ("slider", "toggle", "number", "select", "text", "color")
 _USER_SET_PREFIX = "_radt_user_set__"
 
 
+def _validate_control_key(key: Any) -> None:
+    if not isinstance(key, str):
+        raise attach_diagnostic(TypeError("Control key must be a string"), "RADT-CONTROL-DEFINITION")
+
+
 @dataclass
 class ControlDef:
     """
@@ -65,6 +70,9 @@ class ControlDef:
     visible: bool = True
     sensitive: bool = False
 
+    def __post_init__(self) -> None:
+        _validate_control_key(self.key)
+
 
 class ControlRegistry:
     """Stores control definitions and provides grouped iteration for rendering."""
@@ -99,7 +107,8 @@ class ControlRegistry:
 
         if key is None:
             key = name.lower().replace(" ", "_")
-        if isinstance(key, str) and key.startswith("_radt_"):
+        _validate_control_key(key)
+        if key.startswith("_radt_"):
             raise attach_diagnostic(ValueError(
                 "Control keys beginning with '_radt_' are reserved for toolkit state"
             ), "RADT-CONTROL-DEFINITION")

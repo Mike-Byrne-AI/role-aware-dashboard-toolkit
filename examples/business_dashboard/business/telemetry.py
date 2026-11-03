@@ -8,6 +8,7 @@ EVENTS = (
     "auth_lookup_started", "auth_lookup_busy",
     "auth_known_started", "auth_known_busy",
     "auth_unknown_started", "auth_unknown_busy",
+    "login_context_started", "login_context_busy",
     "login_budget_denied", "login_reservation_expired", "login_identity_changed",
     "login_rejected", "login_succeeded",
     "password_budget_denied", "password_reservation_expired", "password_identity_changed",
