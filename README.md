@@ -14,6 +14,7 @@ supplies the data, measurements, model calls, and business actions.
 **Early beta · Core/API: Python 3.10+ · Streamlit UI: Python 3.11+ · MIT license · Distributed as GitHub source**
 
 [Quick start](#quick-start) · [Examples](examples/README.md) ·
+[Security review](#security-engineering-review) ·
 [Documentation](docs/README.md) ·
 [Issues](https://github.com/Mike-Byrne-AI/role-aware-dashboard-toolkit/issues)
 
@@ -43,6 +44,25 @@ be used independently of this dashboard.*
   business metrics and admin audit pages using fictional data. Its
   [hosting guide](examples/landscaping/HOSTING.md) provides explicit provisioning,
   startup checks and an HTTPS acceptance runner for a shared pilot.
+
+## Security engineering review
+
+The fictional Westbridge application is a security testbed for inspecting
+authorization, enrollment, session lifecycle, event delivery and recovery.
+Start with its [security design and review map](examples/business_dashboard/SECURITY_DESIGN.md)
+for the threat model, trust boundaries, implementation and regression pointers,
+tradeoffs and selected OWASP ASVS review targets. Then use the
+[security lab](examples/business_dashboard/SECURITY_LAB.md) for reproducible
+exercises and the [hosting acceptance guide](examples/business_dashboard/HOSTING.md)
+for the operational checks.
+
+Source contracts, local tests, CI results and hosted observations have different
+scopes. A test definition is not an execution receipt; passing local or CI checks
+does not establish deployed behavior, physical-device passkeys, independent
+recovery custody or alert response. The review map does not establish an ASVS
+level or security certification. Retain reviewed receipts with their exact
+source identity and limitations using the dossier's
+[evidence retention guidance](examples/business_dashboard/SECURITY_DESIGN.md#retain-review-evidence).
 
 ## What is included
 
