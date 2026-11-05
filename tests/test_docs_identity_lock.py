@@ -63,6 +63,7 @@ def test_readme_primary_paths_use_only_retained_generic_examples():
     assert referenced_examples == {
         "examples.core_library",
         "examples/README.md",
+        "examples/business_dashboard",  # Fictional security review path.
         "examples/dashboard_admin_controls_app.py",
         "examples/operator_review",
         "examples/landscaping",
