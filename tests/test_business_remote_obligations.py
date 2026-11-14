@@ -36,7 +36,7 @@ def sources():
         # macOS temp paths traverse /var; only this owned root is canonicalized.
         root, created = Path(temporary).resolve(strict=True), []
 
-        def create(version=10):
+        def create(version=11):
             directory = root / f"source-{len(created)}"
             directory.mkdir(mode=0o700)
             identity = secrets.token_bytes(32)
@@ -47,7 +47,7 @@ def sources():
             storage.create_private_file(path, b"")
             with closing(sqlite3.connect(path)) as connection:
                 connection.row_factory = sqlite3.Row
-                connection.executescript({8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9, 10: storage.SCHEMA}[version])
+                connection.executescript({8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9, 10: storage.SCHEMA_V10, 11: storage.SCHEMA}[version])
                 for username, role in (("admin", "admin"), ("employee", "employee")):
                     connection.execute("INSERT INTO users VALUES(?,?,?,?,?,1,?,0)",
                                        (username, username, username, "!unusable-test-password!", role,
@@ -58,7 +58,7 @@ def sources():
             result = SimpleNamespace(directory=directory, path=path, key=key,
                                      principal=principal_for_user("admin", identity), database=None)
             created.append(result)
-            if version == 10:
+            if version == 11:
                 result.database = storage.Database(directory, mfa_key_file=key)
             return result
 
@@ -125,7 +125,7 @@ def drain_remote(source):
 def test_current_schema_freezes_event_and_keeps_no_legacy_dispatch_alias(source):
     identifier = record(source, now=123)
     with source.database.readonly_snapshot() as connection:
-        storage._require_schema(connection, 10)
+        storage._require_schema(connection, 11)
         frozen = destinations.load_event_payload(connection, identifier)
         body = json.loads(frozen.data)
         assert body["event"]["occurred_at"] == 123.0 and type(body["event"]["occurred_at"]) is float
@@ -153,7 +153,7 @@ def test_explicit_eight_through_nine_to_current_upgrade_preserves_local_receipt_
         connection.execute("UPDATE security_outbox SET delivered_at=NULL,last_error='delivery_failed' WHERE event_id=?", ("b" * 32,))
         connection.execute("INSERT INTO security_sink_receipts VALUES(?,23.0,'historical-local-receipt')", ("a" * 32,))
     before = fingerprint(source)
-    with pytest.raises(ValueError, match="schema ten"):
+    with pytest.raises(ValueError, match="schema eleven"):
         storage.Database(source.directory, mfa_key_file=source.key)
     assert fingerprint(source) == before
     upgraded = storage.Database(source.directory, mfa_key_file=source.key, migrate=True)
@@ -165,7 +165,7 @@ def test_explicit_eight_through_nine_to_current_upgrade_preserves_local_receipt_
         assert connection.execute("SELECT payload_json FROM security_sink_receipts").fetchone()[0] == "historical-local-receipt"
         assert connection.execute("SELECT COUNT(*) FROM security_event_payloads").fetchone()[0] == 2
         assert destinations.source_identity(connection)["heartbeat_sequence"] == 0
-        storage._require_schema(connection, 10)
+        storage._require_schema(connection, 11)
 
 
 @pytest.mark.parametrize("damage", ["time", "code", "missing_obligation"])

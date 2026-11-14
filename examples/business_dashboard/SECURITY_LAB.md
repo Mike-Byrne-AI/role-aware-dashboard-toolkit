@@ -162,7 +162,7 @@ start response requires offline reissue. If a completion response is lost,
 attempt sign-in with the chosen password and a new code to determine whether
 it committed; never automatically replay the setup or claim it rolled back.
 
-On a protected legacy copy, explicitly migrate to schema ten. Existing access
+On a protected legacy copy, explicitly migrate to schema eleven. Existing access
 remains `legacy` under `transition`: employee password-only access persists until
 each account completes migration enrollment. Issuing a migration grant preserves
 that account's access; completion revokes old sessions and requires MFA from
@@ -440,7 +440,7 @@ later revocations cannot be lost.
 Preserved schema-five through schema-nine archives need the explicit `restore --upgrade-backup-schema`
 option. It verifies the archive's checksums, exact schema, original identity and
 MFA key, then upgrades only its private staging copy to ten. Reconciliation uses
-the reviewed current schema-ten security source, including current event delivery
+the reviewed current schema-eleven security source, including current event delivery
 acknowledgments. Source identity, destinations, frozen payload bytes, pending
 obligations and heartbeat/event sequence high-water marks are preserved together.
 The original archive and authority source remain unchanged. Collector backups
@@ -448,7 +448,7 @@ have a separate quarantine and accepted-ledger continuity requirement described
 in the [collector guide](../security_event_collector/README.md#backups-and-continuity).
 Without current authority, the upgraded result remains quarantined. Other
 legacy archive versions are refused; ordinary startup and backup creation stay
-schema-ten-only. Current policy, account lifecycle, MFA and durable enrollment
+schema-eleven-only. Current policy, account lifecycle, MFA and durable enrollment
 decisions replace historical state. A retired password hash is preserved only
 to reject reuse during recovery; it cannot authenticate. Restored sessions,
 challenges, predecessor mappings, enrollment grants and pending setup sessions

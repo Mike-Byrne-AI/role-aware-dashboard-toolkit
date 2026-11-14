@@ -5,7 +5,9 @@ const editor = document.querySelector("#editor");
 const toastElement = document.querySelector("#toast");
 const state = { user: null, csrf: "", frozen: false, freeze_revision: 0, page: "", guest: false, submissionReceipt: false, data: {} };
 let navigation = 0;
+let workOptions = {stage:"all",query:"",owner:"",view:"board"};
 let dialogState = null;
+let workspaceTour = null;
 let toastTimer;
 let turnstileScript;
 let turnstileLoadSequence=0;
@@ -321,6 +323,8 @@ const enrollmentUI=window.WestbridgeEnrollment.create({
 });
 
 function setSession(session) {
+  if(state.user?.id!==session.user?.id || state.user?.role!==session.user?.role || state.csrf!==(session.csrf||""))workspaceTour?.close({restoreFocus:false});
+  if(state.user?.id!==session.user?.id || state.user?.role!==session.user?.role)workOptions={stage:"all",query:"",owner:"",view:"board"};
   if(state.user?.id!==session.user?.id || state.csrf!==(session.csrf||""))closeSecurityDialogs();
   state.user = session.user || null;
   state.csrf = session.csrf || "";
@@ -594,15 +598,15 @@ function renderLogin() {
   syncLoginControls();
 }
 
-const pages = {overview:{label:"Overview",icon:"grid"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"},lab:{label:"Security lab",icon:"shield"}};
+const pages = {overview:{label:"Overview",icon:"grid"},work:{label:"Work",icon:"check"},schedule:{label:"Schedule",icon:"calendar"},messages:{label:"Team board",icon:"message"},outreach:{label:"Outreach",icon:"outreach"},public:{label:"Public board",icon:"board"},security:{label:"Security & recovery",icon:"shield"},lab:{label:"Security lab",icon:"shield"}};
 
 function shell(content) {
   const title = pages[state.page]?.label || "Workspace";
   const guest = !state.user;
-  const allowed = isAdmin() ? ["overview","schedule","messages","outreach","public","security","lab"] : ["schedule","messages","public","lab"];
+  const allowed = isAdmin() ? ["overview","work","schedule","messages","outreach","public","security","lab"] : ["work","schedule","messages","public","lab"];
   const sidebar = `<aside class="sidebar" id="sidebar" aria-label="Workspace navigation"><div class="row">${brand()}<button class="icon-button mobile-close" aria-label="Close navigation" data-action="menu-close">${icon("close")}</button></div><p class="workspace-label">Your workspace</p><nav>${allowed.map(key=>`<button class="nav-link${state.page===key?" active":""}" data-page="${key}"${state.page===key?' aria-current="page"':""}>${icon(pages[key].icon)}<span>${pages[key].label}</span></button>`).join("")}</nav><div class="sidebar-bottom"><div class="sidebar-note"><strong>Westbridge Business Group</strong>Good people. Thoughtful work.</div></div></aside>`;
-  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><a class="button" href="${state.page==="lab"?"/board":"/security-lab"}">${state.page==="lab"?"Public board":"Security lab"}</a><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
-  const expiryNotice=!guest&&Number.isFinite(state.expires_at)?`<p id="session-expiry" class="notice" role="status">This sign-in expires no later than ${e(sessionTime(state.expires_at))}; inactivity may end it sooner. Sign-ins that reuse this window share its deadline. Identity verification does not extend it.</p>`:"";
+  const header = guest ? `${brand()}<div class="row"><span class="guest-label">Public workspace</span><a class="button" href="${state.page==="lab"?"/board":"/security-lab"}">${state.page==="lab"?"Public board":"Security lab"}</a><button class="button" data-action="signin">Team sign in ${icon("arrow")}</button></div>` : `<button class="icon-button mobile-menu" data-action="menu-open" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">${icon("menu")}</button><div class="breadcrumb"><span>Workspace</span>${icon("chevron")}<strong>${e(title)}</strong></div><div class="topbar-actions"><span class="topbar-date">${e(date(new Date(),{weekday:"short",month:"short",day:"numeric",year:"numeric"}))}</span><button class="icon-button" data-action="refresh" aria-label="Refresh workspace" title="Refresh workspace">${icon("refresh")}</button><button class="icon-button" data-action="workspace-tour" aria-label="Workspace walkthrough" title="Workspace walkthrough">${icon("info")}</button><span class="header-divider"></span><button class="user-control" data-action="profile" aria-label="Your profile">${avatar(state.user.name)}<span class="user-text"><strong>${e(state.user.name)}</strong><small>${roleName()}</small></span></button><button class="icon-button" data-action="logout" aria-label="Sign out" title="Sign out">${icon("logout")}</button></div>`;
+  const expiryNotice=!guest&&Number.isFinite(state.expires_at)?`<div class="session-status${state.expires_at-Date.now()/1000<600?" expiring":""}"><span class="status-light" aria-hidden="true"></span><details${state.expires_at-Date.now()/1000<600?" open":""}><summary>Session ends by ${e(sessionTime(state.expires_at))} \u00b7 details</summary><p id="session-expiry">This sign-in expires no later than ${e(sessionTime(state.expires_at))}; inactivity may end it sooner. Sign-ins that reuse this window share its deadline. Identity verification does not extend it.</p></details></div>`:"";
   app.innerHTML = `<div class="workspace${guest?" guest-workspace":""}">${guest?"":sidebar}<div class="workspace-main"><header class="topbar">${header}</header><main id="main" class="content">${!guest && state.frozen ? `<div class="notice frozen-banner" role="status">${icon("lock")}<span>Workspace changes are paused. You can continue to view schedules, messages, and updates.${isAdmin()?" You can still unpublish posts and pause employee access.":""}</span></div>`:""}${expiryNotice}${content}<footer class="workspace-footer"><span>© ${new Date().getFullYear()} Westbridge Business Group</span><span>${guest?"Company news & community":"A clearer view of your working day."}</span></footer></main></div></div>`;
   document.title = `${title} · Westbridge`;
 }
@@ -627,8 +631,9 @@ async function navigate(page, options = {}) {
       data = {...overview,...schedule,...users};
     } else if (page === "lab") data = await api("/api/security-lab");
     else if (page === "schedule") data = await api("/api/schedule");
+    else if (page === "work") {const [work,schedule]=await Promise.all([api("/api/work"),api("/api/schedule")]);data={...work,...schedule};}
     else if (page === "messages") data = await api("/api/messages");
-    else if (page === "outreach") data = await api("/api/admin/contacts");
+    else if (page === "outreach") {const [contacts,schedule]=await Promise.all([api("/api/admin/contacts"),api("/api/schedule")]);data={...contacts,...schedule};}
     else if (page === "security") {
       data = await api("/api/session");
       if (ticket !== navigation) return;
@@ -642,8 +647,9 @@ async function navigate(page, options = {}) {
     } else data = await api("/api/public/posts");
     if (ticket !== navigation) return;
     state.data = data;
+    if(page==="work" && workOptions.owner && !data.work.some(item=>item.assignees.some(person=>person.id===workOptions.owner)))workOptions.owner="";
     if (data.frozen !== undefined) {state.frozen=Boolean(data.frozen);state.freeze_revision=data.freeze_revision;}
-    const render = {overview:renderOverview,schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity,lab:data=>window.WestbridgeSecurityLab.render(data,{e,heading,isAdmin:isAdmin()})};
+    const render = {overview:renderOverview,work:data=>window.WestbridgeWorkspace.work(data,workspaceHelpers(),workOptions),schedule:renderSchedule,messages:renderMessages,outreach:renderOutreach,public:renderPublic,security:renderSecurity,lab:data=>window.WestbridgeSecurityLab.render(data,{e,heading,isAdmin:isAdmin()})};
     shell(render[page](data));
     history.replaceState(null, "", page === "public" ? "/board" : page === "lab" ? "/security-lab" : "/");
     if(page === "public")startBoardUpdates();
@@ -651,6 +657,7 @@ async function navigate(page, options = {}) {
     pageTitle?.setAttribute("tabindex", "-1");
     pageTitle?.focus({preventScroll:true});
     if (!options.keepScroll) window.scrollTo({top:0,behavior:"instant"});
+    return true;
   } catch (error) {
     if (ticket !== navigation) return;
     if (error.status === 401) {errorAt(error); return;}
@@ -668,21 +675,13 @@ function financialChart(rows) {
   return `<svg class="revenue-chart" viewBox="0 0 545 213" role="img" aria-labelledby="financial-chart-title"><title id="financial-chart-title">Sample financials: monthly revenue and costs. Exact amounts follow in the accessible table.</title>${axis}${bars}</svg><table class="sr-only"><caption>Sample financials</caption><thead><tr><th>Month</th><th>Revenue</th><th>Costs</th></tr></thead><tbody>${rows.map(row=>`<tr><th>${e(row.month)}</th><td>${e(money(row.revenue))}</td><td>${e(money(row.cost))}</td></tr>`).join("")}</tbody></table>`;
 }
 
+function workspaceHelpers() {
+  return {e,money,number,date,time,icon,avatar,heading,financialChart,activityRows,disabled,
+    firstName:state.user?.name.split(" ")[0]||"there",zone,isAdmin:isAdmin(),frozen:state.frozen};
+}
+
 function renderOverview(data) {
-  const metrics = data.metrics;
-  const nextEvents = (data.events || []).filter(event=>new Date(event.ends_at)>=new Date()).sort((a,b)=>a.starts_at.localeCompare(b.starts_at)).slice(0,3);
-  const team = (data.users || []).filter(user=>user.role === "employee");
-  const activity = (data.activity || []).slice(0,4);
-  const firstName=state.user.name.split(" ")[0];
-  const metric=(label,value,note,name)=>`<div class="panel metric"><div class="metric-label">${e(label)}${icon(name)}</div><div class="metric-value">${e(value)}</div><div class="metric-note">${note}</div></div>`;
-  return heading("Business at a glance",`A clear view, ${firstName}.`,"Your people, your plans, and the progress behind them.",'<span class="section-label"><span class="status-dot"></span>Workspace overview</span>')+
-    `<section class="quick-actions" aria-label="Workspace quick actions"><button class="quick-action" aria-label="Plan an event" data-action="event-new"${disabled()}>${icon("calendar")}<span><strong>Plan an event</strong><small>Bring your team together</small></span>${icon("plus")}</button><button class="quick-action" aria-label="Add a contact" data-action="contact-new"${disabled()}>${icon("outreach")}<span><strong>Add a contact</strong><small>Keep an opportunity moving</small></span>${icon("plus")}</button><button class="quick-action" aria-label="Review public posts" data-page="public">${icon("board")}<span><strong>Review public posts</strong><small>See what your community shares</small></span>${icon("arrow")}</button><button class="quick-action" aria-label="Open recovery guide" data-page="security">${icon("shield")}<span><strong>Open recovery guide</strong><small>Keep a private recovery copy</small></span>${icon("arrow")}</button></section>`+
-    `<section class="metrics" aria-label="Business metrics">${metric("Monthly revenue",money(metrics.monthly_revenue),"Sample financials · latest month","money")}${metric("Operating profit",money((metrics.monthly_revenue||0)-(metrics.monthly_cost||0)),"Sample revenue less sample costs","trend")}${metric("Open pipeline",money(metrics.pipeline_value),`<strong>${e(number(metrics.open_leads))}</strong> open opportunities`,"outreach")}${metric("Scheduled team-hours",number(metrics.scheduled_hours),"Upcoming work · all assignments","clock")}</section>
-    <div class="overview-grid"><section class="panel chart-panel"><div class="panel-heading"><div><h2>Business performance</h2><p>Revenue and operating costs</p></div><div class="legend"><span><i></i>Revenue</span><span><i class="cost"></i>Costs</span></div></div><div class="panel-body">${financialChart(data.revenue || [])}<div class="chart-caption">${icon("info")}Sample financials · USD · illustrative figures</div></div></section>
-    <section class="panel"><div class="panel-heading"><div><h2>Coming up next</h2><p>Ahead on the team calendar</p></div>${icon("calendar")}</div><div class="panel-body">${nextEvents.length?nextEvents.map(event=>`<div class="agenda-item"><div class="date-tile"><span>${e(date(event.starts_at,{month:"short"}))}</span><strong>${e(date(event.starts_at,{day:"numeric"}))}</strong></div><div class="agenda-detail"><strong>${e(event.title)}</strong><p>${e(time(event.starts_at))} – ${e(time(event.ends_at))}${event.location?` · ${e(event.location)}`:""}</p></div></div>`).join(""):empty("A little room on the calendar","Add an event to plan your next working day.")}</div><div class="panel-footer"><span>${e(zone)}</span><button class="button subtle" data-page="schedule">View schedule ${icon("arrow")}</button></div></section>
-    <section class="panel activity-panel"><div class="panel-heading"><div><h2>Recent activity</h2><p>The latest changes across your workspace</p></div><span class="badge gray">Activity log</span></div><div class="panel-body">${activity.length?activityRows(activity):empty("All set for a fresh start","Schedule and account changes appear here.","check")}</div><div class="panel-footer"><span>Up to 50 recent changes</span><button class="button subtle" data-action="activity">Explore recent activity ${icon("arrow")}</button></div></section>
-    <section class="panel"><div class="panel-heading"><div><h2>Your team</h2><p>People with access to the workspace</p></div><span class="badge green">${team.filter(user=>user.active).length} active</span></div><div class="panel-body">${team.map(user=>`<div class="team-row">${avatar(user.name)}<div class="team-info"><strong>${e(user.name)}</strong><small>${user.active?"Employee":"Access paused"}</small></div><button class="button small subtle" data-action="user-toggle" data-id="${e(user.id)}" aria-label="${user.active?"Pause":"Restore"} access for ${e(user.name)}"${!user.active&&state.frozen?" disabled":""}>${user.active?"Pause access":"Restore access"}</button></div>`).join("")}</div></section></div>
-    <section class="panel tools-panel"><div class="tools-content"><div class="tools-heading"><span class="tool-icon">${icon("settings")}</span><div class="tools-copy"><h2>Workspace controls</h2><p>Pause changes while you review the schedule and team activity.</p></div></div><button class="switch-control" role="switch" aria-checked="${state.frozen}" data-action="freeze"><span class="switch-track" aria-hidden="true"></span>Pause workspace changes</button></div></section>`;
+  return window.WestbridgeWorkspace.overview(data,workspaceHelpers());
 }
 
 function activityRows(rows) {
@@ -786,7 +785,7 @@ function scheduleEvents(events) {
   if (!events.length) return empty("Nothing on the calendar yet",isAdmin()?"Add an event and bring the right people together.":"Your next team assignment will appear here.");
   const groups=new Map();
   [...events].sort((a,b)=>a.starts_at.localeCompare(b.starts_at)).forEach(event=>{const key=date(event.starts_at,{year:"numeric",month:"2-digit",day:"2-digit"});if(!groups.has(key))groups.set(key,[]);groups.get(key).push(event);});
-  return [...groups.values()].map(day=>`<section class="schedule-day"><div class="day-heading"><div class="eyebrow">${e(date(day[0].starts_at,{weekday:"short"}))}</div><strong>${e(date(day[0].starts_at,{day:"numeric"}))}</strong><small>${e(date(day[0].starts_at,{month:"short",year:"numeric"}))}</small></div><div class="day-events">${day.map(event=>`<article class="schedule-event"><div><h3>${e(event.title)}</h3><div class="event-meta"><span>${icon("clock")}${e(time(event.starts_at))} – ${date(event.starts_at)!==date(event.ends_at)?`${e(date(event.ends_at,{month:"short",day:"numeric"}))} `:""}${e(time(event.ends_at))}</span>${event.location?`<span>${icon("location")}${e(event.location)}</span>`:""}</div>${event.notes?`<p class="event-notes">${e(event.notes)}</p>`:""}<div class="event-employees">${event.employee_ids.map(id=>`<span class="employee-chip">${e(employees.find(user=>user.id===id)?.name || id)}</span>`).join("")}</div></div>${isAdmin()?`<button class="button small" data-action="event-edit" data-id="${e(event.id)}" aria-label="Edit ${e(event.title)}"${disabled()}>Edit</button>`:""}</article>`).join("")}</div></section>`).join("");
+  return [...groups.values()].map(day=>`<section class="schedule-day"><div class="day-heading"><div class="eyebrow">${e(date(day[0].starts_at,{weekday:"short"}))}</div><strong>${e(date(day[0].starts_at,{day:"numeric"}))}</strong><small>${e(date(day[0].starts_at,{month:"short",year:"numeric"}))}</small></div><div class="day-events">${day.map(event=>`<article class="schedule-event"><div><h3>${e(event.title)}</h3><div class="event-meta"><span>${icon("clock")}${e(time(event.starts_at))} – ${date(event.starts_at)!==date(event.ends_at)?`${e(date(event.ends_at,{month:"short",day:"numeric"}))} `:""}${e(time(event.ends_at))}</span>${event.location?`<span>${icon("location")}${e(event.location)}</span>`:""}</div>${event.notes?`<p class="event-notes">${e(event.notes)}</p>`:""}<div class="event-employees">${event.employee_ids.map(id=>`<span class="employee-chip">${e(employees.find(user=>user.id===id)?.name || id)}</span>`).join("")}</div></div>${event.work_status==="completed"?'<span class="badge green">Completed</span>':isAdmin()?`<button class="button small" data-action="event-edit" data-id="${e(event.id)}" aria-label="Edit ${e(event.title)}"${disabled()}>Edit</button>`:""}</article>`).join("")}</div></section>`).join("");
 }
 
 function renderMessages(data) {
@@ -826,7 +825,7 @@ function renderOutreach(data) {
 }
 
 function contactRows(contacts) {
-  return contacts.length?contacts.map(contact=>`<tr><td><strong>${e(contact.name)}</strong><small>${e(contact.email)}</small></td><td>${e(contact.company)}</td><td><span class="badge ${stageColor[contact.stage]||"gray"}">${e(contact.stage)}</span></td><td class="money">${e(money(contact.value))}</td><td><button class="button small subtle" data-action="contact-edit" data-id="${e(contact.id)}" aria-label="Edit ${e(contact.name)}"${disabled()}>View / edit ${icon("chevron")}</button></td></tr>`).join(""):'<tr><td colspan="5">'+empty("No contacts found","Add a contact or try a different search.","users")+'</td></tr>';
+  return contacts.length?contacts.map(contact=>`<tr><td><strong>${e(contact.name)}</strong><small>${e(contact.email)}</small></td><td>${e(contact.company)}</td><td><span class="badge ${stageColor[contact.stage]||"gray"}">${e(contact.stage)}</span></td><td class="money">${e(money(contact.value))}</td><td><div class="contact-actions">${contact.stage==="Won"&&!contact.work_id?`<button class="button small" data-action="contact-schedule" data-id="${e(contact.id)}" aria-label="Schedule ${e(contact.company)}"${disabled()}>Schedule work</button>`:contact.work_id?`<button class="button small" data-page="work">Open work</button>`:""}<button class="button small subtle" data-action="contact-edit" data-id="${e(contact.id)}" aria-label="Edit ${e(contact.name)}"${disabled()}>View / edit ${icon("chevron")}</button></div></td></tr>`).join(""):'<tr><td colspan="5">'+empty("No contacts found","Add a contact or try a different search.","users")+'</td></tr>';
 }
 
 function filterContacts() {
@@ -858,15 +857,15 @@ const inputField=(label,name,value="",options={})=>`<label class="field${options
 const textareaField=(label,name,value="",options={})=>`<label class="field${options.full?" span-2":""}"><span>${e(label)}</span><textarea name="${e(name)}" maxlength="4000" ${options.required?"required":""}>${e(value)}</textarea></label>`;
 const localDate=(value)=>{const parsed=new Date(value);return `${parsed.getFullYear()}-${String(parsed.getMonth()+1).padStart(2,"0")}-${String(parsed.getDate()).padStart(2,"0")}T${String(parsed.getHours()).padStart(2,"0")}:${String(parsed.getMinutes()).padStart(2,"0")}`;};
 
-function eventDialog(record) {
+function eventDialog(record, contact=null) {
   const tomorrow=new Date();tomorrow.setDate(tomorrow.getDate()+1);tomorrow.setHours(9,0,0,0);
   const end=new Date(tomorrow);end.setHours(10);
-  const values=record||{title:"",starts_at:tomorrow,ends_at:end,location:"",notes:"",employee_ids:[]};
+  const values=record||{title:contact?`${contact.company} delivery`:"",starts_at:tomorrow,ends_at:end,location:"",notes:"",employee_ids:[]};
   const employees=[...(state.data.employees||[])];
   const unavailable=values.employee_ids.filter(id=>!employees.some(user=>user.id===id));
   unavailable.forEach(id=>employees.push({id,name:`${id} (access paused)`}));
   const fields=`<div class="form-grid">${inputField("Event title","title",values.title,{full:true,max:120})}${inputField("Starts","starts_at",localDate(values.starts_at),{type:"datetime-local"})}${inputField("Ends","ends_at",localDate(values.ends_at),{type:"datetime-local"})}<p class="field-hint span-2">All times in ${e(zone)}. Employees cannot be assigned to overlapping events.</p>${inputField("Location","location",values.location,{full:true,max:160,required:false})}<fieldset class="field span-2 employee-fieldset"><legend>Assign employees</legend><div class="employee-list">${employees.map(user=>`<label class="check-label"><input type="checkbox" name="employee_ids" value="${e(user.id)}"${values.employee_ids.includes(user.id)?" checked":""}>${e(user.name)}</label>`).join("")}</div>${unavailable.length?'<small>Remove assignments for employees with paused access before saving this event.</small>':""}</fieldset>${textareaField("Notes","notes",values.notes,{full:true})}</div>`;
-  openDialog("event",record?"Edit event":"Plan a team event","Give the team a clear time, place, and plan.",fields,(record?'<button type="button" class="button danger push-left" data-action="event-archive">Archive</button>':"")+cancelButton()+saveButton(record?"Save event":"Create event"),record);
+  openDialog(contact?"work-schedule":"event",contact?"Schedule client work":record?"Edit event":"Plan a team event","Give the team a clear time, place, and plan.",fields,(record&&!record.work_status?'<button type="button" class="button danger push-left" data-action="event-archive">Archive</button>':"")+cancelButton()+saveButton(contact?"Schedule delivery":record?"Save event":"Create event"),contact||record);
 }
 
 function contactDialog(record) {
@@ -1090,6 +1089,45 @@ document.addEventListener("click",async(event)=>{
     }
     return;
   }
+  if(["open-pipeline","open-ready"].includes(action)){
+    const ticket=navigation+1;await navigate("outreach");
+    if(navigation!==ticket)return;
+    if(action==="open-ready"){document.querySelector("#contact-filter").value="Won";filterContacts();}
+    return;
+  }
+  if(["open-work","open-completed"].includes(action)){workOptions={...workOptions,stage:action==="open-completed"?"completed":"all",query:"",owner:""};await navigate("work");return;}
+  if(action==="open-schedule"){await navigate("schedule");return;}
+  if(action==="review-submissions"){await navigate("public");return;}
+  if(action==="contact-schedule"){const contact=state.data.contacts?.find(item=>item.id===button.dataset.id);if(contact)eventDialog(null,contact);return;}
+  if(action==="work-schedule-edit"){const item=state.data.events?.find(item=>item.id===button.dataset.id);if(item)eventDialog(item);return;}
+  if(action==="work-details"){
+    if(state.page!=="work"||!state.data.work?.some(item=>item.id===button.dataset.id))return;
+    workOptions.view="cards";updateWorkResults();
+    const card=[...document.querySelectorAll("[data-work-id]")].find(item=>item.dataset.workId===button.dataset.id);
+    card?.focus({preventScroll:true});card?.scrollIntoView({block:"nearest"});return;
+  }
+  if(action==="work-start"||action==="work-complete"){
+    const item=state.data.work?.find(item=>item.id===button.dataset.id);if(!item)return;
+    const complete=action==="work-complete";
+    openDialog(action,complete?"Complete & hand over":"Start this work",item.title,
+      textareaField(complete?"Handover note":"Progress note","note","",{required:true,full:true}),
+      cancelButton()+saveButton(complete?"Record completion":"Start work"),item);return;
+  }
+  if(action==="workspace-tour"){
+    if(!state.user||workspaceTour)return;
+    const account=state.user.id,csrf=state.csrf,role=state.user.role;
+    const owns=()=>state.user?.id===account&&state.csrf===csrf&&state.user?.role===role;
+    const tour=window.RADTTour.create({steps:window.WestbridgeWorkspace.walkthrough(role),
+      onStep:async(step,{signal})=>{
+        if(signal.aborted||!owns())throw new Error("Session changed");
+        if(await navigate(step.page)!==true)throw new Error("Page unavailable");
+        if(signal.aborted||!owns())throw new Error("Session changed");
+      },
+      returnFocus:()=>document.querySelector('[data-action="workspace-tour"]'),
+      onClose:()=>{if(workspaceTour===tour)workspaceTour=null;}
+    });
+    workspaceTour=tour;await tour.start();return;
+  }
   if(action==="event-new"){eventDialog(null);return;}
   if(action==="event-edit"){eventDialog(state.data.events.find(item=>item.id===button.dataset.id));return;}
   if(action==="contact-new"){contactDialog(null);return;}
@@ -1108,7 +1146,7 @@ document.addEventListener("click",async(event)=>{
     confirmation("submission-review",decision==="approve"?"Approve this guest post?":"Reject this guest post?",decision==="approve"?`“${submission.title}” will be published on the public board for everyone to read.`:`“${submission.title}” will leave the review queue without being published.`,{...submission,decision},decision==="approve"?"Approve post":"Reject post");return;
   }
   if(action==="event-archive"){const record=dialogState.record;confirmation("archive","Archive this event?",`“${record.title}” will be removed from the active schedule. Its history will be retained.`,record,"Archive event");return;}
-  if(action==="freeze"){confirmation("freeze",state.frozen?"Resume workspace changes?":"Pause workspace changes?",state.frozen?"Employees and administrators will be able to update the workspace again.":"Scheduling, messages, outreach, publishing, and guest submissions will be paused. You can still unpublish posts and pause employee access.",{frozen:!state.frozen,revision:state.freeze_revision},state.frozen?"Resume changes":"Pause changes");return;}
+  if(action==="freeze"){confirmation("freeze",state.frozen?"Resume workspace changes?":"Pause workspace changes?",state.frozen?"Employees and administrators will be able to update the workspace again.":"Delivery updates, scheduling, messages, outreach, publishing, and guest submissions will be paused. You can still unpublish posts and pause employee access.",{frozen:!state.frozen,revision:state.freeze_revision},state.frozen?"Resume changes":"Pause changes");return;}
   if(action==="user-toggle"){const user=state.data.users.find(item=>item.id===button.dataset.id);confirmation("user",user.active?"Pause employee access?":"Restore employee access?",user.active?`${user.name} will be signed out and will not be able to access the team workspace until access is restored.`:`${user.name} will be able to sign in to the team workspace again.`,user,user.active?"Pause access":"Restore access");return;}
   if(action==="refresh") {
     const ticket=navigation;
@@ -1217,16 +1255,21 @@ document.addEventListener("submit",async(event)=>{
     }
     const {type,record}=dialogState;
     const text=(key)=>String(values.get(key)||"").trim();
-    if(type==="event") {
+    if(type==="work-start"||type==="work-complete") {
+      const result=await api(`/api/work/${encodeURIComponent(record.id)}/${type==="work-start"?"start":"complete"}`,"POST",{revision:record.revision,event_revision:record.event_revision,note:text("note")});
+      if(result?.ok!==true)throw new Error("The change could not be confirmed. Refresh Work before trying again.");
+      await showSaved("work",type==="work-start"?"Work is in progress.":"Completion and handover recorded.");
+    } else if(type==="event"||type==="work-schedule") {
       const starts=new Date(values.get("starts_at")),ends=new Date(values.get("ends_at"));
       if(Number.isNaN(starts.valueOf())||Number.isNaN(ends.valueOf()))throw new Error("Enter a valid start and end time.");
       if(ends<=starts)throw new Error("The event must end after it starts.");
       // A saved create may be retried after its event ended. The server checks
       // the receipt first, then rejects past times for a genuinely new event.
-      if(record && ends<=new Date())throw new Error("Choose an event that ends in the future.");
+      if(record && type==="event" && ends<=new Date())throw new Error("Choose an event that ends in the future.");
       if(ends-starts>7*24*60*60*1000)throw new Error("An event can be no longer than seven days.");
       const employee_ids=values.getAll("employee_ids");if(!employee_ids.length)throw new Error("Assign at least one employee to this event.");
-      const body={title:text("title"),starts_at:starts.toISOString(),ends_at:ends.toISOString(),location:text("location"),notes:text("notes"),employee_ids,...(record?{revision:record.revision}:{})};
+      const body={title:text("title"),starts_at:starts.toISOString(),ends_at:ends.toISOString(),location:text("location"),notes:text("notes"),employee_ids,...(type==="work-schedule"?{contact_revision:record.revision}:record?{revision:record.revision}:{})};
+      if(type==="work-schedule"){await createRecord(form,`/api/admin/contacts/${encodeURIComponent(record.id)}/schedule`,body,"work");await showSaved("work","Delivery scheduled and assigned to the team.");return;}
       if(record)await api(`/api/schedule/${encodeURIComponent(record.id)}`,"PUT",body);
       else await createRecord(form,"/api/schedule",body,"event");
       if(!isCurrent())return;
@@ -1320,3 +1363,31 @@ async function start() {
   catch(error){renderLogin();errorAt(error,document.querySelector("#login-error"));}
 }
 start();
+
+// Filters use only this session's server-scoped records; keep controls and focus mounted.
+function updateWorkResults() {
+  if(state.page!=="work"||!document.querySelector("#work-results"))return;
+  const helpers=workspaceHelpers(),views=window.WestbridgeWorkspace;
+  document.querySelector("#work-results").innerHTML=views.workResults(state.data,helpers,workOptions);
+  document.querySelector("#work-result-count").textContent=views.workCount(state.data,helpers,workOptions);
+  document.querySelectorAll("[data-work-filter]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.workFilter===workOptions.stage)));
+  document.querySelectorAll("[data-work-view]").forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.workView===workOptions.view)));
+}
+document.addEventListener("click",event=>{
+  const button=event.target.closest("[data-work-filter],[data-work-view],[data-work-clear]");
+  if(!button||state.page!=="work")return;
+  if(button.hasAttribute("data-work-clear")){
+    workOptions={...workOptions,stage:"all",query:"",owner:""};
+    document.querySelector("#work-search").value="";document.querySelector("#work-owner").value="";
+  } else if(button.dataset.workView)workOptions.view=button.dataset.workView;
+  else workOptions.stage=button.dataset.workFilter;
+  updateWorkResults();
+});
+document.addEventListener("input",event=>{
+  if(event.target.id!=="work-search"||state.page!=="work")return;
+  workOptions.query=event.target.value;updateWorkResults();
+});
+document.addEventListener("change",event=>{
+  if(event.target.id!=="work-owner"||state.page!=="work")return;
+  workOptions.owner=event.target.value;updateWorkResults();
+});

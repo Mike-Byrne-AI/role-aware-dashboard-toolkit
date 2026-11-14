@@ -20,7 +20,7 @@ ISSUER = "westbridge-business-example"
 PASSWORD_ITERATIONS = 600_000
 SESSION_SECONDS = 8 * 60 * 60
 IDLE_SECONDS = 30 * 60
-EMPLOYEE_PERMISSIONS = {"can_view_team": True, "can_post_messages": True}
+EMPLOYEE_PERMISSIONS = {"can_view_team": True, "can_post_messages": True, "can_progress_work": True}
 ROLES = {
     "employee": RoleDef("employee", EMPLOYEE_PERMISSIONS),
     "admin": RoleDef("admin", {**EMPLOYEE_PERMISSIONS, "can_manage_business": True, "can_manage_freeze": True}),

@@ -52,7 +52,7 @@ def _schema_archive(business, version=5):
         # Construct the original SQL contract rather than reversing ALTER TABLE,
         # which retains SQLite's renamed-identifier quoting in sqlite_master.
         connection.executescript({5: storage.SCHEMA_V5, 6: storage.SCHEMA_V6, 7: storage.SCHEMA_V7,
-                                  8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9}[version])
+                                  8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9, 10: storage.SCHEMA_V10}[version])
         connection.execute("BEGIN IMMEDIATE")
         tables = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid").fetchall()
         with business.app.state.database.readonly_snapshot() as current:
@@ -88,7 +88,7 @@ def _refresh_manifest(bundle, **changes):
     path.write_bytes(json.dumps(manifest).encode() + b"\n")
 
 
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_prior_schema_archive_requires_explicit_restore_upgrade(business, archive_version):
     bundle = _schema_archive(business, archive_version)
     before = _archive_bytes(bundle), _fingerprint(business.directory)
@@ -107,7 +107,7 @@ def test_archive_upgrade_cannot_implicitly_upgrade_current_security_authority(bu
     shutil.copyfile(bundle / "business.sqlite3", business.directory / "business.sqlite3")
     before = _archive_bytes(bundle), _fingerprint(business.directory)
     output = business.directory.parent / "old-current-source-refusal"
-    with pytest.raises(ValueError, match="explicit reviewed migration to schema ten"):
+    with pytest.raises(ValueError, match="explicit reviewed migration to schema eleven"):
         backup.restore_backup(bundle, output, mfa_key_file=default_key_path(business.directory),
                               security_source=business.directory, upgrade_backup_schema=True)
     assert not output.exists()
@@ -115,7 +115,7 @@ def test_archive_upgrade_cannot_implicitly_upgrade_current_security_authority(bu
 
 
 @pytest.mark.parametrize("archive_journal_mode", ["DELETE", "WAL"])
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_prior_schema_restore_keeps_old_business_data_and_current_security_authority(business, archive_journal_mode, archive_version):
     dispatch_pending(business.app.state.database)
     with business.db() as connection:
@@ -158,7 +158,7 @@ def test_prior_schema_restore_keeps_old_business_data_and_current_security_autho
                   "enrollment_grants", "enrollment_sessions"):
         assert _rows(output, table) == []
     receipt = json.loads((output / "restore.json").read_text())
-    assert (receipt["backup_schema"], receipt["restored_schema"], receipt["schema_upgraded"]) == (archive_version, 10, True)
+    assert (receipt["backup_schema"], receipt["restored_schema"], receipt["schema_upgraded"]) == (archive_version, 11, True)
     restored = Database(output, mfa_key_file=default_key_path(business.directory))
     assert dispatch_pending(restored) == {"delivered": 1, "failed": 0, "pending": 0}
     app = create_app(output, public_origin=ORIGIN, mfa_key_file=default_key_path(business.directory))
@@ -174,7 +174,7 @@ def test_prior_schema_restore_keeps_old_business_data_and_current_security_autho
     assert (_archive_bytes(bundle), _fingerprint(business.directory)) == before
 
 
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_schema_upgrade_without_current_authority_remains_quarantined(business, archive_version):
     bundle = _schema_archive(business, archive_version)
     before = _archive_bytes(bundle)
@@ -190,7 +190,7 @@ def test_schema_upgrade_without_current_authority_remains_quarantined(business, 
     assert _archive_bytes(bundle) == before
 
 
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_schema_upgrade_validates_original_and_current_mfa_keys_separately(business, archive_version):
     bundle = _schema_archive(business, archive_version)
     old_key = default_key_path(business.directory)
@@ -219,7 +219,7 @@ def test_schema_upgrade_validates_original_and_current_mfa_keys_separately(busin
     assert (_archive_bytes(bundle), _fingerprint(business.directory)) == before
 
 
-@pytest.mark.parametrize("version", [4, 11, "5", 5.0, True])
+@pytest.mark.parametrize("version", [4, 12, "5", 5.0, True])
 def test_explicit_upgrade_refuses_other_or_malformed_archive_versions(business, version):
     bundle = _schema_archive(business)
     _refresh_manifest(bundle, schema=version)
@@ -233,7 +233,7 @@ def test_explicit_upgrade_refuses_other_or_malformed_archive_versions(business, 
 
 @pytest.mark.parametrize("damage", ["DROP INDEX submission_limits_time", "CREATE TABLE unexpected(value TEXT)",
                                     "PRAGMA user_version=4"])
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_prior_schema_contract_is_validated_before_migration_ddl(business, monkeypatch, damage, archive_version):
     bundle = _schema_archive(business, archive_version)
     with closing(backup._connect(bundle / "business.sqlite3", readonly=False)) as connection, connection:
@@ -253,11 +253,11 @@ def test_prior_schema_contract_is_validated_before_migration_ddl(business, monke
     assert (_archive_bytes(bundle), _fingerprint(business.directory)) == before
 
 
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_failed_staged_migration_never_publishes_usable_output_or_changes_sources(business, monkeypatch, archive_version):
     bundle = _schema_archive(business, archive_version)
     before = _archive_bytes(bundle), _fingerprint(business.directory)
-    name = {8: "_apply_delivery_migration", 9: "_apply_browser_flow_migration"}.get(archive_version, "_apply_enrollment_migration")
+    name = {8: "_apply_delivery_migration", 9: "_apply_browser_flow_migration", 10: "_apply_delivery_work_migration"}.get(archive_version, "_apply_enrollment_migration")
     original = getattr(backup, name)
 
     def fail_after_ddl(connection):
@@ -273,7 +273,7 @@ def test_failed_staged_migration_never_publishes_usable_output_or_changes_source
     assert (_archive_bytes(bundle), _fingerprint(business.directory)) == before
 
 
-@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("archive_version", [5, 6, 7, 8, 9, 10])
 def test_explicit_upgrade_cli_preserves_quarantine_without_a_security_source(business, capsys, archive_version):
     bundle = _schema_archive(business, archive_version)
     output = business.directory.parent / "cli-quarantine"

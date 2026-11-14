@@ -47,6 +47,8 @@ Discover them with `python -m role_aware_dashboard_toolkit guide start`.
 - [Protected record workflows](record_workflows.md) — implement edits, date changes and status transitions with transactional history and consumer acceptance checks
 - [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS and OIDC acceptance for the authenticated Streamlit starter
 
+- [Reusable web presentation](../role_aware_dashboard_toolkit/resources/guides/web.md) — component studio, theme generation and the delivery workflow
+
 ## API and extension points
 
 - [Public API reference](public_api.md)

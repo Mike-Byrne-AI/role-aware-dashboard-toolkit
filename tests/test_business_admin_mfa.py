@@ -229,7 +229,7 @@ def test_v2_upgrade_preserves_business_and_staff_revokes_admin_requires_local_en
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert connection.execute("SELECT COUNT(*) FROM account_mfa").fetchone()[0] == 0
     admin = business.client(migrated)
     admin.cookies.set(COOKIE_NAME, business_admin.client.cookies.get(COOKIE_NAME))

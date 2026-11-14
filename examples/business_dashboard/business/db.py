@@ -9,6 +9,8 @@ from pathlib import Path
 import sqlite3
 import stat
 
+from .delivery_schema import WORK_SCHEMA
+
 from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
 SOURCE_ROOTS = {Path(__file__).absolute().parents[3], Path(__file__).resolve().parents[3]}
@@ -308,7 +310,9 @@ CREATE TRIGGER browser_flow_floor_monotonic BEFORE UPDATE OF rejection_time_floo
  BEGIN SELECT RAISE(ABORT,'Browser flow time cannot decrease'); END;
 """
 SCHEMA_V10 = SCHEMA_V9 + BROWSER_FLOW_SCHEMA + "PRAGMA user_version=10;\n"
-SCHEMA = SCHEMA_V10
+
+SCHEMA_V11 = SCHEMA_V10 + WORK_SCHEMA + "PRAGMA user_version=11;\n"
+SCHEMA = SCHEMA_V11
 
 
 def _schema_objects(connection):
@@ -325,7 +329,7 @@ def _require_schema(connection, version):
     try:
         expected.executescript({1: SCHEMA_V1, 2: SCHEMA_V2, 3: SCHEMA_V3, 4: SCHEMA_V4,
                                5: SCHEMA_V5, 6: SCHEMA_V6, 7: SCHEMA_V7, 8: SCHEMA_V8,
-                               9: SCHEMA_V9, 10: SCHEMA_V10}[version])
+                               9: SCHEMA_V9, 10: SCHEMA_V10, 11: SCHEMA_V11}[version])
         if _schema_objects(connection) != _schema_objects(expected):
             raise ValueError("Business database schema is incomplete or unsupported; existing state was preserved.")
     finally:
@@ -343,6 +347,11 @@ def _execute_schema(connection, schema):
         if sqlite3.complete_statement(statement):
             connection.execute(statement)
             statement = ""
+
+
+def _apply_delivery_work_migration(connection):
+    _execute_schema(connection, WORK_SCHEMA)
+    connection.execute("PRAGMA user_version=11")
 
 
 def _apply_submission_migration(connection):
@@ -535,11 +544,11 @@ class Database:
     def _validate_schema(self, *, migrate=False):
         with self.transaction() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+            if version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
                 raise ValueError("Unsupported or incomplete business database.")
             _require_schema(connection, version)
-            if version < 10 and not migrate:
-                raise ValueError("Existing storage requires an explicit reviewed migration to schema ten; stop all old writers first.")
+            if version < 11 and not migrate:
+                raise ValueError("Existing storage requires an explicit reviewed migration to schema eleven; stop all old writers first.")
             from .security import TransactionAccessStore, principal_for_user
             TransactionAccessStore(connection).read_freeze()
             users = connection.execute("SELECT id,principal FROM users").fetchall()
@@ -572,6 +581,9 @@ class Database:
             if version < 10:
                 _apply_browser_flow_migration(connection)
                 _require_schema(connection, 10)
+            if version < 11:
+                _apply_delivery_work_migration(connection)
+                _require_schema(connection, 11)
             from .browser_flow import validate_state
             validate_state(connection)
             from .event_destinations import validate_delivery_state
@@ -619,7 +631,7 @@ class Database:
                 with observe_clock(connection) as observed:
                     connection.execute("BEGIN IMMEDIATE")
                     self._require_current_key(connection)
-                    if connection.execute("PRAGMA user_version").fetchone()[0] != 10:
+                    if connection.execute("PRAGMA user_version").fetchone()[0] != 11:
                         raise ValueError("Business storage changed schema; stop all writers and investigate.")
                     checked_time(connection)
                     connection.execute("SAVEPOINT browser_flow_operation")

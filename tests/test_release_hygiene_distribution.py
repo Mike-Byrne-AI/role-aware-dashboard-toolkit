@@ -337,6 +337,7 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
         "business/static/security-lab.js", "business/static/security-lab.css",
         "hosting/pilot.py", "business/__init__.py",
         "business/app.py", "business/db.py", "business/security.py", "business/seed.py",
+        "business/delivery.py", "business/delivery_schema.py",
         "business/auth_routes.py", "business/submission_routes.py", "business/work_limits.py",
         "business/enrollment.py", "business/enrollment_routes.py",
         "business/idempotency.py",
@@ -354,6 +355,7 @@ def test_business_source_example_contains_only_code_assets_and_guidance(built_re
         "backup.py",
         "business/models.py", "business/request_security.py", "business/mfa.py", "business/abuse.py",
         "business/static/index.html", "business/static/app.js", "business/static/styles.css",
+        "business/static/workspace.js", "business/static/workspace.css",
         "business/static/enrollment.js",
         "business/static/login-flow.js",
     }
@@ -384,7 +386,7 @@ def test_sdist_shipped_examples_compile_from_extracted_artifact(
         sdist_root / "examples" / "business_dashboard" / "run.py",
         sdist_root / "examples" / "business_dashboard" / "hosting" / "pilot.py",
         *(sdist_root / "examples" / "business_dashboard" / "business" / name
-          for name in ("__init__.py", "app.py", "db.py", "security.py", "seed.py",
+          for name in ("__init__.py", "app.py", "db.py", "security.py", "seed.py", "delivery.py", "delivery_schema.py",
                        "models.py", "request_security.py", "mfa.py", "abuse.py")),
         sdist_root / "examples" / "dashboard_admin_controls_app.py",
         sdist_root / "examples" / "plugin_template.py",

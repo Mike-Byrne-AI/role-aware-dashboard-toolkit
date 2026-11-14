@@ -82,7 +82,7 @@ def main(argv=None):
         if options.migrate_storage:
             from business.db import Database
             Database(options.data_dir, mfa_key_file=options.mfa_key_file, migrate=True)
-            print("Existing storage validated and upgraded to schema ten. Keep all older writers stopped; mixed schema versions are unsupported. Existing sessions remain usable, but reverification requires browser-flow bootstrap. Legacy access remains in transition until reviewed enrollment and explicit strict activation. Old backups and SQLite remnants may still contain plaintext MFA seeds. Remote security-event delivery requires separate explicit activation.")
+            print("Existing storage validated and upgraded to schema eleven. Keep all older writers stopped; mixed schema versions are unsupported. Existing sessions remain usable, but reverification requires browser-flow bootstrap. Legacy access remains in transition until reviewed enrollment and explicit strict activation. Old backups and SQLite remnants may still contain plaintext MFA seeds. Remote security-event delivery requires separate explicit activation.")
             return 0
         if options.provision:
             from business.seed import provision

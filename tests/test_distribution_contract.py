@@ -233,6 +233,8 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
         "/examples/business_dashboard/hosting/pilot.py",
         "/examples/business_dashboard/business/__init__.py",
         "/examples/business_dashboard/business/db.py",
+        "/examples/business_dashboard/business/delivery.py",
+        "/examples/business_dashboard/business/delivery_schema.py",
         "/examples/business_dashboard/business/security.py",
         "/examples/business_dashboard/business/mfa.py",
         "/examples/business_dashboard/business/abuse.py",

@@ -203,7 +203,7 @@ def test_schema_nine_migration_is_explicit_preserves_sessions_and_discards_chall
     assert rows(runtime, "passkey_challenges") == []
     assert rows(runtime, "browser_login_flows") == rows(runtime, "session_browser_flow") == []
     with database.readonly_snapshot() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         browser_flow.validate_state(connection)
 
 

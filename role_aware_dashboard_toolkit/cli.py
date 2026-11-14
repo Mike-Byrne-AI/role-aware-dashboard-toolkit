@@ -73,7 +73,10 @@ def _parser() -> tuple[_Parser, dict[str, argparse.ArgumentParser]]:
     commands["example"].add_argument("--file", dest="filename")
     commands["init"].add_argument("destination", nargs="?")
     commands["init"].add_argument("--dry-run", action="store_true")
-    commands["init"].add_argument("--auth", action="store_true",
+    commands["init"].add_argument("--web-config", help="Validated web-presentation.json for --web.")
+    starters = commands["init"].add_mutually_exclusive_group()
+    starters.add_argument("--web", action="store_true", help="Create the portable web component studio.")
+    starters.add_argument("--auth", action="store_true",
                                  help="Create the authenticated starter, recommended for shared use.")
     return parser, commands
 
@@ -121,18 +124,41 @@ def _new_destination(destination: str) -> Path:
 
 
 def initialize_project(destination: str, *, dry_run: bool = False,
-                       authenticated: bool = False) -> dict[str, Any]:
+                       authenticated: bool = False, web: bool = False,
+                       web_config: str | None = None) -> dict[str, Any]:
     """Create only a new directory; report partial output honestly on I/O failure.
 
     Existing files, directories and links are never merged or overwritten.
     Importing this module never calls this function or writes project files.
     """
+    if web and authenticated:
+        raise _CommandError("USAGE_ERROR", "Choose web or authenticated, not both.")
+    if web_config is not None and not web:
+        raise _CommandError("USAGE_ERROR", "--web-config requires --web.")
     path = _new_destination(destination)
-    contents = read_starter(authenticated=authenticated)
+    if web:
+        from .web import WebPresentation, read_web_starter
+        presentation = None
+        if web_config is not None:
+            try:
+                with Path(web_config).open("rb") as handle:
+                    raw = handle.read(65537)
+                if len(raw) > 65536:
+                    raise ValueError("Web configuration must be at most 64 KiB")
+                presentation = WebPresentation.from_json(raw.decode("utf-8"))
+            except (OSError, UnicodeError, ValueError) as error:
+                raise _CommandError("INVALID_WEB_CONFIG", "Web configuration could not be validated.",
+                                    next_step="Use an exported version-one configuration; check its text, colors and contrast.",
+                                    exception_type=type(error).__name__) from None
+        contents = read_web_starter(presentation)
+    else:
+        contents = read_starter(authenticated=authenticated)
     result = {"destination": str(path), "dry_run": bool(dry_run), "files": list(contents),
               "created_files": [], "run_command": _run_command(),
               "auth_mode": "authenticated" if authenticated else "demo",
               "setup_required": bool(authenticated)}
+    if web:
+        result.update(auth_mode="presentation-only", run_command=_run_command().replace(_RUN_ARGUMENTS, "-m http.server 8092 --bind 127.0.0.1"))
     if authenticated:
         result["setup_command"] = f"{_COMMAND} guide authentication"
     if dry_run:
@@ -174,10 +200,14 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "inspect":
         return inspect_capabilities()
     if args.command == "example":
-        if args.name not in {"starter", "authenticated"}:
-            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter, authenticated.",
+        if args.name not in {"starter", "authenticated", "web"}:
+            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter, authenticated, web.",
                                 next_step=f"{_COMMAND} example starter")
-        files = read_starter(authenticated=args.name == "authenticated")
+        if args.name == "web":
+            from .web import read_web_starter
+            files = read_web_starter()
+        else:
+            files = read_starter(authenticated=args.name == "authenticated")
         if args.filename:
             if args.filename not in files:
                 raise _CommandError("UNKNOWN_EXAMPLE_FILE", "Choose one of: " + ", ".join(files),
@@ -187,7 +217,8 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "init":
         if not args.destination:
             raise _CommandError("USAGE_ERROR", "init requires a destination.", next_step=f"{_COMMAND} init --help")
-        return initialize_project(args.destination, dry_run=args.dry_run, authenticated=args.auth)
+        return initialize_project(args.destination, dry_run=args.dry_run, authenticated=args.auth, web=args.web,
+                                  web_config=args.web_config)
     raise _CommandError("USAGE_ERROR", "Choose guide, inspect, example or init.")
 
 
@@ -205,6 +236,8 @@ def _render_text(command: str, result: dict[str, Any]) -> str:
     if command == "init":
         action = "Would create" if result["dry_run"] else "Created"
         output = f"{action} {result['destination']}:\n" + "\n".join(result["files"])
+        if result.get("auth_mode") == "presentation-only":
+            return output + "\n\nFictional component studio; no authentication or business writes.\nFrom the generated directory:\n" + result["run_command"] + "\nOpen http://127.0.0.1:8092"
         if result.get("setup_required"):
             return output + (
                 "\n\nAuthenticated dashboard: access stays locked until setup is complete.\n"

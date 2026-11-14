@@ -110,7 +110,7 @@ def _legacy_four(business):
 def _snapshot(business):
     with business.raw_db() as connection:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        table = "account_mfa" if version in (8, 9, 10) else "admin_mfa"
+        table = "account_mfa" if version in (8, 9, 10, 11) else "admin_mfa"
         return (
             version,
             [tuple(row) for row in connection.execute("SELECT type,name,sql FROM sqlite_master ORDER BY name")],
@@ -201,7 +201,7 @@ def test_explicit_migration_encrypts_preserves_and_backfills_stale_sessions(busi
     migrated = db.Database(business.directory, migrate=True)
     row = _enrollment(business)
     assert migrated.mfa_secrets.decrypt(row["secret_ciphertext"], "admin", row["generation"]) == secret
-    assert _snapshot(business)[0] == 10
+    assert _snapshot(business)[0] == 11
     assert _snapshot(business)[3] == before[3]
     with business.db() as connection:
         sessions = connection.execute("SELECT * FROM session_security").fetchall()
@@ -278,7 +278,7 @@ def test_cli_requires_explicit_key_creation_and_migration_without_listening(busi
     assert cli.main(["--data-dir", str(business.directory), "--create-mfa-key"]) == 0
     assert original.is_file()
     assert cli.main(["--data-dir", str(business.directory), "--migrate-storage"]) == 0
-    assert _snapshot(business)[0] == 10
+    assert _snapshot(business)[0] == 11
     out = capsys.readouterr()
     assert "Old backups and SQLite remnants" in out.out
     assert "External MFA encryption key created" in out.out

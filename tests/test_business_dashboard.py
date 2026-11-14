@@ -785,6 +785,8 @@ def test_concurrent_reviews_publish_one_post(business, business_admin):
 
 def downgrade_delivery_schema(connection):
     """Construct the historical local-only schema for explicit migration tests."""
+    connection.execute("DROP TABLE IF EXISTS work_history")
+    connection.execute("DROP TABLE IF EXISTS work_items")
     from business.db import SCHEMA_V8
 
     assert connection.execute("SELECT COUNT(*) FROM security_destinations WHERE kind='https'").fetchone()[0] == 0
@@ -866,7 +868,7 @@ def test_submission_schema_migration_preserves_accounts_and_employee_sessions_re
     migrated = create_app(business.directory, public_origin=ORIGIN)
     assert business_rows(business, raw=True) == before
     with business.raw_db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == users_before
         assert [tuple(row) for row in connection.execute("SELECT * FROM sessions ORDER BY token_hash")] == sessions_before
     assert (business.directory / "identity.key").read_bytes() == identity
@@ -923,7 +925,7 @@ def test_submission_migration_failure_rolls_back_created_tables_and_version(busi
     monkeypatch.setattr(db, "_apply_submission_migration", apply)
     db.Database(business.directory, migrate=True)
     with business.raw_db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 @pytest.mark.parametrize("condition", ["paused", "address-limit", "global-limit", "queue-full"])

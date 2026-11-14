@@ -221,7 +221,7 @@ def schema_archive(custody, version):
         # SQLite's identifier quoting changes during rename are significant to
         # the exact historical schema verifier.
         connection.executescript({5: storage.SCHEMA_V5, 6: storage.SCHEMA_V6, 7: storage.SCHEMA_V7,
-                                  8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9}[version])
+                                  8: storage.SCHEMA_V8, 9: storage.SCHEMA_V9, 10: storage.SCHEMA_V10}[version])
         connection.execute("BEGIN IMMEDIATE")
         tables = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid").fetchall()
         with custody.database.readonly_snapshot() as current:
@@ -248,7 +248,7 @@ def schema_archive(custody, version):
     return archive
 
 
-@pytest.mark.parametrize("version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("version", [5, 6, 7, 8, 9, 10])
 def test_old_archive_requires_explicit_upgrade_then_current_lifecycle_reconciliation(custody, version):
     archive = schema_archive(custody, version)
     digests = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in archive.iterdir()}
@@ -263,7 +263,7 @@ def test_old_archive_requires_explicit_upgrade_then_current_lifecycle_reconcilia
     assert rows(output, "authentication_policy") == rows(custody.directory, "authentication_policy")
     assert rows(output, "enrollment_grants") == rows(output, "enrollment_sessions") == []
     receipt = json.loads((output / "restore.json").read_text())
-    assert receipt["backup_schema"] == version and receipt["restored_schema"] == 10 and receipt["schema_upgraded"]
+    assert receipt["backup_schema"] == version and receipt["restored_schema"] == 11 and receipt["schema_upgraded"]
     assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in archive.iterdir()} == digests
 
 
@@ -347,7 +347,7 @@ def test_setup_missing_legacy_admin_factor_issues_migration_without_promoting_ac
         assert connection.execute("SELECT 1 FROM account_mfa WHERE user_id='owner'").fetchone() is None
 
 
-@pytest.mark.parametrize("version", [5, 6, 7, 8, 9])
+@pytest.mark.parametrize("version", [5, 6, 7, 8, 9, 10])
 def test_malformed_historical_schema_is_rejected_before_enrollment_upgrade(custody, monkeypatch, version):
     archive = schema_archive(custody, version)
     with closing(backup._connect(archive / "business.sqlite3", readonly=False)) as connection, connection:

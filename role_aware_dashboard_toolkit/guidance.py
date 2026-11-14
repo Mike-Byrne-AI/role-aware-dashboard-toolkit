@@ -14,6 +14,7 @@ from typing import Any
 _GUIDE_TITLES = {
     "start": "Start an assistant-ready dashboard",
     "controls": "Add, change and remove controls",
+    "web": "Build a reusable web presentation and delivery workflow",
     "appearance": "Customize page and card colors",
     "sections": "Choose panels and menus",
     "plugins": "Add custom panels and sidebar callbacks",
@@ -127,7 +128,7 @@ def inspect_capabilities() -> dict[str, Any]:
         "optional_dependencies": dependencies,
         "dependency_note": "Distribution metadata only; optional hosts were not imported or tested for compatibility.",
         "guide_topics": list_guide_topics(),
-        "examples": ["starter", "authenticated"],
+        "examples": ["starter", "authenticated", "web"],
     }
 
 

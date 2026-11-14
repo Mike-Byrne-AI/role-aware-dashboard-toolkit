@@ -470,13 +470,18 @@ def check_staff_resizing(page, output, checks):
     """Cross the mobile breakpoint with both closed and open navigation."""
     from playwright.sync_api import expect
 
-    for width in (1100, 900, 768, 701, 700, 600, 390):
+    for width in (1100, 900, 768, 701, 700, 600, 390, 320):
         page.set_viewport_size({"width": width, "height": 1050})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Staff page overflows at {width}px"
         assert page.locator(".workspace-main").evaluate("""element => {
           const box = element.getBoundingClientRect();
           return box.left >= 0 && Math.abs(box.right - innerWidth) <= 1 && box.width >= innerWidth / 2;
         }"""), f"Staff content collapses or extends outside the window at {width}px"
+        for name in ("Refresh workspace", "Workspace walkthrough", "Your profile", "Sign out"):
+            assert page.get_by_role("button", name=name, exact=True).evaluate("""element => {
+              const box = element.getBoundingClientRect();
+              return box.left >= 0 && box.right <= innerWidth && box.width >= 32;
+            }"""), f"{name} is clipped at {width}px"
     page.get_by_role("button", name="Open navigation", exact=True).click()
     expect(page.locator(".workspace-main")).to_have_attribute("inert", "")
     page.set_viewport_size({"width": 900, "height": 1050})
@@ -669,6 +674,20 @@ def exercise_submission_challenge(browser, url, output, checks):
         context.close()
 
 
+def fulfill_web_asset(route, path):
+    """Serve the actual installed components in isolated frontend fixtures."""
+    from role_aware_dashboard_toolkit.web import WebTheme, read_web_asset
+    if path == "/ui/theme.css":
+        route.fulfill(status=200, content_type="text/css", body=WebTheme().css())
+        return True
+    if path in {"/ui/components.css", "/ui/components.js", "/ui/tour.js"}:
+        name = path.rsplit("/", 1)[-1]
+        route.fulfill(status=200, content_type="text/css" if name.endswith(".css") else "application/javascript",
+                      body=read_web_asset(name))
+        return True
+    return False
+
+
 def exercise_pending_saves(browser, output, checks, *, static_dir=None):
     """Hold fictional writes while exercising the actual browser form lifecycle."""
     from playwright.sync_api import expect
@@ -711,9 +730,13 @@ def exercise_pending_saves(browser, output, checks, *, static_dir=None):
 
     def intercept(route):
         path = urlsplit(route.request.url).path
+        if route.request.url.startswith(origin + "/") and fulfill_web_asset(route, path):
+            return
         assets = {"/": ("index.html", "text/html"), "/static/app.js": ("app.js", "application/javascript"),
                   "/static/login-flow.js": ("login-flow.js", "application/javascript"),
                   "/static/enrollment.js": ("enrollment.js", "application/javascript"),
+                  "/static/workspace.js": ("workspace.js", "application/javascript"),
+                  "/static/workspace.css": ("workspace.css", "text/css"),
                   "/static/styles.css": ("styles.css", "text/css"),
                   "/static/security-lab.js": ("security-lab.js", "application/javascript"),
                   "/static/security-lab.css": ("security-lab.css", "text/css")}
@@ -898,10 +921,14 @@ def exercise_admin_tools(browser, output, checks):
     def intercept(route):
         path = urlsplit(route.request.url).path
         requests.append((route.request.method, path))
+        if route.request.url.startswith(origin + "/") and fulfill_web_asset(route, path):
+            return
         assets = {"/": ("index.html", "text/html"), "/board": ("index.html", "text/html"),
                   "/static/app.js": ("app.js", "application/javascript"),
                   "/static/login-flow.js": ("login-flow.js", "application/javascript"),
                   "/static/enrollment.js": ("enrollment.js", "application/javascript"),
+                  "/static/workspace.js": ("workspace.js", "application/javascript"),
+                  "/static/workspace.css": ("workspace.css", "text/css"),
                   "/static/styles.css": ("styles.css", "text/css"),
                   "/static/security-lab.js": ("security-lab.js", "application/javascript"),
                   "/static/security-lab.css": ("security-lab.css", "text/css")}

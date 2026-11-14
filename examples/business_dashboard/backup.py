@@ -23,7 +23,7 @@ import tempfile
 import time
 
 from business.db import (
-    Database, _apply_browser_flow_migration, _apply_delivery_migration, _apply_enrollment_migration, _apply_event_migration,
+    Database, _apply_delivery_work_migration, _apply_browser_flow_migration, _apply_delivery_migration, _apply_enrollment_migration, _apply_event_migration,
     _apply_session_predecessor_migration, _require_schema,
     check_private_file, create_private_file,
     record_activity, utc_now, validate_data_dir,
@@ -32,7 +32,7 @@ from business.secret_store import SecretStore
 from business.security import TransactionAccessStore, principal_for_user
 from role_aware_dashboard_toolkit.access_store import AccessStoreError
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 FILES = ("business.sqlite3", "identity.key")
 QUARANTINE = "RESTORE_QUARANTINE"
 MAX_MANIFEST_BYTES = 16384
@@ -97,7 +97,7 @@ def _connect(path, *, readonly=True, immutable=False):
 
 
 def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
-    if schema_version not in (5, 6, 7, 8, 9, SCHEMA_VERSION) or connection.execute("PRAGMA user_version").fetchone()[0] != schema_version:
+    if schema_version not in (5, 6, 7, 8, 9, 10, SCHEMA_VERSION) or connection.execute("PRAGMA user_version").fetchone()[0] != schema_version:
         raise BackupError("Only reviewed current-schema storage can be backed up or restored.")
     if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
         raise BackupError("The database failed its integrity check.")
@@ -110,7 +110,7 @@ def _validate(connection, identity, secrets, *, schema_version=SCHEMA_VERSION):
         from business.event_destinations import validate_delivery_state
 
         validate_delivery_state(connection)
-    if schema_version == 10:
+    if schema_version >= 10:
         from business.browser_flow import validate_state
 
         # Backups can preserve a future rejection floor for offline recovery.
@@ -187,7 +187,7 @@ def _bundle(directory, *, upgrade_backup_schema=False):
         manifest = json.loads(content)
     except (ValueError, UnicodeError, RecursionError):
         raise BackupError("Backup manifest is invalid.") from None
-    allowed_schemas = {5, 6, 7, 8, 9, SCHEMA_VERSION} if upgrade_backup_schema else {SCHEMA_VERSION}
+    allowed_schemas = {5, 6, 7, 8, 9, 10, SCHEMA_VERSION} if upgrade_backup_schema else {SCHEMA_VERSION}
     if (not isinstance(manifest, dict) or manifest.get("format") != "westbridge-backup-v1"
             or type(manifest.get("schema")) is not int or manifest["schema"] not in allowed_schemas
             or manifest.get("encrypted") is not False
@@ -269,7 +269,7 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
     write transaction remains held through reconciliation/publication. Sources
     are never changed. Reconciled restores remain frozen and contain no sessions.
     Explicit upgrade_backup_schema permits only validated schema-five through
-    -nine archives to become schema ten inside the private restore transaction. Startup and
+    -ten archives to become schema eleven inside the private restore transaction. Startup and
     backup creation never implicitly migrate older storage.
     """
     if type(upgrade_backup_schema) is not bool:
@@ -317,6 +317,9 @@ def restore_backup(bundle, output, *, mfa_key_file=None, backup_mfa_key_file=Non
                 _validate(connection, identity, old_secrets, schema_version=9)
             if manifest["schema"] < 10:
                 _apply_browser_flow_migration(connection)
+                _validate(connection, identity, old_secrets, schema_version=10)
+            if manifest["schema"] < 11:
+                _apply_delivery_work_migration(connection)
                 _validate(connection, identity, old_secrets)
             # Neither historical nor current activation/recovery capabilities
             # may survive restoration. Pending accounts remain pending and need
@@ -397,7 +400,7 @@ def main(argv=None):
     restore.add_argument("--backup-mfa-key-file", help="Original backup MFA key when the current key has rotated")
     restore.add_argument("--security-source", help="Explicitly trusted current workspace; omission keeps restore offline")
     restore.add_argument("--upgrade-backup-schema", action="store_true",
-                         help="Explicitly upgrade a validated schema-five through -nine archive only in private restore staging")
+                         help="Explicitly upgrade a validated schema-five through -ten archive only in private restore staging")
     args = parser.parse_args(argv)
     try:
         if args.command == "backup":

@@ -332,7 +332,8 @@ def test_contributor_ci_runs_full_suite_on_windows_and_macos_and_keeps_browser_e
     assert "${{ runner.temp }}/business-security-browser" in browser
     assert "${{ runner.temp }}/business-passkey-browser" in browser
     assert "${{ runner.temp }}/business-lab-browser" in browser
-    assert "path: ${{ runner.temp }}/business-browser" in browser
+    assert 'python tools/business_delivery_browser.py --output-dir "$RUNNER_TEMP/business-delivery-browser"' in browser
+    assert "path: |\n            ${{ runner.temp }}/business-browser\n            ${{ runner.temp }}/business-delivery-browser" in browser
     assert "${{ runner.temp }}" in browser or "$RUNNER_TEMP" in browser
     upload = browser.split("uses: actions/upload-artifact@", 1)[1]
     assert "retention-days: 7" in upload

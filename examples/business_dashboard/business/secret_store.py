@@ -147,15 +147,15 @@ class SecretStore:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         # Explicit four-to-five migration validates the new encrypted columns
         # inside its transaction before publishing user_version=5.
-        if version not in (4, 5, 6, 7, 8, 9, 10):
+        if version not in (4, 5, 6, 7, 8, 9, 10, 11):
             raise ValueError("MFA validation requires a reviewed storage schema.")
-        table = "account_mfa" if version in (8, 9, 10) else "admin_mfa"
+        table = "account_mfa" if version in (8, 9, 10, 11) else "admin_mfa"
         for row in connection.execute(f"SELECT * FROM {table}"):
             if (not isinstance(row["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", row["generation"])
                     or type(row["last_counter"]) is not int or row["last_counter"] < -1):
                 raise ValueError("An account authenticator is invalid; preserve existing state.")
             self._validate_seed(row["secret_ciphertext"], row["user_id"], row["generation"])
-        if version in (8, 9, 10):
+        if version in (8, 9, 10, 11):
             for row in connection.execute("SELECT * FROM enrollment_sessions"):
                 if not isinstance(row["generation"], str) or not re.fullmatch(r"[0-9a-f]{32}", row["generation"]):
                     raise ValueError("A pending authenticator is invalid; preserve existing state.")

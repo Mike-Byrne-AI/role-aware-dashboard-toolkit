@@ -40,7 +40,7 @@ def test_catalog_and_every_topic_are_available_from_unrelated_directory(tmp_path
     assert code == 0
     topics = catalog["result"]["topics"]
     assert [item["id"] for item in topics] == [
-        "start", "controls", "appearance", "sections", "plugins", "permissions",
+        "start", "controls", "web", "appearance", "sections", "plugins", "permissions",
         "authentication", "deployment", "workflows", "profiles", "runs", "telemetry", "api", "troubleshooting",
     ]
     for item in topics:
@@ -258,7 +258,7 @@ def test_module_helpers_do_not_expand_root_exports():
     import role_aware_dashboard_toolkit as radt
     assert "read_guide" not in radt.__all__
     assert {topic["id"] for topic in list_guide_topics()} == {
-        "start", "controls", "appearance", "sections", "plugins", "permissions",
+        "start", "controls", "web", "appearance", "sections", "plugins", "permissions",
         "authentication", "deployment", "workflows", "profiles", "runs", "telemetry", "api", "troubleshooting",
     }
 

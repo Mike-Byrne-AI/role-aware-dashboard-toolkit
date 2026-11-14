@@ -37,13 +37,13 @@ def test_schema_six_requires_explicit_upgrade_and_preserves_existing_sessions(bu
         before = {name: [tuple(row) for row in connection.execute(f"SELECT * FROM {name} ORDER BY 1")]
                   for name in tables}
     snapshot = _fingerprint(business)
-    with pytest.raises(ValueError, match="explicit reviewed migration to schema ten"):
+    with pytest.raises(ValueError, match="explicit reviewed migration to schema eleven"):
         db.Database(business.directory, mfa_key_file=default_key_path(business.directory))
     assert _fingerprint(business) == snapshot
     migrated = db.Database(business.directory, mfa_key_file=default_key_path(business.directory), migrate=True)
     with migrated.transaction() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
-        db._require_schema(connection, 10)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
+        db._require_schema(connection, 11)
         assert connection.execute("SELECT * FROM session_predecessors").fetchall() == []
         after = {}
         for name in tables:

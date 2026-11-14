@@ -40,7 +40,7 @@ def _state_digest(trial):
             [tuple(row) for row in connection.execute(f"SELECT * FROM {table} ORDER BY 1")]
             for table in (
                 "users", "settings", "events", "assignments", "messages", "contacts",
-                "posts", "submissions", "submission_limits", "revenue", "activity",
+                "posts", "submissions", "submission_limits", "revenue", "activity", "work_items", "work_history",
                 "account_mfa", "session_mfa", "account_security", "authentication_policy",
                 "enrollment_grants", "enrollment_sessions", "enrollment_decisions",
             )
@@ -68,6 +68,7 @@ def _admin_operations():
         ("POST", "/api/schedule/{identifier}/archive", {"revision": 0}),
         ("POST", "/api/admin/contacts", contact_body()),
         ("PUT", "/api/admin/contacts/{identifier}", {**contact_body(), "revision": 0}),
+        ("POST", "/api/admin/contacts/{identifier}/schedule", {**event_body(), "contact_revision": 0}),
         ("POST", "/api/admin/posts", post_body()),
         ("PUT", "/api/admin/posts/{identifier}", {**post_body(), "revision": 0}),
         ("POST", "/api/admin/posts/{identifier}/unpublish", {"revision": 0}),
@@ -104,6 +105,7 @@ def test_route_inventory_keeps_admin_adversarial_matrix_complete(business):
         ("POST", "/api/login"), ("POST", "/api/login/context"), ("POST", "/api/password"), ("POST", "/api/logout"),
         ("GET", "/api/session"), ("GET", "/api/schedule"), ("GET", "/api/messages"),
         ("GET", "/api/security-lab"),
+        ("GET", "/api/work"), ("POST", "/api/work/{identifier}/start"), ("POST", "/api/work/{identifier}/complete"),
         ("POST", "/api/messages"), ("GET", "/api/public/posts"), ("POST", "/api/public/submissions"),
         ("GET", "/api/security/sessions"), ("POST", "/api/security/reauthenticate"),
         ("POST", "/api/security/sessions/{identifier}/revoke"),

@@ -24,7 +24,7 @@ SEED = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 
 
 @contextmanager
-def workspace(version=10):
+def workspace(version=11):
     with tempfile.TemporaryDirectory(prefix="radt-enrollment-policy-") as temporary:
         # Resolve the owned temp root before creating private child paths.
         directory = Path(temporary).resolve(strict=True) / "private"
@@ -37,13 +37,13 @@ def workspace(version=10):
         connection = sqlite3.connect(directory / "business.sqlite3")
         try:
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.executescript("BEGIN IMMEDIATE;\n" + {7: db.SCHEMA_V7, 8: db.SCHEMA_V8, 9: db.SCHEMA_V9, 10: db.SCHEMA}[version])
+            connection.executescript("BEGIN IMMEDIATE;\n" + {7: db.SCHEMA_V7, 8: db.SCHEMA_V8, 9: db.SCHEMA_V9, 10: db.SCHEMA_V10, 11: db.SCHEMA}[version])
             connection.execute("INSERT INTO mfa_key_binding VALUES(1,?)", (store.create_binding(),))
             for name, role in (("operator", "admin"), ("employee", "employee")):
                 connection.execute("INSERT INTO users VALUES(?,?,?,?,?,1,?,0)", (
                     name, name, "Fictional " + name, "!enrollment-pending!", role, security.principal_for_user(name, identity),
                 ))
-                if version in (8, 9, 10):
+                if version in (8, 9, 10, 11):
                     connection.execute("INSERT INTO account_security VALUES(?,'pending',0,NULL,NULL)", (name,))
             connection.commit()
         finally:
@@ -375,11 +375,11 @@ def test_schema_seven_requires_explicit_migration_and_preserves_ciphertext_accou
             connection.commit()
         finally:
             connection.close()
-        with pytest.raises(ValueError, match="explicit reviewed migration to schema ten"):
+        with pytest.raises(ValueError, match="explicit reviewed migration to schema eleven"):
             db.Database(directory)
         migrated = db.Database(directory, migrate=True)
         with migrated.transaction() as connection:
-            db._require_schema(connection, 10)
+            db._require_schema(connection, 11)
             assert connection.execute("SELECT mode FROM authentication_policy").fetchone()[0] == "transition"
             assert {row[0] for row in connection.execute("SELECT lifecycle FROM account_security")} == {"legacy"}
             assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 2

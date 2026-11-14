@@ -9,7 +9,7 @@ import sqlite3
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -18,6 +18,8 @@ from role_aware_dashboard_toolkit.access import AccessDenied
 from role_aware_dashboard_toolkit.access_store import AccessStoreError, FreezeConflict
 
 from .db import Database, record_activity, utc_now
+from .delivery import install_delivery_routes, delivery_summary, protect_linked_event
+from role_aware_dashboard_toolkit.web import WebTheme, read_web_asset
 from .abuse import PUBLIC_RULES, SubmissionGuard
 from .auth_routes import install_auth_routes
 from .login_context_routes import install_login_context_routes
@@ -55,6 +57,8 @@ def _post(row, *, public=False):
 
 def _event(connection, row):
     result = {key: row[key] for key in ("id", "title", "starts_at", "ends_at", "location", "notes", "revision")}
+    linked = connection.execute("SELECT status FROM work_items WHERE event_id=?", (row["id"],)).fetchone()
+    result["work_status"] = linked[0] if linked else None
     result["employee_ids"] = [item[0] for item in connection.execute("SELECT user_id FROM assignments WHERE event_id=? ORDER BY user_id", (row["id"],))]
     return result
 
@@ -80,7 +84,7 @@ def _validate_schedule(connection, payload, identifier):
             raise HTTPException(422, "Select active employees for the schedule.")
         overlap = connection.execute(
             "SELECT 1 FROM events e JOIN assignments a ON a.event_id=e.id WHERE a.user_id=? AND e.id<>? "
-            "AND e.archived=0 AND e.starts_at<? AND e.ends_at>? LIMIT 1",
+            "AND e.archived=0 AND NOT EXISTS(SELECT 1 FROM work_items w WHERE w.event_id=e.id AND w.status='completed') AND e.starts_at<? AND e.ends_at>? LIMIT 1",
             (employee_id, identifier, payload.ends_at, payload.starts_at),
         ).fetchone()
         if overlap:
@@ -147,6 +151,16 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             if write and permission in ("can_manage_business", "can_manage_freeze"):
                 require_recent(connection, token_hash(read_session_token(request, cookie_name)))
             yield connection, auth
+
+    install_delivery_routes(app, authorized, _validate_schedule, _current)
+
+    @app.get("/ui/{name}")
+    def ui_asset(name: str):
+        if name == "theme.css":
+            return Response(WebTheme().css(), media_type="text/css")
+        if name not in {"components.css", "components.js", "tour.js"}:
+            raise HTTPException(404, "Asset not found.")
+        return Response(read_web_asset(name), media_type="text/css" if name.endswith(".css") else "application/javascript")
 
     install_auth_routes(app, database, authorized, origin)
     install_login_context_routes(app, database, origin)
@@ -218,6 +232,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             row = _current(connection, "events", identifier, payload.revision)
             if row["archived"]:
                 raise HTTPException(409, "This event is archived.")
+            protect_linked_event(connection, identifier)
             _validate_schedule(connection, payload, identifier)
             connection.execute("UPDATE events SET title=?,starts_at=?,ends_at=?,location=?,notes=?,revision=revision+1 WHERE id=?", (payload.title, payload.starts_at, payload.ends_at, payload.location, payload.notes, identifier))
             connection.execute("DELETE FROM assignments WHERE event_id=?", (identifier,))
@@ -231,6 +246,7 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             row = _current(connection, "events", identifier, payload.revision)
             if row["archived"]:
                 raise HTTPException(409, "This event is already archived.")
+            protect_linked_event(connection, identifier, archive=True)
             connection.execute("UPDATE events SET archived=1,revision=revision+1 WHERE id=?", (identifier,))
             record_activity(connection, auth.user["name"], "Archived schedule event", row["title"])
             return {"ok": True}
@@ -259,15 +275,15 @@ def create_app(data_dir, *, public_origin="http://127.0.0.1:8091", mfa_key_file=
             latest = revenue[-1] if revenue else {"revenue": 0, "cost": 0}
             pipeline = connection.execute("SELECT COALESCE(SUM(value),0),COUNT(*) FROM contacts WHERE stage<>'Won'").fetchone()
             hours = 0
-            for event in connection.execute("SELECT e.starts_at,e.ends_at,COUNT(a.user_id) AS people FROM events e JOIN assignments a ON a.event_id=e.id WHERE e.archived=0 AND e.ends_at>? GROUP BY e.id", (utc_now(),)):
+            for event in connection.execute("SELECT e.starts_at,e.ends_at,COUNT(a.user_id) AS people FROM events e JOIN assignments a ON a.event_id=e.id WHERE e.archived=0 AND NOT EXISTS(SELECT 1 FROM work_items w WHERE w.event_id=e.id AND w.status='completed') AND e.ends_at>? GROUP BY e.id", (utc_now(),)):
                 hours += (datetime.fromisoformat(event["ends_at"]) - datetime.fromisoformat(event["starts_at"])).total_seconds() / 3600 * event["people"]
-            return {"metrics": {"monthly_revenue": latest["revenue"], "monthly_cost": latest["cost"], "pipeline_value": pipeline[0], "open_leads": pipeline[1], "scheduled_hours": round(hours, 2)},
+            return {"delivery": delivery_summary(connection), "metrics": {"monthly_revenue": latest["revenue"], "monthly_cost": latest["cost"], "pipeline_value": pipeline[0], "open_leads": pipeline[1], "scheduled_hours": round(hours, 2)},
                     "revenue": revenue, "activity": [dict(row) for row in connection.execute("SELECT * FROM activity ORDER BY id DESC LIMIT 50")], "toolkit_version": __version__}
 
     @app.get("/api/admin/contacts")
     def contacts(request: Request):
         with authorized(request, "can_manage_business") as (connection, auth):
-            return {"contacts": [dict(row) for row in connection.execute("SELECT * FROM contacts ORDER BY company,name")]}
+            return {"contacts": [dict(row) for row in connection.execute("SELECT c.*,w.id AS work_id FROM contacts c LEFT JOIN work_items w ON w.contact_id=c.id ORDER BY company,name")]}
 
     @app.post("/api/admin/contacts", status_code=201)
     def add_contact(payload: Contact, request: Request):

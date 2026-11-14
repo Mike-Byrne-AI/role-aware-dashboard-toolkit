@@ -163,9 +163,9 @@ def inspect_existing_storage(configuration: Configuration) -> dict:
             connection.execute("BEGIN")
             if [tuple(row) for row in connection.execute("PRAGMA integrity_check")] != [("ok",)]:
                 raise ValueError("The existing database failed its integrity check.")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != 10:
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 11:
                 raise ValueError("The existing schema needs an explicit reviewed migration before hosting.")
-            _require_schema(connection, 10)
+            _require_schema(connection, 11)
             validate_delivery_state(connection)
             validate_state(connection)
             now = time.time()
@@ -254,7 +254,7 @@ def provision(configuration: Configuration) -> Path:
 
 
 def create_application(configuration: Configuration):
-    """Create an application only after verifying existing schema-v10 state."""
+    """Create an application only after verifying existing schema-v11 state."""
     from business.app import create_app
 
     status = preflight(configuration)

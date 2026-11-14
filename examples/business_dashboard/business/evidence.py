@@ -83,7 +83,7 @@ def source_fingerprint(root=None):
                               and not {"__pycache__", ".pytest_cache", ".venv"}.intersection(path.parts))
     for relative in ("pyproject.toml", "tools/business_dashboard_browser.py",
                      "tools/business_login_client.py", "tools/business_login_flow_browser.py",
-                     "tools/business_enrollment_browser.py",
+                     "tools/business_enrollment_browser.py", "tools/business_delivery_browser.py",
                      "tools/business_security_demo.py", "tools/business_dashboard_fuzz.py",
                      "tools/business_recovery_drill.py", "tools/business_collector_drill.py",
                      "examples/business_dashboard/requirements.txt", "examples/security_event_collector/requirements.txt",

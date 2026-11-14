@@ -5,6 +5,11 @@ from typing import Any
 
 def build_family_definitions(family_cls: Any) -> dict[str, Any]:
     return {
+        "web-presentation": family_cls(
+            family_id="web-presentation", display_name="Web presentation",
+            symbols=("WebTheme", "WebPresentation", "read_web_asset", "read_web_starter"),
+            description="Dependency-free themes, escaped browser components and a portable component studio.",
+        ),
         "app-shell": family_cls(
             family_id="app-shell",
             display_name="Dashboard app shell",

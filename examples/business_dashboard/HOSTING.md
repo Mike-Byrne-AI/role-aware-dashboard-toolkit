@@ -158,7 +158,7 @@ In the current service's Shell, after environment changes have applied:
 python examples/business_dashboard/hosting/pilot.py preflight
 ```
 
-This validates schema-ten storage, the matched identity and MFA keys, private
+This validates schema-eleven storage, the matched identity and MFA keys, private
 files, account lifecycle/factors and challenge configuration. It reports
 `transition`, `enrollment_only`, `enrollment_incomplete` or `ready` separately
 from stored enrollment readiness. A fresh strict workspace can serve account
@@ -422,7 +422,7 @@ is deployed. A prior live report does not establish the behavior of a new commit
 
 ## Security lab deployment prerequisites
 
-Review [the security lab](SECURITY_LAB.md) before migrating. Hosted schema ten
+Review [the security lab](SECURITY_LAB.md) before migrating. Hosted schema eleven
 requires an explicit `BUSINESS_MFA_KEY_FILE` outside the data/backup directory.
 If a remote security destination is activated, set
 `BUSINESS_SECURITY_DELIVERY_CONFIG` to its private JSON configuration and
@@ -471,12 +471,12 @@ writes are closed before an offline migration, rotation or restore. Pausing
 edits is not an ingress barrier. Do not create, overwrite or replace keys just
 to make a preflight pass.
 
-Before replacing an existing schema-five through schema-nine deployment, take its protected backup
+Before replacing an existing schema-five through schema-ten deployment, take its protected backup
 with the matching, reviewed tool and retain that source identity.
-The schema-ten backup command intentionally refuses an unmigrated source.
+The schema-eleven backup command intentionally refuses an unmigrated source.
 After the current workspace is explicitly upgraded, recover a preserved
-schema-five through schema-nine archive only with `backup.py restore --upgrade-backup-schema` and
-the current schema-ten workspace as `--security-source`. The flag upgrades a
+schema-five through schema-ten archive only with `backup.py restore --upgrade-backup-schema` and
+the current schema-eleven workspace as `--security-source`. The flag upgrades a
 private staging copy, preserves the original archive and never removes the
 need for current authority. Omit the security source only to retain quarantine.
 
@@ -662,11 +662,11 @@ intentionally produces an unusable quarantined restore. No usable current source
 means this procedure cannot safely reopen historical authority; retain quarantine
 for a separate reviewed recovery plan. Never remove its marker to force startup.
 
-For a validated schema-five through schema-nine archive, add
+For a validated schema-five through schema-ten archive, add
 `--upgrade-backup-schema` to that restore command. Confirm `restore.json` reports
-the matching `backup_schema` (5, 6, 7, 8 or 9), `restored_schema: 10` and
+the matching `backup_schema` (5, 6, 7, 8, 9 or 10), `restored_schema: 11` and
 `schema_upgraded: true`. The reviewed current security source must already be
-schema ten; a historical archive cannot substitute for it. Reconciliation
+schema eleven; a historical archive cannot substitute for it. Reconciliation
 copies current lifecycle, policy, credentials and durable recovery decision
 references, then discards grants and pending setup sessions. Pending accounts
 remain pending and need fresh offline grants. A restore cannot silently promote

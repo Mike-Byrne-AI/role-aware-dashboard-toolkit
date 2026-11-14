@@ -169,8 +169,8 @@ The private event timeline requires current administrator authority.
   old pages or backups. Identity-key migration is separate and unsupported by
   the MFA rotation command. Old-before-rotation backup tests use the same current
   schema. An explicit `restore --upgrade-backup-schema` can also upgrade a
-  validated schema-five through schema-nine archive only in private
-  restore staging; current schema-ten authority is required to leave quarantine.
+  validated schema-five through schema-ten archive only in private
+  restore staging; current schema-eleven authority is required to leave quarantine.
   Reconciliation preserves current policy, lifecycle, factor state and durable
   operator decision references. It discards enrollment grants and pending setup
   sessions; pending accounts need offline reissue and remain unable to sign in.

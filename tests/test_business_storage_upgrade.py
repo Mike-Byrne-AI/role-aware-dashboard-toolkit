@@ -232,7 +232,7 @@ def test_v3_upgrade_preserves_data_admin_and_employee_sessions_and_identity(busi
     replacement = create_app(business.directory, public_origin=ORIGIN)
     assert _snapshot(business) == before
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert connection.execute("SELECT COUNT(*) FROM create_receipts").fetchone()[0] == 0
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     admin_client = business.client(replacement)
@@ -280,7 +280,7 @@ def test_v3_upgrade_ddl_and_version_roll_back_together_on_storage_failure(busine
     assert _schema(business) == schema_before
     assert _snapshot(business) == data_before
     db.Database(business.directory, migrate=True)
-    assert _schema(business)[0] == 10
+    assert _schema(business)[0] == 11
     assert _snapshot(business) == data_before
 
 
@@ -307,12 +307,12 @@ def test_explicit_upgrade_cli_exits_without_listener_provisioning_or_secret_outp
     assert _cli().main(["--data-dir", str(business.directory), "--migrate-storage"]) == 0
     captured = capsys.readouterr()
     assert captured.out == (
-        "Existing storage validated and upgraded to schema ten. Keep all older writers stopped; mixed schema versions are unsupported. "
+        "Existing storage validated and upgraded to schema eleven. Keep all older writers stopped; mixed schema versions are unsupported. "
         "Existing sessions remain usable, but reverification requires browser-flow bootstrap. Legacy access remains in transition until "
         "reviewed enrollment and explicit strict activation. Old backups and SQLite remnants may still contain plaintext MFA seeds. Remote security-event delivery requires separate explicit activation.\n"
     )
     assert captured.err == ""
-    assert _schema(business)[0] == 10
+    assert _schema(business)[0] == 11
     assert _snapshot(business) == before
 
 

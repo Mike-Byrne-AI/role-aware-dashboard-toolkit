@@ -33,9 +33,9 @@ def verify_account_code(connection, user_id, code, secret_store):
     if not isinstance(code, str) or len(code) != 6 or not code.isascii() or not code.isdecimal():
         return None
     version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (5, 6, 7, 8, 9, 10):
+    if version not in (5, 6, 7, 8, 9, 10, 11):
         raise ValueError("MFA verification requires a reviewed storage schema.")
-    table = "account_mfa" if version in (8, 9, 10) else "admin_mfa"
+    table = "account_mfa" if version in (8, 9, 10, 11) else "admin_mfa"
     row = connection.execute(f"SELECT * FROM {table} WHERE user_id=?", (user_id,)).fetchone()
     if row is None:
         return None

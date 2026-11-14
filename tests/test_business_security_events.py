@@ -621,7 +621,7 @@ def test_schema_five_requires_explicit_atomic_migration_preserving_business(busi
         assert connection.execute("SELECT name FROM sqlite_master WHERE name='security_events'").fetchone() is None
     db.Database(business.directory, migrate=True)
     with business.db() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
         assert [tuple(row) for row in connection.execute("SELECT * FROM users ORDER BY id")] == before
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     assert _rows(business) == []

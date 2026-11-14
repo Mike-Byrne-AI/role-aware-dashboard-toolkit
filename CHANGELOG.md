@@ -4,6 +4,20 @@
 
 ### Added
 
+- Reusable guided walkthroughs now serve Westbridge administrators/employees
+  and the component studio. Versioned `WebPresentation` configuration supports
+  brand editing, validated import/export and `init --web --web-config` for
+  repeatable client demos, with a documented demonstration sequence.
+- A reusable delivery board and combined text, stage and person filtering now
+  power Westbridge Work and both generated web studio presets. Keyboard focus,
+  mobile lanes, account changes and paused-write presentation have browser checks.
+- A dependency-free web presentation kit supplies validated theme tokens,
+  escaped components and `init --web`, a portable studio with two brand presets.
+  Westbridge composes the same assets in its redesigned, actionable overview.
+- Westbridge schema eleven connects won opportunities to scheduled assignments,
+  progress and handover history, with revision checks and scoped staff access.
+  Existing storage requires explicit migration; a disposable browser runner
+  exercises the workflow and reusable studio on desktop and mobile.
 - Westbridge's public, read-only Security Lab presents reproducible local
   session-revocation, stale-writer and recovery scenarios with sanitized,
   source-bound receipts and explicit failed, not-run and stale evidence states.

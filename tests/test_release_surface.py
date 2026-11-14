@@ -13,6 +13,7 @@ from role_aware_dashboard_toolkit.release_audit import (
 
 EXPECTED_FAMILIES = {
     "app-shell",
+    "web-presentation",
     "controls-and-security",
     "authenticated-access",
     "operator-records",

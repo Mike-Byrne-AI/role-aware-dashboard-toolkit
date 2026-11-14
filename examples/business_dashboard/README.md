@@ -275,7 +275,7 @@ validates and upgrades existing storage, prints no credentials, and opens no
 listener. For pre-five storage without an encryption key, explicitly create the
 independent MFA key first with `--create-mfa-key`. For an existing schema-five
 workspace, preserve its original MFA key. Use the same data and key paths for
-migration. Local startup and hosted preflight require schema ten and never
+migration. Local startup and hosted preflight require schema eleven and never
 migrate automatically.
 Do not reprovision.
 Existing account login budgets retain their original namespace. Only upgrades
@@ -523,3 +523,74 @@ bootstrap, explicit provisioning and normal service commands. The adapter
 refuses missing or outdated state before normal startup. The landscaping
 launcher and acceptance checker are specific to that app. Use fictional records
 for client demonstrations until actual-host acceptance is complete.
+
+## Delivery workspace
+
+The overview links to live pipeline, delivery states and upcoming assignments.
+Mark an outreach opportunity **Won**, then choose **Schedule work** to create its
+linked event and assignment. Assigned employees open **Work**, start the task
+with a note and record completion with a handover. The administrator can inspect
+the history and completed-work metric. Financial charts remain illustrative.
+
+Work opens as a responsive delivery board with a lane for each saved stage.
+Search project, place or person; combine it with an assigned-person and stage
+filter. Switch to Cards or choose View details for the handover history. Search
+keeps keyboard focus, result counts announce the current selection, and mobile
+lanes stack vertically. Filters reset when the account or role changes. They use
+only the work records returned for that user; searching never grants access.
+
+The theme, board, filtering helper and metric/action/progress components come from the installed toolkit;
+see [web presentation](../../role_aware_dashboard_toolkit/resources/guides/web.md).
+Generate its second consumer with `python -m role_aware_dashboard_toolkit init
+./client-studio --web`. Both fictional studio presets use the same components.
+
+Schema eleven adds only `work_items` and `work_history`. Existing schema-ten
+storage refuses startup until the explicit `--migrate-storage` operation is
+reviewed and performed with writers stopped. Rehearse on a backup; migration
+does not infer deliveries from existing contacts. Old application versions must
+not write the migrated database. Backup restore supports explicit upgrading of
+validated schema-ten archives and retains existing quarantine/security rules.
+
+Run the disposable workflow and studio browser proof from the repository root:
+
+```powershell
+$deliveryEvidence = Join-Path ([System.IO.Path]::GetTempPath()) ("radt-delivery-" + [guid]::NewGuid())
+.\.venv\Scripts\python.exe -B tools/business_delivery_browser.py --browser-channel chrome --output-dir $deliveryEvidence
+```
+
+## Client demonstration sequence
+
+Use fictional records in an isolated demonstration workspace. This sequence
+closes the local showcase feature scope: shared visual components, a complete
+delivery workflow, searchable board, role-specific walkthroughs and repeatable
+client branding. It is not hosted acceptance or a migration instruction.
+
+1. Generate the toolkit studio with `init --web`. Choose the field-services or
+   professional-services preset, then apply the client's name and palette in
+   **Make it your own**. Export the configuration and regenerate a fresh studio
+   with `init --web --web-config` to demonstrate repeatable adaptation.
+2. Sign in to Westbridge as the fictional administrator. Use **Workspace
+   walkthrough** (the information button in the header) for the short tour:
+   overview, outreach, delivery and the evidence lab. It only navigates; it
+   creates no records and does not impersonate another role.
+3. Close the tour. Mark a fictional opportunity Won, schedule its delivery and
+   assign an employee. Show the saved work in the board; search and combine
+   person/stage filters. Use Cards to inspect the recorded history.
+4. Sign out and sign in as that employee through normal authentication. The
+   employee walkthrough covers schedule, assigned work and the team board.
+   Start the delivery with a progress note and complete it with a handover.
+5. Return as the administrator. Open the completed-work metric and inspect the
+   handover. Use the security lab to distinguish recorded checks, missing proof
+   and the scope of the evidence. Keep illustrative financials labelled.
+
+The disposable browser runner above repeats the real workflow, both role tours,
+mobile controls, brand export/import and fresh-project regeneration. It verifies
+that tours send no business writes, filters use scoped records and branding
+failures preserve the applied configuration. Its temporary accounts and storage
+are separate from an existing application.
+
+For another presentation, generate a new studio or provision a new fictional
+workspace through the existing explicit provisioning commands. There is no
+reset endpoint that can erase an existing workspace. Hosted rollout still
+requires the migration, backup, authentication and acceptance work in
+[HOSTING.md](HOSTING.md); local browser receipts cannot substitute for it.
