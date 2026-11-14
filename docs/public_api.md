@@ -9,7 +9,7 @@ This reference is generated from the OSS-standard API manifest.
 - Experimental exports: `0`
 - Undocumented exports: `0`
 - Root export budget: `60`
-- Documented module-only public symbols: `74`
+- Documented module-only public symbols: `75`
 
 ## Usage recipes
 
@@ -312,11 +312,12 @@ Module-only validators and protocol catalog metadata.
 
 Classification: `stable`
 
-Root exports: `0`; module-only symbols: `4`.
+Root exports: `0`; module-only symbols: `5`.
 
 - `WebTheme` (module-only)
 - `WebPresentation` (module-only)
 - `read_web_asset` (module-only)
 - `read_web_starter` (module-only)
+- `read_web_host_starter` (module-only)
 
-Dependency-free themes, escaped browser components and a portable component studio.
+Dependency-free themes, escaped browser components, a portable studio and editable FastAPI host templates.

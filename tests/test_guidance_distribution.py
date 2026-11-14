@@ -21,6 +21,11 @@ RESOURCE_FILES = {"role_aware_dashboard_toolkit/resources/guides/" + topic + ".m
 }
 RESOURCE_FILES |= {"role_aware_dashboard_toolkit/resources/web/" + name for name in ("components.js", "components.css", "tour.js", "presentation.js")}
 RESOURCE_FILES |= {"role_aware_dashboard_toolkit/resources/web_starter/" + name for name in ("index.html", "gallery.js", "gallery.css", "README.md")}
+RESOURCE_FILES |= {"role_aware_dashboard_toolkit/resources/web_host_starter/" + name for name in (
+    "app.py", "manage.py", "README.md", "AGENTS.md", "gitignore", "host/__init__.py",
+    "host/actions.py", "host/service.py", "host/auth.py", "host/storage.py",
+    "static/index.html", "static/app.js", "static/app.css",
+)}
 
 
 def test_both_artifacts_include_exact_guidance_resource_bytes(built_release_artifacts):
@@ -53,12 +58,17 @@ for topic in ('start','controls','web','appearance','sections','plugins','permis
               'authentication','deployment','workflows','profiles','runs','telemetry','api','troubleshooting'):
     assert guidance.read_guide(topic)
 assert guidance.read_starter()
-from role_aware_dashboard_toolkit.web import WebTheme, WebPresentation, read_web_starter
+from role_aware_dashboard_toolkit.web import WebTheme, WebPresentation, read_web_starter, read_web_host_starter
 assert WebTheme().css()
 assert set(read_web_starter()) == {"index.html", "gallery.js", "gallery.css", "README.md", "components.js", "components.css", "theme.css", "tour.js", "presentation.js", "web-config.js", "web-presentation.json"}
 brand = WebPresentation(preset="studio", brand="Harbor & Co.")
 assert WebPresentation.from_json(brand.to_json()) == brand
 assert "Harbor & Co." in read_web_starter(brand)["web-config.js"]
+host = read_web_host_starter(brand)
+assert "Harbor & Co." in host["static/web-config.js"]
+assert "from host.service import" in host["app.py"]
+assert "examples." not in "\\n".join(text for name, text in host.items() if name.endswith(".py"))
+assert 'fastapi' not in sys.modules
 report = guidance.inspect_capabilities()
 assert report
 assert 'streamlit' not in sys.modules

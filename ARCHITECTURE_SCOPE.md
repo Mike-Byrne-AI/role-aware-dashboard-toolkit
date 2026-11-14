@@ -145,3 +145,12 @@ and adapt the same example through `example starter --format json`.
 `init --auth` selects the authenticated starter, also available through
 `example authenticated --format json`. The host must configure its identity
 provider and provision access before using that starter.
+
+`init --web-host` selects an editable FastAPI application, also readable through
+`example web-host --format json`. It copies host-owned token verification,
+transactional SQLite records/history and a branded browser interface. These
+generated modules are application source, not stable library APIs. The installed
+package supplies the templates without importing FastAPI during generation.
+The host must initialize external private storage and issue expiring access
+tokens explicitly. One organization on one host with local disk is the supported
+boundary; provider login, MFA, public HTTPS, backups and recovery remain host work.

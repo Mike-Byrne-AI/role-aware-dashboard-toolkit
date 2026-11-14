@@ -5,6 +5,7 @@ import pytest
 
 from role_aware_dashboard_toolkit.cli import main
 from role_aware_dashboard_toolkit.web import WebPresentation, WebTheme, read_web_asset, read_web_starter
+from role_aware_dashboard_toolkit.web import read_web_host_starter
 
 
 @pytest.mark.parametrize("color", ["red", "#fff", "#123456;}", "</style>", None, 1])
@@ -40,6 +41,45 @@ def test_web_auth_are_mutually_exclusive(tmp_path, capsys):
     destination = tmp_path / "studio"
     assert main(["init", str(destination), "--web", "--auth"]) != 0
     assert not destination.exists()
+
+
+def test_web_host_generation_is_editable_branded_and_setup_required(tmp_path, capsys):
+    destination = tmp_path / "client-host"
+    config = WebPresentation(preset="studio", brand="Harbor & Co. </script>")
+    source = tmp_path / "brand.json"
+    source.write_text(config.to_json(), encoding="utf-8")
+    command = ["init", str(destination), "--web-host", "--web-config", str(source), "--format", "json"]
+    assert main([*command, "--dry-run"]) == 0
+    preview = json.loads(capsys.readouterr().out)["result"]
+    assert not destination.exists() and preview["created_files"] == []
+    assert preview["auth_mode"] == "operator-token" and preview["setup_required"]
+    assert "uvicorn app:create_app --factory" in preview["run_command"]
+    assert main(command) == 0
+    created = json.loads(capsys.readouterr().out)["result"]
+    files = read_web_host_starter(config)
+    assert set(created["created_files"]) == set(files)
+    for name, text in files.items():
+        assert (destination / name).read_text(encoding="utf-8") == text
+    assert "</script>" not in files["static/web-config.js"]
+    assert files["static/theme.css"] == config.theme.css()
+    assert not any(name.endswith((".sqlite3", ".key")) for name in files)
+    (destination / "app.py").write_text("# Consumer edit\n", encoding="utf-8")
+    assert main(command) != 0
+    assert (destination / "app.py").read_text() == "# Consumer edit\n"
+
+
+@pytest.mark.parametrize("other", ["--auth", "--web"])
+def test_web_host_cli_refuses_multiple_starters(tmp_path, other):
+    destination = tmp_path / "host"
+    assert main(["init", str(destination), "--web-host", other]) != 0
+    assert not destination.exists()
+
+
+def test_web_host_example_is_the_generated_source(capsys):
+    assert main(["example", "web-host", "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out)["result"]["files"] == read_web_host_starter()
+    with pytest.raises(ValueError):
+        read_web_host_starter({})
 
 
 def test_config_roundtrip_generates_repeatable_plain_text_brand():

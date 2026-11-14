@@ -14,6 +14,61 @@ is browser-only presentation, not an authenticated application. `init --web`
 refuses existing destinations and is mutually exclusive with `--auth`.
 Use `example web --format json` to inspect files without writing them.
 
+## Editable FastAPI web host
+
+The installed package can also generate a working host with branded presentation,
+SQLite records and protected workflows. Install a reviewed local wheel with its
+`api` extra (no package-index release is assumed), then generate outside the
+toolkit checkout. For example, from an activated consumer environment:
+
+```powershell
+python -m pip install "C:\artifacts\role_aware_dashboard_toolkit-0.2.0rc1-py3-none-any.whl[api]"
+python -m role_aware_dashboard_toolkit init my-app --web-host --web-config brand.json
+Set-Location my-app
+```
+
+Omit `--web-config` to use the Fieldwork preset. `example web-host --format json`
+reads the same templates without writing. Generation needs only the core package;
+running the host needs `api`. Existing destinations are refused, including on
+`--dry-run`. The web-host, studio and Streamlit starters are mutually exclusive.
+
+Follow the generated README to initialize a new external private data directory,
+issue an expiring Manager token and set `RADT_DATA_DIR`. Start with:
+
+```powershell
+python -m uvicorn app:create_app --factory --host 127.0.0.1 --port 8093 --no-proxy-headers --no-access-log
+```
+
+Open http://127.0.0.1:8093 and enter the issued token. Writes start frozen; a
+Manager deliberately enables them. Managers create and manage work, Operators
+change only their assigned records, and Viewers read without writing. Current
+token validity, grants, scope, freeze, record revision and change history are
+checked in the same SQLite transaction. Stale and repeated revisions conflict;
+history failure rolls the business change back. Restart uses the same records.
+
+Edit `app.py` for routes, `host/` for application policy and persistence, and
+`static/` for the browser interface. `web-presentation.json` records the generated
+brand; the live assets are `static/web-config.js` and `static/theme.css`.
+Changing the record schema needs a deliberate migration. These copied modules
+belong to the consumer and are not stable toolkit APIs. No runtime `examples`
+import, source checkout, credentials or preloaded business records are required.
+
+Tokens are operator-issued bearer credentials, held only in browser memory;
+reload requires sign-in again. They are not an OIDC login flow or MFA. Keep tokens
+and the private data directory out of source control and logs, and use loopback
+HTTP locally or a reviewed HTTPS origin. Public ingress, real-provider sign-in,
+credential delivery, backups and tested recovery require separate host acceptance.
+
+The acceptance target is generation from an installed artifact followed by real
+HTTP and browser checks of branding, persistent records and protected workflows.
+Repository tests cover server denials, assigned-record scope, revocation, freeze,
+stale/duplicate submissions, transactional rollback and restart. The source runner
+`tools/web_host_browser.py --installed-package --output-dir <new-external-dir>`
+exercises the generated app with disposable data. Its interpreter must use a
+non-editable installed distribution outside the checkout. Contributor CI runs
+this check alongside existing browser checks; local receipts and CI do not prove
+public hosting, physical-device behavior or recovery custody.
+
 ## Repeat a client presentation
 
 Open **Make it your own** in the studio. Apply a brand name, headline and colors,
@@ -154,6 +209,46 @@ roles and enforce access again when loading pages. Close the controller on
 account or session changes. Westbridge's administrator and employee sequences
 use their respective existing pages. The standalone studio consumes the same
 controller for its own presentation sequence.
+
+## Connect navigation, sessions and protected forms
+
+The components supply presentation. Your host supplies routes, verified sessions,
+records and action handlers. Use these patterns when connecting them:
+
+1. Give list and detail pages canonical URLs. Serve the application shell on a
+   direct visit, then authorize every record read on the server. Handle browser
+   Back/Forward and reload without relying on a record left in JavaScript memory.
+   Preserve the intended route through sign-in; an unavailable record must show
+   a safe error and a way back to authorized work.
+2. Track navigation and identity changes separately. Capture both generations
+   when starting asynchronous work; ignore a result after either has changed.
+   Scope delayed authentication errors to the originating identity too, so an
+   old 401 cannot clear a newer sign-in. This browser guard does not revoke a
+   server session or prevent an old response header from changing cookies.
+3. Recheck the verified session when loading a protected route. Another tab can
+   replace the shared cookie while this tab still displays the old role. On an
+   account or role change, clear old records, filters, open editors and tours,
+   rebuild navigation, then load the newly authorized records. A 403 can mean
+   either changed access or a genuine action denial: recheck identity before
+   deciding whether to clear the workspace or retain a correctable draft.
+4. Match browser input limits to the server's accepted fields and lengths. Show
+   bounded validation errors beside the relevant controls. Client checks improve
+   feedback; the server remains responsible for validation and permissions.
+5. On a revision conflict, retain the draft and require an explicit latest-version
+   review. Check current identity, record scope and whether the action is still
+   allowed before enabling a deliberate resubmission. A lost mutation reply is
+   an uncertain outcome: offer a saved-state check and avoid automatic replay.
+
+Exercise direct links, Back/Forward, reload, cross-tab account changes, revoked
+access after opening a form, delayed replies, stale revisions and empty results.
+Check narrow layouts and keyboard focus as well as the stored result and history.
+
+For an independent consumer, the source-checkout/source-distribution helper
+`tools/consumer_evidence.py` supports a snapshot before checks and a finish step
+after them. Bind selected source and artifact hashes to the resulting report
+bytes, and record each check's limits. The helper does not execute checks or
+authenticate the report's execution. Full CLI usage is in the source document
+`docs/consumer_verification.md`; neither file is an importable wheel API.
 
 ## Source example: opportunity to delivery
 

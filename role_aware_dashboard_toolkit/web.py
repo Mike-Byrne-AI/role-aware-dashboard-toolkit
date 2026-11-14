@@ -151,4 +151,31 @@ def read_web_starter(presentation: WebPresentation | None = None) -> dict[str, s
     return result
 
 
-__all__ = ["WebTheme", "WebPresentation", "read_web_asset", "read_web_starter"]
+def read_web_host_starter(presentation: WebPresentation | None = None) -> dict[str, str]:
+    """Read an editable FastAPI application without importing or starting a host.
+
+    The generated application's authentication, storage and workflows are consumer
+    source, not library APIs. Runtime data and credentials are provisioned later.
+    """
+    presentation = presentation if presentation is not None else WebPresentation()
+    if not isinstance(presentation, WebPresentation):
+        raise ValueError("presentation must be a WebPresentation")
+    root = resources.files(__package__).joinpath("resources", "web_host_starter")
+    names = (
+        "app.py", "manage.py", "README.md", "AGENTS.md", "host/__init__.py",
+        "host/actions.py", "host/service.py", "host/auth.py", "host/storage.py",
+        "static/index.html", "static/app.js", "static/app.css",
+    )
+    result = {name: root.joinpath(*name.split("/")).read_text(encoding="utf-8") for name in names}
+    result[".gitignore"] = root.joinpath("gitignore").read_text(encoding="utf-8")
+    for name in ("components.css", "components.js"):
+        result["static/" + name] = read_web_asset(name)
+    result["static/theme.css"] = presentation.theme.css()
+    result["web-presentation.json"] = presentation.to_json()
+    result["static/web-config.js"] = (
+        "window.RADTWebConfig = " + presentation.to_json().rstrip().replace("<", "\\u003c") + ";\n"
+    )
+    return result
+
+
+__all__ = ["WebTheme", "WebPresentation", "read_web_asset", "read_web_starter", "read_web_host_starter"]

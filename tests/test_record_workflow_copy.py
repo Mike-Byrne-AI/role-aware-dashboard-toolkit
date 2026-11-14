@@ -9,6 +9,7 @@ import tarfile
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL = "examples/record_workflows/actions.py"
 DEMO_COPY = "examples/landscaping/landscape/action_workflow.py"
+HOST_COPY = "role_aware_dashboard_toolkit/resources/web_host_starter/host/actions.py"
 SYNC_INSTRUCTION = (
     f"The landscaping action helper must match {CANONICAL} byte for byte. "
     f"Make shared fixes in that canonical helper, copy it to {DEMO_COPY}, "
@@ -26,7 +27,7 @@ def test_landscaping_action_helper_matches_canonical_source():
 def test_sdist_ships_the_same_canonical_and_landscaping_action_helper(built_release_artifacts):
     payloads = {}
     with tarfile.open(built_release_artifacts["sdist"], "r:gz") as archive:
-        for path in (CANONICAL, DEMO_COPY):
+        for path in (CANONICAL, DEMO_COPY, HOST_COPY):
             matches = [
                 member
                 for member in archive.getmembers()
@@ -40,6 +41,7 @@ def test_sdist_ships_the_same_canonical_and_landscaping_action_helper(built_rele
             with contents:
                 payloads[path] = contents.read()
     assert payloads[DEMO_COPY] == payloads[CANONICAL], SYNC_INSTRUCTION
+    assert payloads[HOST_COPY] == payloads[CANONICAL]
     assert payloads[CANONICAL] == (REPO_ROOT / CANONICAL).read_bytes(), (
         "The source distribution contains a stale canonical action helper; "
         "rebuild both release artifacts from the current source."

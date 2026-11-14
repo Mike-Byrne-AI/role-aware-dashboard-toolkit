@@ -4,6 +4,14 @@
 
 ### Added
 
+- An editable `init --web-host` FastAPI starter ships in installed artifacts with
+  reusable branding, external SQLite persistence, expiring operator tokens,
+  assigned-record permissions, shared freeze and transactional revision/history
+  checks. Generated-host API and browser acceptance exercise the consumer path.
+- A source-distributed consumer evidence helper captures explicit source/artifact
+  snapshots and binds supplied API/browser reports without implying independent
+  execution or hosted acceptance. Web host guidance now covers session-aware
+  navigation, identity changes, field bounds and deliberate conflict review.
 - Reusable guided walkthroughs now serve Westbridge administrators/employees
   and the component studio. Versioned `WebPresentation` configuration supports
   brand editing, validated import/export and `init --web --web-config` for

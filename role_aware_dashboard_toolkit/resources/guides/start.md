@@ -82,3 +82,10 @@ Edit the starter's named functions: `build_controls`, `build_roles`,
 Verify by changing a field, using the menu, switching roles, freezing controls,
 and saving/loading a profile. Inspect the actual browser for appearance changes.
 Imports and guide/inspect/example commands do not write project files.
+
+For a browser frontend with persistent SQLite records, choose
+`init my-app --web-host` and install the toolkit's `api` extra instead of
+`workbench`. This copies an editable FastAPI host, browser assets and operator
+setup commands. Read `guide web` and the generated README before launch; private
+storage and expiring tokens require explicit setup. `--web-config brand.json`
+applies exported branding. `init --web` remains the presentation-only studio.

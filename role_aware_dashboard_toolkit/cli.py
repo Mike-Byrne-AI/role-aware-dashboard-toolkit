@@ -73,9 +73,10 @@ def _parser() -> tuple[_Parser, dict[str, argparse.ArgumentParser]]:
     commands["example"].add_argument("--file", dest="filename")
     commands["init"].add_argument("destination", nargs="?")
     commands["init"].add_argument("--dry-run", action="store_true")
-    commands["init"].add_argument("--web-config", help="Validated web-presentation.json for --web.")
+    commands["init"].add_argument("--web-config", help="Validated branding for --web or --web-host.")
     starters = commands["init"].add_mutually_exclusive_group()
     starters.add_argument("--web", action="store_true", help="Create the portable web component studio.")
+    starters.add_argument("--web-host", action="store_true", help="Create an editable FastAPI host with protected persistent records.")
     starters.add_argument("--auth", action="store_true",
                                  help="Create the authenticated starter, recommended for shared use.")
     return parser, commands
@@ -125,19 +126,20 @@ def _new_destination(destination: str) -> Path:
 
 def initialize_project(destination: str, *, dry_run: bool = False,
                        authenticated: bool = False, web: bool = False,
+                       web_host: bool = False,
                        web_config: str | None = None) -> dict[str, Any]:
     """Create only a new directory; report partial output honestly on I/O failure.
 
     Existing files, directories and links are never merged or overwritten.
     Importing this module never calls this function or writes project files.
     """
-    if web and authenticated:
-        raise _CommandError("USAGE_ERROR", "Choose web or authenticated, not both.")
-    if web_config is not None and not web:
-        raise _CommandError("USAGE_ERROR", "--web-config requires --web.")
+    if sum((bool(web), bool(authenticated), bool(web_host))) > 1:
+        raise _CommandError("USAGE_ERROR", "Choose only one starter: web, web-host or authenticated.")
+    if web_config is not None and not (web or web_host):
+        raise _CommandError("USAGE_ERROR", "--web-config requires --web or --web-host.")
     path = _new_destination(destination)
-    if web:
-        from .web import WebPresentation, read_web_starter
+    if web or web_host:
+        from .web import WebPresentation, read_web_host_starter, read_web_starter
         presentation = None
         if web_config is not None:
             try:
@@ -150,7 +152,7 @@ def initialize_project(destination: str, *, dry_run: bool = False,
                 raise _CommandError("INVALID_WEB_CONFIG", "Web configuration could not be validated.",
                                     next_step="Use an exported version-one configuration; check its text, colors and contrast.",
                                     exception_type=type(error).__name__) from None
-        contents = read_web_starter(presentation)
+        contents = (read_web_host_starter if web_host else read_web_starter)(presentation)
     else:
         contents = read_starter(authenticated=authenticated)
     result = {"destination": str(path), "dry_run": bool(dry_run), "files": list(contents),
@@ -159,6 +161,11 @@ def initialize_project(destination: str, *, dry_run: bool = False,
               "setup_required": bool(authenticated)}
     if web:
         result.update(auth_mode="presentation-only", run_command=_run_command().replace(_RUN_ARGUMENTS, "-m http.server 8092 --bind 127.0.0.1"))
+    if web_host:
+        result.update(auth_mode="operator-token", setup_required=True,
+                      setup_command="Read the generated README.md; initialize private storage and issue a token.",
+                      run_command=_run_command().replace(_RUN_ARGUMENTS,
+                          "-m uvicorn app:create_app --factory --host 127.0.0.1 --port 8093 --no-proxy-headers --no-access-log"))
     if authenticated:
         result["setup_command"] = f"{_COMMAND} guide authentication"
     if dry_run:
@@ -200,12 +207,12 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "inspect":
         return inspect_capabilities()
     if args.command == "example":
-        if args.name not in {"starter", "authenticated", "web"}:
-            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter, authenticated, web.",
+        if args.name not in {"starter", "authenticated", "web", "web-host"}:
+            raise _CommandError("UNKNOWN_EXAMPLE", "Unknown example. Available examples: starter, authenticated, web, web-host.",
                                 next_step=f"{_COMMAND} example starter")
-        if args.name == "web":
-            from .web import read_web_starter
-            files = read_web_starter()
+        if args.name in {"web", "web-host"}:
+            from .web import read_web_host_starter, read_web_starter
+            files = (read_web_host_starter if args.name == "web-host" else read_web_starter)()
         else:
             files = read_starter(authenticated=args.name == "authenticated")
         if args.filename:
@@ -218,6 +225,7 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
         if not args.destination:
             raise _CommandError("USAGE_ERROR", "init requires a destination.", next_step=f"{_COMMAND} init --help")
         return initialize_project(args.destination, dry_run=args.dry_run, authenticated=args.auth, web=args.web,
+                                  web_host=args.web_host,
                                   web_config=args.web_config)
     raise _CommandError("USAGE_ERROR", "Choose guide, inspect, example or init.")
 
@@ -238,6 +246,13 @@ def _render_text(command: str, result: dict[str, Any]) -> str:
         output = f"{action} {result['destination']}:\n" + "\n".join(result["files"])
         if result.get("auth_mode") == "presentation-only":
             return output + "\n\nFictional component studio; no authentication or business writes.\nFrom the generated directory:\n" + result["run_command"] + "\nOpen http://127.0.0.1:8092"
+        if result.get("auth_mode") == "operator-token":
+            return output + (
+                "\n\nEditable FastAPI host: install the toolkit's api extra in this environment.\n"
+                "Read the generated README.md to initialize external private storage and issue access.\n"
+                "After setting RADT_DATA_DIR, run from the generated directory:\n"
+                + result["run_command"] + "\nOpen http://127.0.0.1:8093"
+            )
         if result.get("setup_required"):
             return output + (
                 "\n\nAuthenticated dashboard: access stays locked until setup is complete.\n"

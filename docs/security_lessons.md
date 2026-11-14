@@ -14,6 +14,28 @@ when they share a store. Test an already-open session after revocation or a role
 change, including an employee session whose user later becomes an administrator.
 New privilege must not inherit an authentication level it never established.
 
+## Keep browser state tied to verified identity
+
+A shared cookie can change in another tab while the current page still shows
+the old role. Recheck the verified session on protected navigation, clear old
+records and editors on identity changes, and rebuild the authorized interface.
+Bind asynchronous results and authentication errors to both their originating
+identity and navigation. A late denial must not clear a newer login. During
+conflict review, check current identity and action availability again before
+reenabling Save. These presentation guards complement server authorization.
+See the [web host integration recipe](../role_aware_dashboard_toolkit/resources/guides/web.md#connect-navigation-sessions-and-protected-forms).
+
+## Record consumer verification inputs before execution
+
+Snapshot selected source and dependency artifacts before running consumer checks,
+then bind the resulting report bytes to those inputs. Reject changed inputs;
+retain failures separately and record untested boundaries. The source helper
+`tools/consumer_evidence.py` supports this workflow. Hash binding establishes
+which bytes were recorded, not that a report truthfully describes an execution
+or that local checks establish hosted acceptance. See
+[consumer verification](consumer_verification.md) and the executable contract in
+`tests/test_consumer_evidence.py`.
+
 ## Keep incident containment available during a pause
 
 A blanket write freeze can prevent removal of a harmful published post. Define

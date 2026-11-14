@@ -32,6 +32,7 @@ LIVE_DOCS = frozenset(
         "docs/release_checklist.md",
         "docs/release_runbook.md",
         "docs/record_workflows.md",
+        "docs/consumer_verification.md",
         "docs/replay.md",
         "docs/run_model.md",
         "docs/shared_store_patterns.md",

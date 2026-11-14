@@ -126,6 +126,19 @@ workflow, report reader, and persistence boundaries.
 
 ## Build your own application
 
+For an editable FastAPI app with persistent records and protected workflows,
+use `init my-app --web-host` from an environment with the toolkit's `api` extra.
+Add `--web-config brand.json` to apply an exported brand. The generated README
+covers external private storage, operator-issued access tokens, roles and freeze.
+The [web-host guide](role_aware_dashboard_toolkit/resources/guides/web.md#editable-fastapi-web-host)
+describes the acceptance target and hosting boundaries.
+
+For a JavaScript web frontend, `init my-studio --web` generates an editable
+component studio. Follow the [web integration guide](role_aware_dashboard_toolkit/resources/guides/web.md)
+to connect its components to your host's verified sessions, records and actions.
+The studio is presentation-only. Use [consumer verification](docs/consumer_verification.md)
+to check the resulting application against an installed toolkit artifact.
+
 For a step-by-step browser launch, restart instructions, and common setup fixes,
 follow [Run your first dashboard](docs/first_dashboard.md). It includes native
 Windows PowerShell commands that do not require shell activation.

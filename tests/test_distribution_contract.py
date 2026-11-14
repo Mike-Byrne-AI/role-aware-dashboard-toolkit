@@ -166,6 +166,8 @@ def test_sdist_uses_explicit_public_docs_examples_and_schema_allowlists():
     assert "/portable" not in include
     assert "/snapshot_manifests" not in include
     assert "/examples/business_dashboard/RECOVERY.md" in include
+    assert "/docs/consumer_verification.md" in include
+    assert "/tools/consumer_evidence.py" in include
     assert {
         path
         for path in include

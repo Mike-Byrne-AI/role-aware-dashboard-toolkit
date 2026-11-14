@@ -127,7 +127,7 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert Counter(refs) == Counter({
         f"actions/checkout@{ACTION_PINS['actions/checkout'][0]}": 5,
         f"actions/setup-python@{ACTION_PINS['actions/setup-python'][0]}": 5,
-        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 6,
+        f"actions/upload-artifact@{ACTION_PINS['actions/upload-artifact'][0]}": 7,
     })
     assert workflow.count("persist-credentials: false") == 5
     assert workflow.count("timeout-minutes:") == 11
@@ -135,6 +135,8 @@ def test_contributor_ci_runs_unprivileged_without_release_authorization():
     assert "python -m ruff check role_aware_dashboard_toolkit tools examples tests --no-cache" in workflow
     assert "python -m pytest -q --cov=role_aware_dashboard_toolkit --cov-report=term-missing --cov-fail-under=75" in workflow
     assert "python -m build\n          python -m twine check dist/*" in workflow
+    assert 'python tools/web_host_browser.py --installed-package --output-dir "$RUNNER_TEMP/web-host-browser"' in workflow
+    assert 'path: ${{ runner.temp }}/web-host-browser' in workflow
 
 
 def _matrix_install_script(path):

@@ -72,6 +72,13 @@ The browser smoke checks profile restoration, role changes, and frozen
 controls using synthetic local state. It also generates the Project Pulse
 starter and exercises desktop and mobile layouts, navigation and keyboard
 editing. It does not test an external login provider.
+It also generates the editable FastAPI starter from the installed package and
+checks custom branding, keyboard/mobile workflows, authorization denials,
+conflict handling and restart persistence using temporary private storage.
+Run `python tools/web_host_browser.py --installed-package --output-dir <new-external-dir>`
+with a non-editable consumer installation to exercise that same path locally.
+The starter uses operator-issued tokens; provider login and public hosting
+remain separate acceptance work.
 The same browser job exercises the Westbridge business example with disposable
 guest, administrator and employee workflows. Its API regressions run with the
 main test suite. See the [business example guide](examples/business_dashboard/README.md)

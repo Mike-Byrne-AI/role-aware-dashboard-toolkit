@@ -48,6 +48,8 @@ Discover them with `python -m role_aware_dashboard_toolkit guide start`.
 - [Shared deployment](../role_aware_dashboard_toolkit/resources/guides/deployment.md) — single-host HTTPS and OIDC acceptance for the authenticated Streamlit starter
 
 - [Reusable web presentation](../role_aware_dashboard_toolkit/resources/guides/web.md) — component studio, theme generation and the delivery workflow
+- [Consumer verification](consumer_verification.md) — installed-artifact checks, source snapshots and bounded API/browser evidence
+- [Editable FastAPI starter](../role_aware_dashboard_toolkit/resources/guides/web.md#editable-fastapi-web-host) — generate a branded host with SQLite records, scoped roles and protected changes from an installed package
 
 ## API and extension points
 

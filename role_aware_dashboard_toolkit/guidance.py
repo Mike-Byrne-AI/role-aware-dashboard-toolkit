@@ -128,7 +128,7 @@ def inspect_capabilities() -> dict[str, Any]:
         "optional_dependencies": dependencies,
         "dependency_note": "Distribution metadata only; optional hosts were not imported or tested for compatibility.",
         "guide_topics": list_guide_topics(),
-        "examples": ["starter", "authenticated", "web"],
+        "examples": ["starter", "authenticated", "web", "web-host"],
     }
 
 

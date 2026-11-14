@@ -7,8 +7,8 @@ def build_family_definitions(family_cls: Any) -> dict[str, Any]:
     return {
         "web-presentation": family_cls(
             family_id="web-presentation", display_name="Web presentation",
-            symbols=("WebTheme", "WebPresentation", "read_web_asset", "read_web_starter"),
-            description="Dependency-free themes, escaped browser components and a portable component studio.",
+            symbols=("WebTheme", "WebPresentation", "read_web_asset", "read_web_starter", "read_web_host_starter"),
+            description="Dependency-free themes, escaped browser components, a portable studio and editable FastAPI host templates.",
         ),
         "app-shell": family_cls(
             family_id="app-shell",
