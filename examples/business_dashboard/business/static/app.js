@@ -581,7 +581,7 @@ function renderLogin() {
   app.innerHTML = `<main id="main" class="login">
     <section class="login-story" aria-label="Westbridge business workspace">
       ${brand()}
-      <div class="story-main"><div class="story-kicker">A little more connected</div><h1>Good work starts<br>with <span>a clear picture.</span></h1><p>One place for your people, your plans, and the work that moves your business forward.</p>
+      <div class="story-main"><div class="story-kicker">A little more connected</div><h1>Good work starts <br>with <span>a clear picture.</span></h1><p>One place for your people, your plans, and the work that moves your business forward.</p>
         <div class="story-preview" aria-hidden="true"><div class="preview-head"><span>Your working day, together.</span><span>TEAM WORKSPACE</span></div><div class="preview-event"><span class="preview-time">09:00 AM</span><span class="preview-rule"></span><div><strong>Start with a shared plan</strong><small>Team schedules · Clear responsibilities</small></div></div><div class="preview-event"><span class="preview-time">11:30 AM</span><span class="preview-rule tan"></span><div><strong>Keep the conversation moving</strong><small>Company updates · Team messages</small></div></div><div class="preview-footer"><span>Built around the people doing the work.</span><div class="preview-avatars"><i>AM</i><i>BC</i><i>CR</i><i>+2</i></div></div></div>
       </div><div class="story-footer"><span>WESTBRIDGE BUSINESS GROUP</span><span>Clarity. Every working day.</span></div>
     </section>
